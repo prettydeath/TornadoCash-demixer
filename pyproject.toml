@@ -1,0 +1,63 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tornado-demix"
+version = "2.10.0"
+description = "Tornado.Cash demixing toolkit via amount + timing correlation on public on-chain data, across 8 EVM chains."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "tornado-demix contributors" }]
+keywords = ["ethereum", "tornado-cash", "blockchain", "forensics", "demixing", "etherscan"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.13",
+    "Intended Audience :: Information Technology",
+    "Topic :: Security :: Cryptography",
+    "License :: OSI Approved :: MIT License",
+    "Topic :: Security",
+]
+dependencies = [
+    # Upper bound on purpose: a forensic result must be reproducible from
+    # the version that produced it.
+    "requests>=2.28,<3",
+]
+
+[project.optional-dependencies]
+web = ["flask>=3.0,<4"]
+dev = ["pytest>=8.0,<10", "ruff>=0.6,<0.17"]
+
+[project.scripts]
+tornado-demix = "tornado_demix.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/prettydeath/TornadoCash-demixer"
+Issues = "https://github.com/prettydeath/TornadoCash-demixer/issues"
+
+[tool.setuptools]
+packages = ["tornado_demix"]
+
+# The on-chain-verified pool registry ships inside the package.
+[tool.setuptools.package-data]
+tornado_demix = ["data/*.csv"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"webui/app.py" = ["E402"]
+"tools/verify_pools.py" = ["E402"]
+"tools/calibrate.py" = ["E402"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["live: hits the network; excluded by default (run with -m live)"]
+addopts = "-m 'not live'"

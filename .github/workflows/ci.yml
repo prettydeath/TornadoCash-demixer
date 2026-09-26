@@ -1,0 +1,108 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    # Windows is included because report encoding depends on the machine's
+    # preferred encoding.
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.9", "3.13"]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev,web]"
+      - name: Test
+        run: python -m pytest -q
+
+  test-non-utf8-locale:
+    # The encoding defects only appear when locale.getpreferredencoding() is
+    # not UTF-8, which no default CI runner gives you.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev,web]"
+      - name: Test with the legacy codepage active
+        env:
+          PYTHONUTF8: "0"
+          PYTHONLEGACYWINDOWSSTDIO: "1"
+        run: python -m pytest -q tests/test_encoding.py
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - run: python -m pip install -e ".[dev]"
+      - run: python -m ruff check .
+      - run: python -m ruff format --check .
+
+  install:
+    # The registry ships inside the package; an editable install cannot show a
+    # wheel that leaves it out.
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Build a wheel
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build --wheel --outdir dist
+      - name: Install it into a fresh environment and check the registry
+        shell: bash
+        run: |
+          set -eu
+          python -m venv fresh
+          PY=fresh/bin/python
+          [ -x "$PY" ] || PY=fresh/Scripts/python
+          "$PY" -m pip install --quiet --disable-pip-version-check dist/*.whl
+          # Run from a directory with no ./config and no source tree, which is
+          # the situation an installed copy is actually in.
+          mkdir -p elsewhere
+          cd elsewhere
+          "../$PY" ../tools/check_installed_registry.py
+
+  registry-on-chain:
+    # Re-verify every shipped pool against its own on-chain getters. Scheduled
+    # rather than per-push: it needs the public RPCs to be reachable, and a
+    # network outage must not read as "the registry is wrong".
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - run: |
+          python -m pip install -e ".[dev]"
+          python -m pytest -m live tests/test_shipped_registry.py -v

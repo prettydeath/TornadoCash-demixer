@@ -1,0 +1,47 @@
+# Secrets & runtime config (never commit real keys)
+config/api.csv
+config/wallets.csv
+config/networks.csv
+
+# Confirmed depositor->exit pairs are usually non-public (KYC records, active
+# investigations, client-confidential work); only cases.csv.example ships.
+calibration/cases.csv
+
+# Resumable caches produced by the cluster command
+.cache/
+fwd_cache.json
+layers_*.json
+
+# Generated report output (keep committed samples under examples/)
+/out/
+/reports/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.env
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Agent/process scratch — never publish
+.superpowers/
+docs/superpowers/
+api.csv
+.claude/
+.attrib_demo/
+config/attribution/
+
+# test / lint caches
+.pytest_cache/
+.ruff_cache/
+.hypothesis/
+.coverage
+htmlcov/

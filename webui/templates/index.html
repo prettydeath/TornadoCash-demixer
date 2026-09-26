@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TornadoCash Demixer</title>
+<script>try{document.documentElement.setAttribute('data-theme',localStorage.getItem('tcd-theme')||'light');}catch(e){document.documentElement.setAttribute('data-theme','light');}</script>
+<style>
+  :root{ --bg:#0b0f19; --panel:#111827; --line:#24304a; --ink:#e5e9f0; --muted:#8b97ad;
+         --accent:#2dd4bf; --accent-dim:#134e4a; --flag:#f0a35e; --radius:10px;
+         --input-bg:#0b1120; --hover:#0e1626; --btn-ink:#04241f;
+         --err-bg:#2a1720; --err-line:#7f2333; --err-ink:#fbcfd6;
+         --mod-bg:#3a2a12; --weak-bg:#141c2c; color-scheme:dark; }
+  :root[data-theme="light"]{
+         --bg:#f5f7fa; --panel:#ffffff; --line:#e2e6ee; --ink:#1b2432; --muted:#5c6675;
+         --accent:#0d9488; --accent-dim:#d5f3ee; --flag:#c2610c;
+         --input-bg:#f8fafc; --hover:#eef2f7; --btn-ink:#ffffff;
+         --err-bg:#fdecef; --err-line:#f2b8c1; --err-ink:#8a1c2b;
+         --mod-bg:#fbeecf; --weak-bg:#eef1f6; color-scheme:light; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; padding:2.5rem 1.25rem; background:var(--bg); color:var(--ink);
+        font:15px/1.6 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif; }
+  .wrap{ max-width:1120px; margin:0 auto; }
+  h1{ margin:0 0 .3rem; font-size:1.55rem; font-weight:600; letter-spacing:-.01em; }
+  h2{ font-size:1.05rem; font-weight:600; margin:2rem 0 .6rem; }
+  h3{ font-size:.95rem; font-weight:600; margin:1.3rem 0 .5rem; color:var(--muted); }
+  .sub{ color:var(--muted); margin-bottom:1.5rem; font-size:.92rem; }
+  form{ background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); padding:1.1rem; }
+  .row{ display:flex; gap:.8rem; flex-wrap:wrap; align-items:flex-end; margin-top:.9rem; }
+  label{ display:block; font-size:.72rem; text-transform:uppercase; letter-spacing:.04em;
+         color:var(--muted); margin-bottom:.35rem; }
+  textarea,input,select{ background:var(--input-bg); color:var(--ink); border:1px solid var(--line);
+        border-radius:8px; padding:.55rem .65rem; font-size:.9rem; font-family:inherit; }
+  textarea:focus,input:focus,select:focus{ outline:none; border-color:var(--accent);
+        box-shadow:0 0 0 3px rgba(45,212,191,.15); }
+  textarea{ width:100%; min-height:110px; font-family:ui-monospace,Menlo,monospace;
+            font-size:.82rem; resize:vertical; }
+  button{ background:var(--accent); color:var(--btn-ink); border:0; border-radius:8px;
+          padding:.6rem 1.2rem; font-weight:600; cursor:pointer; }
+  @media (prefers-reduced-motion:no-preference){
+    button{ transition:transform .1s ease, filter .12s ease; }
+    tbody tr{ transition:background .12s ease; }
+    a{ transition:color .12s ease; } }
+  button:hover{ filter:brightness(1.06); }
+  button:active{ transform:translateY(1px); }
+  table{ width:100%; border-collapse:collapse; margin:.4rem 0 1.1rem; table-layout:fixed; }
+  th{ text-align:left; font-size:.68rem; text-transform:uppercase; letter-spacing:.04em;
+      color:var(--muted); font-weight:600; padding:.5rem .6rem; border-bottom:1px solid var(--line); }
+  td{ padding:.5rem .6rem; font-size:.84rem; border-bottom:1px solid var(--line);
+      vertical-align:top; overflow-wrap:anywhere; }
+  tbody tr:hover{ background:var(--hover); }
+  .num{ font-family:ui-monospace,Menlo,monospace; font-variant-numeric:tabular-nums; }
+  .mono{ font-family:ui-monospace,Menlo,monospace; font-size:.79rem; overflow-wrap:anywhere; }
+  a{ color:var(--accent); text-decoration:none; } a:hover{ text-decoration:underline; }
+  .err{ background:var(--err-bg); border:1px solid var(--err-line); color:var(--err-ink);
+        padding:.75rem .95rem; border-radius:8px; margin-top:1rem; }
+  .note{ color:var(--muted); font-size:.8rem; margin-top:.4rem; }
+  .flag{ color:var(--accent); font-weight:600; }
+  .pill{ display:inline-block; background:var(--hover); border:1px solid var(--line); border-radius:999px;
+         padding:.08rem .55rem; font-size:.72rem; color:var(--muted); margin:1px 2px 1px 0; }
+  .chip{ display:inline-block; background:var(--hover); border:1px solid var(--line); border-radius:999px;
+         padding:.15rem .65rem; font-size:.74rem; color:var(--muted); }
+  .card{ background:var(--panel); border:1px solid var(--line); border-radius:var(--radius);
+         padding:1rem 1.15rem; margin-bottom:1.1rem; }
+  .btn{ display:inline-block; background:transparent; color:var(--accent); border:1px solid var(--line);
+        border-radius:8px; padding:.42rem .85rem; font-size:.82rem; cursor:pointer; }
+  .btn:hover{ border-color:var(--accent); text-decoration:none; }
+  .conf{ display:flex; align-items:center; gap:.5rem; white-space:nowrap; }
+  .conf b{ font-family:ui-monospace,monospace; font-size:.8rem; min-width:2.3rem; }
+  .cbar{ display:block; height:3px; width:56px; border-radius:2px;
+         background:linear-gradient(90deg,var(--accent) var(--w),var(--hover) var(--w)); }
+  .conf .pct{ color:var(--muted); font-weight:400; font-size:.72rem; }
+  .badge{ display:inline-block; white-space:nowrap; border-radius:999px; padding:.08rem .5rem; font-size:.62rem;
+          font-weight:700; letter-spacing:.06em; text-transform:uppercase; border:1px solid var(--line); }
+  .badge.strong{ background:var(--accent-dim); color:var(--accent); border-color:var(--accent); }
+  .badge.moderate{ background:var(--mod-bg); color:var(--flag); border-color:var(--flag); }
+  .badge.weak{ background:var(--weak-bg); color:var(--muted); border-color:var(--line); }
+  .eyebrow{ font-size:.66rem; letter-spacing:.14em; text-transform:uppercase; color:var(--accent); font-weight:600; }
+  .metrics{ display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:1px;
+            background:var(--line); border:1px solid var(--line); border-radius:var(--radius);
+            overflow:hidden; margin:.9rem 0 .2rem; }
+  .metric{ background:var(--panel); padding:.75rem .9rem; }
+  .metric .k{ font-size:.64rem; letter-spacing:.07em; text-transform:uppercase; color:var(--muted); }
+  .metric .v{ font-family:ui-monospace,monospace; font-size:1.25rem; font-weight:600;
+              margin-top:.15rem; font-variant-numeric:tabular-nums; }
+  .metric .s{ font-size:.7rem; color:var(--muted); }
+  .callout{ background:var(--hover); border:1px solid var(--line); border-left:3px solid var(--accent);
+            border-radius:0 var(--radius) var(--radius) 0; padding:.85rem 1rem; color:var(--ink);
+            font-size:.86rem; line-height:1.6; margin-top:.8rem; }
+  .themebtn{ position:fixed; top:1rem; right:1rem; z-index:20; }
+  details.ev summary, details.params summary{ cursor:pointer; color:var(--muted); font-size:.76rem; margin-top:.25rem; }
+  details.params{ margin:.8rem 0 .4rem; }
+  details.params summary{ font-size:.85rem; }
+  details.ev ul{ list-style:none; margin:.3rem 0 0; padding:0; font-size:.78rem; }
+  details.ev li{ padding:.08rem 0; }
+  details.ev .ev-yes b{ color:var(--accent); }
+  details.ev .ev-no{ color:var(--muted); }
+</style>
+</head>
+<body>
+<button id="themeToggle" class="btn themebtn" type="button" title="Toggle light / dark theme">◐ Theme</button>
+<div class="wrap">
+  <div class="eyebrow">Forensic demix console · research use</div>
+  <h1>TornadoCash Demixer</h1>
+  <div class="sub">Tornado.Cash demixing by amount and timing correlation over public on-chain data.</div>
+
+  <form method="post">
+    <div>
+      <label for="wallets">Depositor wallets, one address per line (max {{ max_wallets }})</label>
+      <textarea id="wallets" name="wallets" placeholder="0x019b5bb2051797e33f726d0e7a8cb9b9c2003ac2&#10;0x450cc23c0bc13d46288deb36913fdaaee49fcd99" required>{{ wallets_raw }}</textarea>
+    </div>
+    <div class="row">
+      <div>
+        <label for="analysis">Analysis</label>
+        <select id="analysis" name="analysis">
+          <option value="demix" {% if analysis=='demix' %}selected{% endif %}>demix, per wallet</option>
+          <option value="multi" {% if analysis=='multi' %}selected{% endif %}>multi, correlate wallets</option>
+          <option value="cluster" {% if analysis=='cluster' %}selected{% endif %}>cluster, split exits</option>
+          <option value="characterize" {% if analysis=='characterize' %}selected{% endif %}>characterize, one exit address</option>
+        </select>
+      </div>
+      <div>
+        <label for="network">Network</label>
+        <select id="network" name="network">
+          {% for n in networks %}
+          <option value="{{ n }}" {% if network==n %}selected{% endif %}>{{ n }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label for="window_days">Window (days)</label>
+        <input id="window_days" name="window_days" type="number" min="1" max="365"
+               value="{{ window_days }}" style="width:6.5rem">
+      </div>
+      <div>
+        <label for="exit_window" title="Narrow the withdrawal search to N hours after each deposit. Cuts the recipient field so a count match discriminates and fast exits stand out; misses withdrawals delayed longer than N. Leave blank for the full window.">Exit window (h)</label>
+        <input id="exit_window" name="exit_window" type="number" min="0" step="0.5"
+               placeholder="off" value="{{ exit_window }}" style="width:6.5rem">
+      </div>
+      <button type="submit">Analyse</button>
+    </div>
+  </form>
+  <div class="note">Results are probabilistic leads, not proof. Several wallets on a busy pool can take a
+    few minutes. Add networks in <span class="mono">config/networks.csv</span>.</div>
+
+  {% if error %}<div class="err">{{ error }}</div>{% endif %}
+
+  {% if result %}
+    <h2>Results <span class="chip">{{ result.n_wallets }} wallet(s) · {{ result.network }} · {{ result.kind }}</span></h2>
+    {% if result.skipped %}
+      <div class="note">Skipped invalid entries: <span class="mono">{{ result.skipped|join(', ') }}</span></div>
+    {% endif %}
+    {% if result.has_csv %}<a class="btn" href="/download.csv">Download CSV</a>{% endif %}
+    {% if result.report_key %}<a class="btn" href="/report/{{ result.report_key }}.html">Download report</a>{% endif %}
+
+    {% if result.kind == 'demix' %}
+      {% for b in result.blocks %}
+        <div class="card">
+          <h3 class="mono">{{ b.wallet }}
+            <a class="btn" style="float:right;padding:.3rem .7rem;margin-left:.4rem" href="/result/{{ b.wallet }}.json">JSON</a>
+            <a class="btn" style="float:right;padding:.3rem .7rem" href="/report/{{ b.wallet }}.html">Download report</a>
+          </h3>
+          {% if b.unresolved %}
+            <div class="note">
+              {{ b.unresolved|length }} pool(s) could NOT be searched — the block
+              window would not resolve, so this is not the same as finding
+              nothing:
+              {% for u in b.unresolved %}<br><b>{{ u.pool_key }}</b>: {{ u.reason }}{% endfor %}
+            </div>
+          {% endif %}
+          {% if b.no_deposits %}
+            <div class="note">No Tornado.Cash deposits found.</div>
+          {% else %}
+            <div class="metrics">
+              <div class="metric"><div class="k">Deposited</div><div class="v">{{ b.deposited }}</div><div class="s">{{ b.n_notes }} notes</div></div>
+              <div class="metric"><div class="k">Vouchers</div><div class="v">{{ b.vouchers|length }}</div><div class="s">denomination groups</div></div>
+              <div class="metric"><div class="k">Candidates</div><div class="v">{{ b.n_candidates }}</div><div class="s">ranked exits</div></div>
+              <div class="metric"><div class="k">Strongest band</div><div class="v">{{ b.top_band }}</div><div class="s">{{ b.leads|length }} self-relayed leads</div></div>
+            </div>
+            <details class="params"><summary>Analysis parameters</summary>
+              <table>
+                {% for label, value in b.assumptions.params %}<tr><td style="width:22%">{{ label }}</td><td>{{ value }}</td></tr>{% endfor %}
+              </table>
+              {% if b.assumptions.windows %}
+              <table>
+                <tr><th>Pool</th><th>Blocks read</th><th>Window (UTC)</th><th>Withdrawals / recipients</th></tr>
+                {% for w in b.assumptions.windows %}<tr><td class="num">{{ w.pool_key }}</td><td class="num">{{ w.blocks }}</td><td class="num">{{ w.dates }}</td><td class="num">{{ w.withdrawals }} / {{ w.recipients }}</td></tr>{% endfor %}
+              </table>
+              {% endif %}
+            </details>
+            <table>
+              <tr><th>Pool</th><th>Deposits</th><th>First deposit</th></tr>
+              {% for v in b.vouchers %}
+              <tr><td class="num">{{ v.pool_key }}</td><td class="num">{{ v.count }}</td><td class="num">{{ v.first }}</td></tr>
+              {% endfor %}
+            </table>
+            <h4 style="margin:1rem 0 .3rem;font-size:.9rem;">Ranked exit candidates</h4>
+            {% if b.ranked %}
+            <table>
+              {% if b.show_attr %}
+              <colgroup><col style="width:13%"><col style="width:24%"><col style="width:8%"><col style="width:11%"><col style="width:13%"><col></colgroup>
+              <tr><th>Band</th><th>Recipient</th><th>Pool</th><th>Score</th><th>Attribution</th><th>Why this address</th></tr>
+              {% else %}
+              <colgroup><col style="width:13%"><col style="width:27%"><col style="width:8%"><col style="width:11%"><col></colgroup>
+              <tr><th>Band</th><th>Recipient</th><th>Pool</th><th>Score</th><th>Why this address</th></tr>
+              {% endif %}
+              {% for c in b.ranked %}
+              <tr>
+                <td><span class="badge {{ c.band }}">{{ c.band }}</span></td>
+                <td class="mono"><a href="{{ c.url }}" target="_blank" rel="noopener">{{ c.address }}</a></td>
+                <td class="num">{{ c.pool_key }}</td>
+                <td><div class="conf"><span class="pct">{{ c.score }}</span><span class="cbar" style="--w:{{ c.bar }}%"></span></div></td>
+                {% if b.show_attr %}<td class="flag">{{ c.attribution }}</td>{% endif %}
+                <td>{{ c.reason }}
+                  <details class="ev"><summary>Evidence · disc {{ c.disc }} of {{ c.field }} recipients</summary>
+                    <ul>{% for e in c.evidence %}<li class="{{ 'ev-yes' if e.holds else 'ev-no' }}"><b>{{ '&#10003;'|safe if e.holds else '&#8211;'|safe }} {{ e.label }}</b> {{ e.detail }}</li>{% endfor %}</ul>
+                  </details></td>
+              </tr>
+              {% endfor %}
+            </table>
+            <div class="note">The <b>band</b> is the headline — how many independent families of evidence corroborate the address. The score only orders leads within a band; it is uncalibrated and not a probability. Open <b>Evidence</b> to see what was checked for each address.</div>
+            {% else %}<div class="note">No discriminating candidates (usually single-note vouchers).</div>{% endif %}
+
+            <h4 style="margin:1.1rem 0 .3rem;font-size:.9rem;">Cross-method matches</h4>
+            {% if b.xmatch %}
+            <div class="note" style="margin-bottom:.3rem;">Selected by 2+ <b>independent families</b> of evidence at once — amount+timing, gas price, direct counterparty. A self-relayed withdrawal does not count separately from the count match it was found on. Leads, not proof.</div>
+            <table>
+              <colgroup><col style="width:34%"><col style="width:8%"><col style="width:9%"><col></colgroup>
+              <tr><th>Recipient</th><th>Pool</th><th>Methods</th><th>Why (per method)</th></tr>
+              {% for r in b.xmatch %}
+              <tr>
+                <td class="mono flag"><a href="{{ r.url }}" target="_blank" rel="noopener">{{ r.address }}</a></td>
+                <td class="num">{{ r.pool_key }}</td><td class="num">{{ r.n_methods }}x</td>
+                <td>{% for m in r.methods %}<span class="pill">{{ m }}</span>{% endfor %}
+                    <div class="note" style="margin-top:.2rem;">{{ r.reasons|join('; ') }}</div></td>
+              </tr>
+              {% endfor %}
+            </table>
+            {% else %}<div class="note">No address was selected by more than one method; every candidate rests on a single method.</div>{% endif %}
+
+            {% if b.methods %}
+            <h4 style="margin:1.1rem 0 .3rem;font-size:.9rem;">Results by method</h4>
+            <div class="note" style="margin-bottom:.3rem;">Every method runs on every wallet. Each block lists what that method selected.</div>
+            {% for m in b.methods %}
+              <div style="font-size:.82rem;color:var(--muted);margin:.6rem 0 .2rem;">{{ m.label }} <span class="pill">{{ m.rows|length }}</span></div>
+              <table>
+                <colgroup><col style="width:40%"><col style="width:9%"><col></colgroup>
+                <tr><th>Address</th><th>Pool</th><th>Why</th></tr>
+                {% for r in m.rows[:20] %}
+                <tr>
+                  <td class="mono"><a href="{{ r.url }}" target="_blank" rel="noopener">{{ r.address }}</a></td>
+                  <td class="num">{{ r.pool_key }}</td><td>{{ r.reason }}</td>
+                </tr>
+                {% endfor %}
+              </table>
+            {% endfor %}
+            {% endif %}
+            {% if b.relayers %}
+              <div class="note" style="margin-top:.6rem;">Relayers: {{ b.relayers.unique }},
+                self-relayed withdrawals: {{ b.relayers.self_relayed }}</div>
+            {% endif %}
+            {% if b.leads %}
+              <div class="note" style="margin:.7rem 0 .3rem;"><span class="flag">Self-relayed leads</span> —
+                no relayer named in the proof, so the sender paid gas from an address they already
+                controlled. <b>unverified</b> means the broadcaster was not checked, not that it was
+                confirmed.</div>
+              <table>
+                <colgroup><col style="width:28%"><col style="width:8%"><col style="width:14%"><col style="width:24%"><col></colgroup>
+                <tr><th>Recipient</th><th>Pool</th><th>Time</th><th>Broadcast by</th><th>Withdrawal tx</th></tr>
+                {% for l in b.leads[:8] %}
+                <tr>
+                  <td class="mono flag"><a href="{{ l.url }}" target="_blank" rel="noopener">{{ l.address }}</a></td>
+                  <td class="num">{{ l.pool_key }}</td><td class="num">{{ l.time }}</td>
+                  <td class="mono">
+                    {%- if l.broadcaster_status == "self" %}<span class="flag">the recipient</span>
+                    {%- elif l.broadcaster_status == "other" %}{{ l.broadcaster }}
+                    {%- else %}<span style="opacity:.6">unverified</span>{% endif -%}
+                  </td>
+                  <td class="mono"><a href="{{ l.tx_url }}" target="_blank" rel="noopener">{{ l.tx }}</a></td>
+                </tr>
+                {% endfor %}
+              </table>
+            {% endif %}
+            <h4 style="margin:1.1rem 0 .3rem;font-size:.9rem;">Summary</h4>
+            <div class="callout" style="white-space:pre-line">{{ b.conclusion }}</div>
+          {% endif %}
+        </div>
+      {% endfor %}
+
+    {% elif result.kind == 'multi' %}
+      <h3>Profile matches, one address received a wallet's full fingerprint</h3>
+      {% if result.profiles %}
+      <table>
+        <tr><th>Wallet</th><th>Fingerprint</th><th>Consolidator</th><th>Match</th><th>Received / needed</th></tr>
+        {% for p in result.profiles[:40] %}
+        <tr>
+          <td class="mono">{{ p.wallet }}</td><td class="num">{{ p.fingerprint }}</td>
+          <td class="mono"><a href="{{ p.url }}" target="_blank" rel="noopener">{{ p.address }}</a></td>
+          <td>{% if p.exact %}<span class="flag">exact</span>{% else %}&ge;{% endif %}</td>
+          <td class="mono">{{ p.detail }}</td>
+        </tr>
+        {% endfor %}
+      </table>
+      {% else %}<div class="note">No full-fingerprint matches.</div>{% endif %}
+
+      <h3>Cross-wallet consolidators</h3>
+      {% if result.cross %}
+      <table>
+        <tr><th>Band</th><th>Address</th><th>Wallets</th></tr>
+        {% for c in result.cross %}
+        <tr><td><span class="badge {{ c.band }}">{{ c.band }}</span>{% if c.artefact %}<div class="note">window-overlap artefact ({{ c.artefact }})</div>{% endif %}</td>
+          <td class="mono"><a href="{{ c.url }}" target="_blank" rel="noopener">{{ c.address }}</a></td><td class="mono">{{ c.wallets|join(', ') }}</td></tr>
+        {% endfor %}
+      </table>
+      <div class="note"><b>strong</b>: an independent gas-price or linked signal; <b>moderate</b>: distinct fingerprints of wallets that did not deposit together; <b>weak</b>: explained by the shared search window.</div>
+      {% else %}<div class="note">None. No single address matched two wallets' fingerprints.</div>{% endif %}
+
+      <h3>Strong links <span class="chip">{{ result.n_strong }} total</span></h3>
+      <div class="note">Caveat: wallets that deposited at similar times with equal voucher sizes share
+        candidate sets by construction, so treat raw overlaps as a window artefact.</div>
+      {% if result.strong %}
+      <table>
+        <tr><th>Pool</th><th>Address</th><th>Wallets</th></tr>
+        {% for s in result.strong[:30] %}
+        <tr><td class="num">{{ s.pool_key }}</td>
+          <td class="mono"><a href="{{ s.url }}" target="_blank" rel="noopener">{{ s.address }}</a></td>
+          <td class="num">{{ s.wallets|length }}</td></tr>
+        {% endfor %}
+      </table>
+      {% endif %}
+
+    {% elif result.kind == 'characterize' %}
+      <div class="card">
+        <h3 class="mono">{{ result.address }}</h3>
+        {% if result.label %}<div class="chip flag">Attribution: {{ result.label }}</div>{% endif %}
+        <div class="chip">{{ result.classification }}</div>
+        <div class="note">{{ result.reason }}</div>
+        <p>Activity: {{ result.normal_txs }} normal tx · {{ result.internal_txs }} internal ·
+          {{ result.n_inflows }} pool inflow(s) across {{ result.n_pools }} pool(s){% if result.totals %} · total {{ result.totals }}{% endif %}</p>
+      </div>
+      <h3>Tornado-pool inflows</h3>
+      {% if result.inflows %}
+      <table>
+        <tr><th>When (UTC)</th><th>Amount</th><th>Pool</th></tr>
+        {% for r in result.inflows[:60] %}
+        <tr><td class="mono">{{ r.when }}</td><td class="num">{{ r.value }} {{ r.asset }}</td><td class="num">{{ r.pool }}</td></tr>
+        {% endfor %}
+      </table>
+      {% else %}<div class="note">No withdrawals from a known pool — not a Tornado exit on the pools analysed.</div>{% endif %}
+
+      <h3>Dominant next hops <span class="chip">transactions sent</span></h3>
+      {% if result.next_hops %}
+      <table>
+        <tr><th>Count</th><th>Total</th><th>Destination</th><th>Attribution</th></tr>
+        {% for h in result.next_hops %}
+        <tr><td class="num">{{ h.count }}</td><td class="num">{% if h.call %}contract call, no {{ result.currency }}{% else %}{{ h.total }} {{ result.currency }}{% endif %}</td>
+          <td class="mono"><a href="{{ h.url }}" target="_blank" rel="noopener">{{ h.address }}</a></td>
+          <td>{% if h.label %}<span class="flag">{{ h.label }}</span>{% else %}—{% endif %}</td></tr>
+        {% endfor %}
+      </table>
+      {% else %}<div class="note">No outgoing transfers found.</div>{% endif %}
+
+    {% else %}
+      {% for t in result.traces %}
+      <div class="card">
+        <h3 class="mono">{{ t.wallet }} <span class="chip">{{ t.fingerprint }}</span></h3>
+        {% if t.clusters %}
+        <table>
+          <tr><th>Cluster point Z</th><th>Layers</th><th>Pools</th><th>Value funneled</th></tr>
+          {% for c in t.clusters %}
+          <tr>
+            <td class="mono"><a href="{{ c.url }}" target="_blank" rel="noopener">{{ c.z }}</a></td>
+            <td class="num">{{ c.layers }}</td><td class="num">{{ c.pools }}</td>
+            <td class="num">{{ c.totals }}</td>
+          </tr>
+          {% endfor %}
+        </table>
+        {% else %}<div class="note">No downstream address is fed by 2+ pool layers.</div>{% endif %}
+      </div>
+      {% endfor %}
+    {% endif %}
+  {% endif %}
+</div>
+<script>
+(function(){
+  var root=document.documentElement, b=document.getElementById('themeToggle');
+  if(b) b.addEventListener('click',function(){
+    var cur=(root.getAttribute('data-theme')==='light')?'dark':'light';
+    root.setAttribute('data-theme',cur);
+    try{localStorage.setItem('tcd-theme',cur);}catch(e){}
+  });
+})();
+</script>
+</body>
+</html>
