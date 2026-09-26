@@ -702,3 +702,9 @@ def test_without_the_router_a_polygon_router_deposit_is_missed():
     )  # no routers registered
     txs = [_tx(POLYGON_ROUTER, 100.0, 1000, 10, "0xpoly")]
     assert detect_deposits(None, fx.WALLET, network=net, txs=txs) == []
+
+
+def test_a_none_client_does_not_fetch_token_transfers_on_a_chain_with_token_pools():
+    from tornado_demix.networks import get_network
+
+    assert detect_deposits(None, fx.WALLET, network=get_network("ethereum"), txs=[]) == []

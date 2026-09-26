@@ -66,7 +66,7 @@ def detect_deposits(
     token_pools = [p for p in network.pools if not p.is_native]
     if token_pools:
         if token_txs is None:
-            token_txs = client.token_transfers(wallet)
+            token_txs = client.token_transfers(wallet) if client is not None else []
         deposits.extend(_token_deposits(wallet, token_txs, token_pools, network.routers))
 
     deposits.sort(key=lambda d: d["ts"])
