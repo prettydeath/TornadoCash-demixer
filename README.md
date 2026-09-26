@@ -64,8 +64,8 @@ The method, thresholds and the reasoning behind them are in
 
 - Python 3.9 or newer. Runtime dependency: `requests`. The web UI adds `flask`.
 - An Etherscan V2 API key. One key covers Ethereum, BNB Smart Chain, Polygon,
-  Arbitrum, Optimism, Base and Gnosis. Avalanche is read through Routescan, which
-  needs no key. On the free Etherscan plan the `getLogs` endpoint was not
+  Arbitrum, Base and Gnosis. Avalanche (Routescan) and Optimism (Blockscout) need
+  no key. On the free Etherscan plan the `getLogs` endpoint was not
   available for BNB Smart Chain, Gnosis and Base at the time of writing.
 
 ## Installation
@@ -74,7 +74,7 @@ From a checkout of the repository:
 
 ```bash
 python -m pip install .            # core: the tornado-demix command and the pool registry
-python -m pip install ".[web]"     # plus the web UI (Flask)
+python -m pip install ".[web]"     # plus Flask; run the UI from a checkout
 python -m pip install -e ".[dev]"  # for development: tests and ruff
 ```
 
@@ -130,7 +130,7 @@ a claim by its source, not a finding of this tool.
 python -m tornado_demix demix 0x019b5bb2051797e33f726d0e7a8cb9b9c2003ac2 \
     --network ethereum --out-dir out/demix --report out/demix.html --json out/demix.json
 
-# narrow the search to 6 hours after each deposit
+# narrow the search to 6 hours after each voucher's last deposit
 python -m tornado_demix demix <wallet> --exit-window 6
 
 # several wallets
@@ -202,7 +202,8 @@ windows are clamped to the current block.
 - Busy pools and long windows produce many equal counts. `--exit-window` trades
   recall for discrimination.
 - A careful user defeats the method: relayers, long delays, split withdrawals
-  to fresh addresses. The result is then "no lead", not a wrong lead.
+  to fresh addresses. The result is then "no lead", or weak leads on unrelated
+  addresses that happen to share the voucher count, never a corroborated one.
 - Only Tornado Cash pools in the registry are covered. Bridges, other mixers and
   cross-asset hops are not followed; `cluster` follows one hop only.
 - Native chains other than Ethereum, Polygon and Avalanche have no verified

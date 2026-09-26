@@ -87,7 +87,7 @@ def _exit_window(raw):
     """Parse the optional exit-window field (hours). Returns ``(hours_or_None, error)``.
 
     Empty means the full window. When set, the withdrawal search is narrowed to
-    that many hours after each deposit (see demix.voucher_windows).
+    that many hours after each voucher's last deposit (see demix.voucher_windows).
     """
     if raw is None or str(raw).strip() == "":
         return None, None

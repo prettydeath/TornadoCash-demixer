@@ -133,7 +133,7 @@
                value="{{ window_days }}" style="width:6.5rem">
       </div>
       <div>
-        <label for="exit_window" title="Narrow the withdrawal search to N hours after each deposit. Cuts the recipient field so a count match discriminates and fast exits stand out; misses withdrawals delayed longer than N. Leave blank for the full window.">Exit window (h)</label>
+        <label for="exit_window" title="End the withdrawal search N hours after each voucher's last deposit. Cuts the recipient field so a count match discriminates and fast exits stand out; misses withdrawals delayed longer than N. Leave blank for the full window.">Exit window (h)</label>
         <input id="exit_window" name="exit_window" type="number" min="0" step="0.5"
                placeholder="off" value="{{ exit_window }}" style="width:6.5rem">
       </div>

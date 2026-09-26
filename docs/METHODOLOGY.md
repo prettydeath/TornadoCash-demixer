@@ -27,8 +27,8 @@ selected network, that takes one of two shapes:
   amount), which is unique among token pools.
 
 Denominations are per chain and per asset: `0.1 / 1 / 10 / 100 ETH` on Ethereum,
-`100 / 1000 / 10000 MATIC` on Polygon, `10 / 100 / 500 AVAX` on Avalanche, `100 / 1000
-(×2) / 10000 / 100000 DAI` and five more ERC-20 denomination sets on Ethereum, and so
+`100 / 1000 / 10000 MATIC` on Polygon, `10 (×2) / 100 (×2) / 500 AVAX` on Avalanche,
+`100 / 1000 (×2) / 10000 / 100000 DAI` and five more ERC-20 denomination sets on Ethereum, and so
 on.
 
 > **Detection gap: undeclared routers.** The router path only fires for an address the
@@ -43,7 +43,8 @@ Consecutive deposits **into the same pool** that occur within `--gap-hours` are 
 into a **voucher**. A voucher of size *N* means the depositor put *N* notes of that pool
 in during one session — e.g. `9 × 1 ETH`. Grouping is by pool, not by denomination, so
 two contracts at one denomination produce two independent vouchers rather than one merged
-one.
+one. Grouping chains: deposits each within `--gap-hours` of the previous one form one
+voucher even if the whole session spans much longer than the gap.
 
 ## 2a. Withdrawal side — event mode (default, exact)
 
@@ -80,8 +81,8 @@ exit candidate.
 
   Two boundaries matter, and both are enforced in code rather than left to the
   reader. A **named relayer taking a zero fee is not this**: the relayer paid
-  the gas and the recipient is tied to nothing, so those are recorded
-  separately as `zero_fee_relayed`. And **the sender is an inference until it
+  the gas and the recipient is tied to nothing, so those are kept apart
+  (`zero_fee_relayed` in the JSON export). And **the sender is an inference until it
   is read**, because `withdraw()` may be called by anyone and a careful subject
   funds a throwaway address to send it. Every lead therefore carries a
   `broadcaster_status`:
@@ -135,6 +136,10 @@ reaches 1.0 although a chance match is still likely. A count match therefore als
 needs a field of at least `MIN_FIELD_SIZE` (5) recipients, and the report shows the
 field size next to `disc`.
 
+The count is compared with each voucher's size, not with their sum. An address that
+collected every note of two sessions in one pool (2 + 3 = 5 withdrawals) is not a
+`demix` candidate; `cluster` finds that case.
+
 ## Search windows
 
 Each voucher gets its own window: from its first deposit to `window_days` after
@@ -161,7 +166,7 @@ Given several wallets we compute:
 
 | Result | Definition | How much it says |
 |--------|-----------|----------|
-| **Profile match (exact, multi-pool)** | one address received a wallet's *entire* fingerprint, e.g. `6×0.1 + 4×1.0` | strong single-wallet signal (`profile_match`) |
+| **Profile match (exact, multi-pool)** | one address received a wallet's *entire* fingerprint, e.g. `6×0.1 + 4×1.0` | single-wallet signal (`profile_match`); it raises the score within the amount+timing family but does not change the band or admit a candidate on its own |
 | **Cross consolidator** | one address is a full-fingerprint match for 2+ wallets | graded: `strong` with an independent gas-price/linked signal, `moderate` for distinct fingerprints of wallets that did not deposit together, `weak` (window-overlap artefact) otherwise |
 | **Synchronous deposits** | wallets whose deposits chain within `SYNC_GAP_HOURS` (6 h) | behavioural link in its own right |
 | **Strong link (single pool)** | a count-matched candidate shared by 2+ wallets | lead; often shared window |
@@ -187,7 +192,8 @@ The tool surfaces this caveat directly in the multi-wallet report.
 ## 4b. Extra heuristics (gas price, linked address) and scoring
 
 Two further signals from the Tornado forensics literature (as used by Tutela) are
-layered onto the count-matched candidates. Both are free — no extra API calls.
+layered onto the count-matched candidates. Neither costs Etherscan quota; the
+gas-price gate and the contract check make bounded, memoised RPC calls.
 
 - **Unique gas price.** The `Withdrawal` log endpoint returns each withdrawal's
   `gasPrice`, and the wallet's deposit gas prices come from its tx list. A
@@ -307,8 +313,9 @@ change a score or a band.
 
 ## Pool identity
 
-A denomination is not a unique identifier. Avalanche runs two live 10 AVAX
-pools, and on Ethereum `100 DAI`, `100 USDC` and `100 USDT` are three different
+A denomination is not a unique identifier. Avalanche runs two live 10 AVAX and
+two 100 AVAX pools, Ethereum two 1000 DAI, two 50000 cDAI and two 500000 cDAI pools,
+and on Ethereum `100 DAI`, `100 USDC` and `100 USDT` are three different
 contracts at the same number. Results are therefore keyed by a pool key — the
 denomination, the asset, and a `#2` suffix where a chain holds more than one
 contract at that pair.

@@ -77,8 +77,8 @@ def _add_common(parser):
         type=_positive_hours,
         default=None,
         metavar="HOURS",
-        help="narrow the withdrawal search to HOURS after each "
-        "deposit instead of --window-days. A tight window "
+        help="end the withdrawal search HOURS after each voucher's "
+        "last deposit instead of --window-days. A tight window "
         "cuts the recipient field so a count match actually "
         "discriminates, surfacing fast exits; it misses "
         "withdrawals delayed longer than HOURS",
@@ -211,7 +211,7 @@ def cmd_demix(args: argparse.Namespace) -> None:
             f"{len(relayer_stats['self_relayed'])} self-relayed withdrawal(s)"
         )
         if leads:
-            print(f"  SELF-RELAYED CANDIDATES (strongest leads): {len(leads)}")
+            print(f"  SELF-RELAYED CANDIDATES: {len(leads)}")
             for lead in leads[:10]:
                 status = lead.get("broadcaster_status", "unverified")
                 note = {

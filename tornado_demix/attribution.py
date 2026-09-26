@@ -12,8 +12,7 @@ is never bundled. Point the tool at a checkout of it with the
 set to the directory holding ``<network>.csv`` files. Without it, lookups return
 nothing and every caller degrades to unlabelled output; the feature is additive.
 
-CSV schema: ``address,network,entity,label,category,source,source_url,
-confidence,last_updated``.
+Columns read: ``address,entity,label,category,source,confidence``; others are ignored.
 """
 
 from __future__ import annotations

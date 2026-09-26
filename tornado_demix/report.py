@@ -764,7 +764,7 @@ def build_html_report(
     p.append(f'<div class="meta">Depositor <b class="mono">{_e(wallet)}</b></div>')
     exit_h = params.get("exit_window_hours")
     window_txt = (
-        f"exit window <b>{_e(_fmt_hours(exit_h))} h</b> after each deposit"
+        f"exit window <b>{_e(_fmt_hours(exit_h))} h</b> after each voucher's last deposit"
         if exit_h
         else f"window <b>{_e(params.get('window_days', 30))} days</b>"
     )
