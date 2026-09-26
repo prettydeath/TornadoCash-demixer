@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import sys
 import time
 from typing import Any
@@ -57,6 +58,16 @@ _KEY_REJECTIONS = (
 def _is_key_rejection(result):
     lowered = result.lower()
     return any(phrase in lowered for phrase in _KEY_REJECTIONS)
+
+
+# requests puts the full URL, query string included, into its exception text.
+_APIKEY_PARAM = re.compile(r"(apikey=)[^&\s'\")]+", re.IGNORECASE)
+
+
+def _redact(text, api_key):
+    """Remove the API key from an error message before it is raised or shown."""
+    text = _APIKEY_PARAM.sub(r"\1***", str(text))
+    return text.replace(api_key, "***") if api_key else text
 
 
 class EtherscanClient:
@@ -147,7 +158,11 @@ class EtherscanClient:
                 time.sleep(1.2 * (attempt + 1))
                 continue
             if isinstance(result, str) and _is_key_rejection(result):
-                raise ApiKeyError("the data provider rejected the API key: {}".format(result))
+                raise ApiKeyError(
+                    _redact(
+                        "the data provider rejected the API key: {}".format(result), self.api_key
+                    )
+                )
             # Benign "nothing here" answers. Checked after the key and rate-limit
             # cases so an auth failure never reads as an empty history. A null
             # result without such a message is an error (e.g. a query timeout).
@@ -163,12 +178,15 @@ class EtherscanClient:
             time.sleep(0.8 * (attempt + 1))
 
         raise ApiError(
-            "{} ({}) gave no usable answer after {} attempt(s) for {}: {}".format(
-                self.base_url,
-                query.get("action", "?"),
-                self.retries,
-                query.get("address", query.get("timestamp", "?")),
-                last_error,
+            _redact(
+                "{} ({}) gave no usable answer after {} attempt(s) for {}: {}".format(
+                    self.base_url,
+                    query.get("action", "?"),
+                    self.retries,
+                    query.get("address", query.get("timestamp", "?")),
+                    last_error,
+                ),
+                self.api_key,
             )
         )
 

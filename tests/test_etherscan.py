@@ -1,6 +1,7 @@
 """API client: paged queries and token-transfer helpers."""
 
 import pytest
+import requests
 
 from tornado_demix.errors import ApiError
 from tornado_demix.etherscan import MAX_BLOCK, EtherscanClient
@@ -429,3 +430,18 @@ def test_a_batched_contract_wallet_deposit_counts_every_note():
         None, WALLET, network=eth, txs=[], internal_txs=internal, token_txs=[]
     )
     assert len(deposits) == 3
+
+
+class _UnreachableSession:
+    def get(self, url, params=None, timeout=None):
+        query = "&".join(f"{k}={v}" for k, v in (params or {}).items())
+        raise requests.ConnectionError(f"Max retries exceeded with url: /v2/api?{query}")
+
+
+def test_a_network_error_does_not_leak_the_api_key():
+    client = EtherscanClient("SECRETKEY123", retries=1)
+    client.session = _UnreachableSession()
+    with pytest.raises(ApiError) as err:
+        client.call({"module": "proxy", "action": "eth_blockNumber"})
+    assert "SECRETKEY123" not in str(err.value)
+    assert "apikey=***" in str(err.value)
