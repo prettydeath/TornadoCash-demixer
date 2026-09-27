@@ -59,6 +59,7 @@ The method, thresholds and the reasoning behind them are in
 | `tools/verify_pools.py` | on-chain verification of registry entries |
 | `tools/calibrate.py` | precision/recall against confirmed cases (needs private data) |
 | `tools/sensitivity.py` | ranking stability of saved results under perturbed weights |
+| `tools/simulate.py` | synthetic benchmark: ablation, negative controls, counter-measures ([results](docs/EVALUATION.md)) |
 
 ## Requirements
 
@@ -196,7 +197,9 @@ windows are clamped to the current block.
 - Leads, not proof. The weights and `MIN_COUNT_DISCRIMINATION = 0.5` are expert
   judgements; the score has not been calibrated on cases with known outcomes.
   The band does not depend on the weights at all; they only order candidates
-  within a band (check a saved result with `tools/sensitivity.py`).
+  within a band (check a saved result with `tools/sensitivity.py`). How each
+  component behaves on generated data with a known answer is in
+  [docs/EVALUATION.md](docs/EVALUATION.md).
 - Single-note vouchers cannot be narrowed by count: every recipient in the
   window has count 1.
 - Busy pools and long windows produce many equal counts. `--exit-window` trades
@@ -225,6 +228,12 @@ Weight sensitivity of saved results (no API calls):
 
 ```bash
 python tools/sensitivity.py out/demix.json:<expected exit> --samples 1000 --spread 0.5
+```
+
+Synthetic benchmark (no API calls, about half a minute):
+
+```bash
+python tools/simulate.py --experiment all --trials 200 --seed 1
 ```
 
 CI runs the tests on Linux and Windows with Python 3.9 and 3.13, a test under a

@@ -238,6 +238,9 @@ calibrated against known outcomes. The band does not depend on the weights at al
 re-scoring the thesis cases with every weight scaled by a random factor in
 [0.5, 1.5] (and [0.1, 1.9]) never changed a band, and changed the order only
 between same-band candidates with different signals (`tools/sensitivity.py`).
+On generated data with a known exit, each family adds ranking power, `moderate`
+is common on unrelated addresses, and false `strong` comes from chance gas-price
+reuse ([EVALUATION.md](EVALUATION.md)).
 
 The report and the web UI also state the analysis parameters (voucher gap, window,
 thresholds) and the block ranges read, and `demix --json` saves the full result.
