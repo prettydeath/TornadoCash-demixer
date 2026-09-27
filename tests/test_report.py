@@ -922,3 +922,13 @@ def test_write_relayer_csv_marks_unverified_broadcasters(tmp_path):
     relayers, leads_file = (list(csv.DictReader(open(f, encoding="utf-8"))) for f in files)
     assert relayers[0]["relayer_address"] == fx.ALICE and relayers[0]["withdrawals"] == "3"
     assert [r["broadcaster_status"] for r in leads_file] == ["unverified", "self"]
+
+
+def test_the_fresh_note_says_it_is_not_scored():
+    from tornado_demix.report_html import _fresh_html
+
+    assert _fresh_html(None) == ""
+    fresh = _fresh_html({"fresh": True, "history_hours": 3})
+    assert "Fresh address" in fresh and "not scored" in fresh
+    old = _fresh_html({"fresh": False, "history_hours": 240})
+    assert "10 day(s)" in old and "not scored" in old

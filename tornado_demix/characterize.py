@@ -25,6 +25,7 @@ pool withdrawals are token transfers and are out of scope for the inflow list.
 SERVICE_MIN_TXS = 500  # above this an address is a service/exchange, not personal
 AGGREGATOR_MIN_POOLS = 3  # draws from this many distinct pools -> aggregator
 AGGREGATOR_MIN_INFLOWS = 10  # this many pool withdrawals -> aggregator
+DISPOSABLE_HOURS = 24  # history before the first inflow of a disposable outlet
 
 # The pool also pays the relayer's fee as a separate internal transfer. Only a
 # transfer of at least this fraction of the denomination counts as a received
@@ -112,6 +113,10 @@ def characterize_address(client, address, network, next_hop_limit=8, labels=None
     ][:next_hop_limit]
 
     classification, reason = _classify(len(normal), len(pool_inflows), len(distinct))
+    # A disposable outlet: no more than a day of history before the first inflow.
+    disposable = bool(
+        pool_inflows and first_ts and pool_inflows[0]["ts"] - first_ts <= DISPOSABLE_HOURS * 3600
+    )
 
     return {
         "address": address,
@@ -126,6 +131,7 @@ def characterize_address(client, address, network, next_hop_limit=8, labels=None
         "top_next_hops": top_next_hops,
         "classification": classification,
         "classification_reason": reason,
+        "disposable": disposable,
     }
 
 

@@ -170,3 +170,16 @@ def test_activity_envelope_spans_both_lists():
     info = characterize_address(StubClient(normal, internal), ADDR, _network())
     assert info["first_activity_ts"] == 1000
     assert info["last_activity_ts"] == 5000
+
+
+def test_an_address_first_seen_with_its_pool_inflow_is_disposable():
+    internal = [_internal(P01, ADDR, 10**17, 1_000_000, "0x1")]
+    info = characterize_address(StubClient([], internal), ADDR, _network())
+    assert info["disposable"] is True
+
+
+def test_an_address_with_old_history_is_not_disposable():
+    normal = [_normal(ADDR, "0x" + "9" * 40, 1, 1_000_000 - 30 * 86400, "0x0")]
+    internal = [_internal(P01, ADDR, 10**17, 1_000_000, "0x1")]
+    info = characterize_address(StubClient(normal, internal), ADDR, _network())
+    assert info["disposable"] is False

@@ -212,6 +212,13 @@ def cmd_demix(args: argparse.Namespace) -> None:
                 tag = format_label(labels.get(addr)) if labels else ""
                 print(f"     {addr}" + (f"  [{tag}]" if tag else ""))
 
+    fresh = [a for a, f in sorted(data.get("fresh_addresses", {}).items()) if f["fresh"]]
+    if fresh:
+        print(f"\n[fresh] {len(fresh)} top candidate(s) had at most a day of history before")
+        print("  their first withdrawal (disposable exit; context, not scored):")
+        for addr in fresh:
+            print(f"     {addr}")
+
     # A pool whose block lookup failed was never searched; say so per pool.
     for unresolved in data.get("unresolved", []):
         print(
@@ -381,6 +388,11 @@ def cmd_characterize(args: argparse.Namespace) -> None:
             + (f" - {info['label']['entity']}" if info["label"].get("entity") else "")
         )
     print(f"Classification: {info['classification'].upper()} - {info['classification_reason']}")
+    if info.get("disposable"):
+        print(
+            "Disposable: first activity at most a day before the first pool inflow "
+            "(typical of a laundering exit; not proof)"
+        )
     print(f"Activity: {info['normal_txs']} normal tx, {info['internal_txs']} internal tx")
     if info["first_activity_ts"]:
         first = datetime.fromtimestamp(info["first_activity_ts"], tz=timezone.utc)

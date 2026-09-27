@@ -796,3 +796,38 @@ def test_an_erc20_transfer_between_depositor_and_exit_is_linked():
     data = run_demix(TokenClient(deposits, logs), fx.WALLET, network=net)
     row = next(r for r in ranked_candidates(data) if r["address"] == exit_)
     assert "linked" in row["signals"]
+
+
+def _fresh_case(first_activity):
+    deposits = [_tx(fx.POOL_01_ETH, 0.1, 1000 + i * 10, 10 + i, "0xdep%d" % i) for i in range(3)]
+    winner = _recipient(1)
+    logs = [_wlog(winner, format(9000 + k, "064x"), ZERO_ADDRESS, 0, ts=100_000) for k in range(3)]
+    logs += [_wlog(_recipient(i), format(i, "064x"), RELAYER, 10**15) for i in range(2, 41)]
+    client = _FakeClient(deposits, logs)
+    client.first_activity = lambda addr: first_activity
+    return client, winner
+
+
+def test_a_candidate_without_history_before_its_withdrawal_is_fresh():
+    client, winner = _fresh_case(None)
+    data = run_demix(client, fx.WALLET, network=fx.network())
+    info = data["fresh_addresses"][winner]
+    assert info["fresh"] and info["history_hours"] == 0
+    # Context only: the fresh mark does not change the score.
+    assert "fresh" not in data["denoms"]["0.1 ETH"]["signals"][winner]
+
+
+def test_a_candidate_with_old_history_is_not_fresh():
+    client, winner = _fresh_case(100_000 - 10 * 86400)
+    data = run_demix(client, fx.WALLET, network=fx.network())
+    assert data["fresh_addresses"][winner] == {
+        "first_activity_ts": 100_000 - 10 * 86400,
+        "first_withdrawal_ts": 100_000,
+        "history_hours": 240.0,
+        "fresh": False,
+    }
+
+
+def test_a_client_without_first_activity_gives_no_fresh_marks():
+    data = run_demix(_headline_single_note_client(), fx.WALLET, network=fx.network())
+    assert data["fresh_addresses"] == {}

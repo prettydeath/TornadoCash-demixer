@@ -171,6 +171,23 @@ def _evidence_html(evidence: list[dict]) -> str:
     return f'<ul class="evidence">{items}</ul>'
 
 
+def _fresh_html(fresh: dict | None) -> str:
+    """The history an exit had before its first withdrawal; context, not a signal."""
+    if not fresh:
+        return ""
+    if fresh["fresh"]:
+        text = (
+            f"Fresh address: first activity {fresh['history_hours']:.0f} h before its first "
+            "withdrawal, typical of a disposable laundering exit (not scored)"
+        )
+    else:
+        text = (
+            f"Address active {fresh['history_hours'] / 24:.0f} day(s) before its first "
+            "withdrawal (not scored)"
+        )
+    return f'<div class="rat">{_e(text)}.</div>'
+
+
 def build_html_report(
     data: dict, network: Network, attribution: dict[str, dict] | None = None
 ) -> str:
@@ -287,6 +304,7 @@ def build_html_report(
                 f'<span class="conf pct">score {r["confidence"]:.2f}</span></div>'
                 f'<div class="why">{_e(candidate_reason(r))}</div>'
                 f"{_evidence_html(r['evidence'])}"
+                f"{_fresh_html(r.get('fresh'))}"
                 f'<div class="rat">Band: {_e(r["band"])} — '
                 f"{_e(band_rationale(r['band'], set(r['signals'])))}.</div>"
                 "</div>"

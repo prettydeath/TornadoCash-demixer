@@ -508,3 +508,20 @@ def test_a_block_that_overflows_every_page_is_reported(monkeypatch, capsys):
 
     Full("KEY").fetch_all("txlist", WALLET, 7, 9)
     assert "block 7 holds more than 2 rows" in capsys.readouterr().err
+
+
+def test_first_activity_takes_the_earlier_of_the_two_lists():
+    client = _proxy_client(
+        [
+            {"status": "1", "message": "OK", "result": [{"timeStamp": "5000"}]},
+            {"status": "1", "message": "OK", "result": [{"timeStamp": "4000"}]},
+        ]
+    )
+    assert client.first_activity(SENDER) == 4000
+    assert [c["offset"] for c in client.session.calls] == [1, 1]
+    assert [c["action"] for c in client.session.calls] == ["txlist", "txlistinternal"]
+
+
+def test_first_activity_is_none_without_transactions():
+    empty = {"status": "0", "message": "No transactions found", "result": []}
+    assert _proxy_client([empty, empty]).first_activity(SENDER) is None

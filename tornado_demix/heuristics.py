@@ -574,6 +574,7 @@ def ranked_candidates(
                     "field_size": res.get("unique_recipients") or len(res["counts"]),
                     "evidence": candidate_evidence(data, pool_key, addr),
                     "attribution": format_label(label_of(attribution, addr)) if attribution else "",
+                    "fresh": data.get("fresh_addresses", {}).get(addr),
                 }
             )
     # Band first: the score orders leads within a band but cannot lift a

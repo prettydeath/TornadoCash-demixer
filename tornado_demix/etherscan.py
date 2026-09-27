@@ -339,6 +339,28 @@ class EtherscanClient:
             return sender.lower() if sender else None
         return None
 
+    def first_activity(self, address: str) -> int | None:
+        """Timestamp of the earliest normal or internal transaction of ``address``.
+
+        One single-row query per list, so the cost does not grow with the
+        address's history. None when the address has no transactions at all.
+        """
+        firsts = []
+        for action in ("txlist", "txlistinternal"):
+            rows = self.call(
+                {
+                    "module": "account",
+                    "action": action,
+                    "address": address.lower(),
+                    "page": 1,
+                    "offset": 1,
+                    "sort": "asc",
+                }
+            )
+            if rows and isinstance(rows, list) and rows[0].get("timeStamp"):
+                firsts.append(int(rows[0]["timeStamp"]))
+        return min(firsts) if firsts else None
+
     def internal_txs(self, address: str) -> list[dict]:
         """Return internal transactions touching ``address``.
 

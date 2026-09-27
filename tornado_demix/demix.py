@@ -14,10 +14,10 @@ from collections import Counter, defaultdict
 from datetime import datetime, timezone
 
 from .constants import WEI
-from .errors import BlockLookupError
+from .errors import ApiError, ApiKeyError, BlockLookupError
 from .etherscan import EtherscanClient
 from .events import fetch_withdrawals
-from .heuristics import apply_heuristics, count_is_evidence
+from .heuristics import apply_heuristics, count_is_evidence, ranked_candidates
 from .networks import Network, load_networks
 from .pools import Pool
 from .rpc import make_contract_check, make_gas_price_gate
@@ -313,6 +313,47 @@ def voucher_windows(
         else:
             merged.append(dict(span))
     return merged
+
+
+# An exit address with no more than this much history before its first
+# withdrawal is a fresh, disposable one (MixLaunder: 98.6 % of laundering exits).
+FRESH_HISTORY_HOURS = 24
+FRESH_CHECK_LIMIT = 10
+
+
+def fresh_addresses(client, data, limit=FRESH_CHECK_LIMIT):
+    """Check how much history the top candidates had before their first withdrawal.
+
+    Returns {address: {first_activity_ts, first_withdrawal_ts, history_hours,
+    fresh}}. Informational only: a fresh address is typical of laundering exits
+    but also of any new wallet, so it never enters the score or the band.
+    """
+    if not hasattr(client, "first_activity"):
+        return {}
+    first_withdrawal = {}
+    for row in ranked_candidates(data):
+        addr = row["address"]
+        first_withdrawal[addr] = min(first_withdrawal.get(addr, row["first_ts"]), row["first_ts"])
+        if len(first_withdrawal) >= limit:
+            break
+    out = {}
+    for addr, withdrawn in first_withdrawal.items():
+        try:
+            first = client.first_activity(addr)
+        except ApiKeyError:
+            raise
+        except ApiError as exc:
+            _log("  [!] first activity of {} not read: {}".format(addr, exc))
+            continue
+        first = withdrawn if first is None else min(first, withdrawn)
+        history = (withdrawn - first) / 3600
+        out[addr] = {
+            "first_activity_ts": first,
+            "first_withdrawal_ts": withdrawn,
+            "history_hours": round(history, 1),
+            "fresh": history <= FRESH_HISTORY_HOURS,
+        }
+    return out
 
 
 def _resolve_window_end(client, end_ts):
@@ -639,4 +680,5 @@ def run_demix(
             client, wallet, all_txs + internal_txs, results, network, is_contract
         ),
     )
+    result["fresh_addresses"] = fresh_addresses(client, result)
     return result
