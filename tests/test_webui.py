@@ -52,7 +52,21 @@ class _QuietClient:
 def client(monkeypatch):
     monkeypatch.setenv("ETHERSCAN_API_KEY", "FAKE-KEY-FOR-TESTS")
     monkeypatch.setattr(webapp, "EtherscanClient", _QuietClient)
-    return webapp.app.test_client()
+    test_client = webapp.app.test_client()
+    with test_client.session_transaction() as sess:
+        sess["csrf"] = CSRF
+    post = test_client.post
+
+    def post_with_token(*args, data=None, **kwargs):
+        data = dict(data or {})
+        data.setdefault("csrf", CSRF)
+        return post(*args, data=data, **kwargs)
+
+    test_client.post = post_with_token
+    return test_client
+
+
+CSRF = "test-csrf-token"
 
 
 def _post(client, **form):
@@ -330,3 +344,20 @@ def test_multi_view_shows_consolidator_grades_strongest_first(monkeypatch):
     view, _table, _reports = webapp._run_multi(_QuietClient(), [a, b], fx.network(), 30, "events")
     assert [c["band"] for c in view["cross"]] == ["strong", "weak"]
     assert view["cross"][1]["artefact"] == "identical"
+
+
+def test_a_form_without_the_csrf_token_is_refused(client):
+    response = client.post("/", data={"wallets": WALLET, "csrf": "wrong"})
+    assert response.status_code == 400
+    assert "The form expired" in response.get_data(as_text=True)
+
+
+def test_the_session_cookie_is_same_site_strict():
+    assert webapp.app.config["SESSION_COOKIE_SAMESITE"] == "Strict"
+
+
+def test_a_web_csv_cell_that_looks_like_a_formula_is_escaped(client):
+    with client.session_transaction() as sess:
+        sess["token"] = webapp._store_put({"csv": {"header": ["a"], "rows": [["=HYPERLINK(1)"]]}})
+    body = client.get("/download.csv").get_data(as_text=True)
+    assert "'=HYPERLINK(1)" in body

@@ -105,6 +105,7 @@
   <div class="sub">Tornado.Cash demixing by amount and timing correlation over public on-chain data.</div>
 
   <form method="post">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
     <div>
       <label for="wallets">Depositor wallets, one address per line (max {{ max_wallets }})</label>
       <textarea id="wallets" name="wallets" placeholder="0x019b5bb2051797e33f726d0e7a8cb9b9c2003ac2&#10;0x450cc23c0bc13d46288deb36913fdaaee49fcd99" required>{{ wallets_raw }}</textarea>

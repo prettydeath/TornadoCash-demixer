@@ -46,6 +46,7 @@ from tornado_demix.relayer import (  # noqa: E402
     verify_broadcaster,
 )
 from tornado_demix.report import (  # noqa: E402
+    _sanitize_row,
     analysis_assumptions,
     build_characterize_report,
     build_cluster_report,
@@ -59,6 +60,7 @@ from tornado_demix.report import (  # noqa: E402
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET", os.urandom(16))
+app.config["SESSION_COOKIE_SAMESITE"] = "Strict"
 
 MAX_WALLETS = 25
 
@@ -101,7 +103,9 @@ def _exit_window(raw):
 
 
 # Server-side store for the last runs' reports and CSV tables, which are too big
-# for the signed-cookie session. The session holds only the token.
+# for the signed-cookie session. The session holds only the token. The store lives
+# in this process: run the UI as one process (python webui/app.py), not under a
+# multi-worker server.
 _STORE = OrderedDict()
 _STORE_MAX = 20
 
@@ -436,8 +440,13 @@ def _run_characterize(client, address, net):
 @app.route("/", methods=["GET", "POST"])
 def index():
     ctx = _base_context()
+    session.setdefault("csrf", secrets.token_hex(16))
+    ctx["csrf"] = session["csrf"]
     if request.method != "POST":
         return render_template("index.html", **ctx)
+    if not secrets.compare_digest(request.form.get("csrf", ""), session["csrf"]):
+        ctx["error"] = "The form expired; reload the page and submit again."
+        return render_template("index.html", **ctx), 400
 
     raw = request.form.get("wallets") or ""
     mode = "events"
@@ -547,8 +556,8 @@ def download_csv():
         return Response("No results to download yet.\n", mimetype="text/plain", status=404)
     buf = io.StringIO()
     writer = csv.writer(buf)
-    writer.writerow(data["header"])
-    writer.writerows(data["rows"])
+    writer.writerow(_sanitize_row(data["header"]))
+    writer.writerows(_sanitize_row(r) for r in data["rows"])
     return Response(
         buf.getvalue(),
         mimetype="text/csv",
