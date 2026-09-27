@@ -171,6 +171,8 @@ github.com/tayvano/lazarus-bluenoroff-research. Default settings, 30-day window.
 | KuCoin 2020 | 2 (55) | 7 | 6 per depositor | 7 | 6 | 1 `moderate` (chance gas-price reuse) |
 | Harmony 2022 | 14 (857) | 30 of 55 listed | 0-30 per depositor | 0 | 0 | 0 |
 
+Run with `python tools/real_cases.py`; it also prints the context marks below.
+
 **KuCoin.** The attacker ran its own withdrawal caller, `0x82e6...`, which sent 128
 withdrawals to 7 addresses. That is the ground truth; no demix signal uses the
 transaction sender, except `linked_sender` when the sender is a counterparty of the
@@ -186,6 +188,16 @@ withdrawals from the 100 ETH pool within 30 days of the deposits, 6 per address 
 most cases, against vouchers of 60 notes. The tool lists no candidate and no false
 one. The investigators selected these addresses partly by withdrawal count and
 batching, so this list is not independent of count-based reasoning.
+
+**Context marks.** Every true exit that fell in a window had at most a day of
+history before its first withdrawal: 6 of 6 in KuCoin, 30 of 30 in Harmony. The
+fresh mark is shown as context and never scored, because a new unrelated wallet
+is fresh as well. The shared-funder edge links the two KuCoin depositors through
+`0x0060...`, an address on the investigators' list. In Harmony it groups all 14
+depositors into 5 clusters through 5 funders, each shared by 2-3 depositors; each
+of the 5 funders received its funds directly from the bridge exploiter
+`0x0d04...ded00`. A sixth funder, shared by 4 depositors, has 200 or more
+transactions and is left out as busy.
 
 Both cases show the same limit as the synthetic counter-measures: when notes are
 pooled and redistributed, a count match finds nothing, and the tool reports no

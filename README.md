@@ -33,12 +33,19 @@ traces users leave around it.
   gas price). Candidates are ordered by band, then by an uncalibrated noisy-OR
   score taken across evidence families (within a family only the strongest
   signal counts). Reports state the analysis parameters and the block ranges read.
+- Marks the top candidates that had at most a day of history before their first
+  withdrawal (fresh, disposable exits; shown as context, never scored).
+- Opens the HTML report with a case overview and a flow diagram: depositor, pools,
+  candidate exits coloured by band.
 - For several wallets: shared candidates, denomination-profile matches,
   cross-wallet consolidators graded against the window-overlap artefact, deposit
-  synchronicity, and operator clusters (union-find on discriminating edges only).
+  synchronicity, shared private funders, and operator clusters (union-find on
+  discriminating edges only).
 - Traces split exits one hop forward to a common collection address (`cluster`).
-- Characterises an exit candidate: activity, pool inflows, next hops, optional
-  address labels (`characterize`).
+- Follows withdrawn funds forward over several hops with FIFO attribution and
+  DEX-swap resolution, up to a labelled service (`trace`).
+- Characterises an exit candidate: activity, pool inflows, next hops, a disposable
+  flag, optional address labels (`characterize`).
 
 The method, thresholds and the reasoning behind them are in
 [docs/METHODOLOGY.md](docs/METHODOLOGY.md).
@@ -51,10 +58,11 @@ The method, thresholds and the reasoning behind them are in
 | `tornado_demix/heuristics.py` | signals, `count_discrimination`, noisy-OR score, bands |
 | `tornado_demix/multi.py`, `graph.py` | multi-wallet correlation, consolidator grading, clustering |
 | `tornado_demix/cluster.py` | one-hop tracing of split exits, on-disk cache |
+| `tornado_demix/trace.py` | multi-hop FIFO tracing of withdrawn funds with swap resolution |
 | `tornado_demix/characterize.py`, `attribution.py` | recipient-side analysis, address labels |
 | `tornado_demix/etherscan.py`, `rpc.py`, `events.py` | explorer client, JSON-RPC probes, event decoding |
 | `tornado_demix/networks.py`, `pools.py`, `data/networks.csv` | verified pool registry |
-| `tornado_demix/report.py` | CSV and self-contained HTML reports |
+| `tornado_demix/report.py` (`report_csv`, `report_html`, `report_json`) | CSV, self-contained HTML and JSON reports |
 | `tornado_demix/cli.py`, `webui/app.py` | command line and local Flask UI over the same functions |
 | `tools/verify_pools.py` | on-chain verification of registry entries |
 | `tools/calibrate.py` | precision/recall against confirmed cases (needs private data) |
@@ -147,6 +155,9 @@ python -m tornado_demix cluster <wallet> --cache-dir .cache/case-42
 
 # describe an exit candidate
 python -m tornado_demix characterize <address> --attribution-dir path/to/labels
+
+# follow 10 ETH withdrawn to <address> in block 12000000 over up to 4 hops
+python -m tornado_demix trace <address> --amount 10 --start-block 12000000 --json out/trace.json
 ```
 
 `python -m tornado_demix <command> --help` lists every option. A configuration or
@@ -215,7 +226,9 @@ windows are clamped to the current block.
   (every exit collected notes of several deposits); in KuCoin the linked withdrawal
   sender found 6 of 7 exits for one depositor ([docs/EVALUATION.md](docs/EVALUATION.md)).
 - Only Tornado Cash pools in the registry are covered. Bridges, other mixers and
-  cross-asset hops are not followed; `cluster` follows one hop only.
+  cross-chain hops are not followed; `cluster` follows one hop only, and `trace`
+  follows funds by FIFO attribution, a convention that does not hold when an
+  address mixes the traced funds with others.
 - Native chains other than Ethereum, Polygon and Avalanche have no verified
   router in the registry, so routed deposits there are not detected.
 - `characterize` counts inflows from native pools only.

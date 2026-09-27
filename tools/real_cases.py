@@ -35,6 +35,7 @@ from tornado_demix.demix import detect_deposits, run_demix  # noqa: E402
 from tornado_demix.etherscan import EtherscanClient  # noqa: E402
 from tornado_demix.events import decode_withdrawal  # noqa: E402
 from tornado_demix.heuristics import ranked_candidates  # noqa: E402
+from tornado_demix.multi import shared_funders  # noqa: E402
 from tornado_demix.networks import get_network  # noqa: E402
 
 # Source: github.com/tayvano/lazarus-bluenoroff-research, hacks-and-thefts/.
@@ -146,8 +147,15 @@ def depositors(client, network, addresses):
 
 def evaluate(client, network, wallets, truth):
     total = Counter()
+    results, first_in = {}, {}
     for wallet in wallets:
         data = _quiet(run_demix, client, wallet, network=network)
+        results[wallet] = data
+        for res in data["denoms"].values():
+            for addr, recs in res["detail"].items():
+                if addr in truth:
+                    ts = min(r["ts"] for r in recs)
+                    first_in[addr] = min(first_in.get(addr, ts), ts)
         rows = ranked_candidates(data)
         in_window = {a for res in data["denoms"].values() for a in res["counts"] if a in truth}
         hits = [r for r in rows if r["address"] in truth]
@@ -159,6 +167,18 @@ def evaluate(client, network, wallets, truth):
         total.update(in_window=len(in_window), candidates=len(rows), true=len(hits))
         total.update({f"other_{b}": n for b, n in bands.items()})
     print(f"  total: {dict(total)}")
+    # Context marks, never scored: fresh exits and funders shared by depositors.
+    fresh = 0
+    for addr, withdrawn in sorted(first_in.items()):
+        first = _quiet(client.first_activity, addr)
+        fresh += first is None or withdrawn - min(first, withdrawn) <= 86400
+    print(
+        f"  exits in a window with at most a day of history before it: {fresh} of {len(first_in)}"
+    )
+    funders = _quiet(shared_funders, client, results)
+    print(f"  funders shared by 2+ depositors (not busy): {len(funders)}")
+    for funder, ws in funders.items():
+        print(f"    {funder} -> {len(ws)} depositors")
 
 
 def kucoin(client, network):

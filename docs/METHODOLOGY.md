@@ -180,6 +180,7 @@ Given several wallets we compute:
 | **Profile match (exact, multi-pool)** | one address received a wallet's *entire* fingerprint, e.g. `6×0.1 + 4×1.0` | single-wallet signal (`profile_match`); it admits a candidate and belongs to the amount+timing family, so on its own it is `weak` and it needs gas price or linked for `strong` |
 | **Cross consolidator** | one address is a full-fingerprint match for 2+ wallets | graded: `strong` with an independent gas-price/linked signal, `moderate` for distinct fingerprints of wallets that did not deposit together, `weak` (window-overlap artefact) otherwise |
 | **Synchronous deposits** | wallets whose deposits chain within `SYNC_GAP_HOURS` (6 h) | behavioural link in its own right |
+| **Shared funder** | wallets funded, before their first deposit, by the same plain native transfer sender that is neither labelled nor busy (`BUSY_FUNDER_TXS` = 200 transactions or more) | edge `shared funder` in the operator graph; in the 27 MixLaunder cases 90.1 % of laundering deposit addresses shared an immediate funder with another deposit address of the case |
 | **Strong link (single pool)** | a count-matched candidate shared by 2+ wallets | lead; often shared window |
 | **Soft overlap** | any qualifying recipient shared by 2+ wallets | usually a shared-window artefact |
 
@@ -316,6 +317,25 @@ candidates. Tracing hundreds of false candidates, or a count that discriminates 
 dilutes the signal. Absence of a 1-hop reconvergence is itself informative: it suggests
 dispersed exits (good operational security) or reconvergence deeper than one hop.
 
+## 5b. Multi-hop tracing (trace)
+
+`trace` follows an amount forward from an exit address, after MixGuard's
+Algorithm 1. At each address the outgoing transfers of the traced asset after
+the funds arrived are attributed first in, first out until the amount is spent;
+each attributed transfer is an edge to the next address. A transfer into a
+contract that pays the sender back in the same transaction (a DEX swap: an
+internal transfer or a token transfer to the sender in that transaction) is
+resolved: the trace continues from the sender with the swap output, scaled by the
+share of the input the trace owns. A contract that pays nothing back (a bridge, a
+deposit contract) ends that branch. The walk also stops at a labelled address, at
+`--max-hops` (default 4), at an address that did not move the funds on, and after
+`MAX_NODES` = 40 expanded addresses, which bounds the API calls. Amounts below 1 %
+of the start are not followed.
+
+FIFO is a convention: funds in one account are fungible, so an edge says where
+the traced amount *would* have gone under that rule. It is a lead for
+corroboration, like every other output.
+
 ## 6. Reading the output responsibly
 
 - Treat every candidate as a **lead**, corroborated by other evidence (KYC records,
@@ -335,6 +355,14 @@ example a token transfer or approval); token amounts are not traced. The class
 inflows`) follows fixed thresholds on activity and pool diversity. Attribution
 labels, when a label set is configured, are shown next to addresses and never
 change a score or a band.
+
+An address whose first transaction came at most `DISPOSABLE_HOURS` (24 h) before
+its first pool inflow is flagged as disposable. The demix run makes the same
+check for its ten top candidates with two single-row queries each (first normal
+and first internal transaction) and marks an exit with at most a day of history
+before its first withdrawal as fresh. In the 27 MixLaunder cases 98.6 % of
+laundering exits were such fresh addresses; so is any newly created wallet, so the
+mark is context in the report and never enters the score or the band.
 
 ## Pool identity
 
