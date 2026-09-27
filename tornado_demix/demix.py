@@ -22,6 +22,10 @@ from .networks import Network, load_networks
 from .pools import Pool
 from .rpc import make_contract_check, make_gas_price_gate
 
+# Direct counterparties whose own transactions are read for Tornado withdrawal
+# calls (linked_sender). Busier counterparties are checked first.
+MAX_SENDER_COUNTERPARTIES = 25
+
 # A native deposit may differ from the denomination by this fraction (wallets
 # and routers are not always exact to the wei).
 NATIVE_DENOM_TOLERANCE = 0.005
@@ -190,6 +194,43 @@ def wallet_counterparties(wallet: str, txs: list[dict]) -> set[str]:
             if addr and addr != wallet:
                 parties.add(addr)
     return parties
+
+
+def withdrawal_senders(client, wallet, txs, results, network, is_contract):
+    """{withdrawal tx hash: sender} for withdrawals sent by the wallet or a direct counterparty.
+
+    Only non-contract counterparties are read, at most MAX_SENDER_COUNTERPARTIES,
+    and only within the searched block range, so the cost stays bounded.
+    """
+    wallet = wallet.lower()
+    hashes = {
+        (r.get("hash") or "").lower()
+        for res in results.values()
+        for recs in res.get("detail", {}).values()
+        for r in recs
+    }
+    blocks = [b for res in results.values() for b in res.get("window_blocks") or []]
+    if not hashes or not blocks:
+        return {}
+    tornado = {p.address for p in network.pools} | set(network.routers)
+    seen = Counter()
+    for tx in txs:
+        for side in ("from", "to"):
+            addr = (tx.get(side) or "").lower()
+            if addr and addr != wallet and addr not in tornado:
+                seen[addr] += 1
+    senders = [wallet] + [a for a, _n in seen.most_common() if not is_contract(a)]
+    found = {}
+    for addr in senders[: MAX_SENDER_COUNTERPARTIES + 1]:
+        fetch = getattr(client, "fetch_all", None)
+        rows = (
+            fetch("txlist", addr, min(blocks), max(blocks)) if fetch else client.outgoing_txs(addr)
+        )
+        for tx in rows:
+            h = (tx.get("hash") or "").lower()
+            if (tx.get("from") or "").lower() == addr and h in hashes:
+                found[h] = addr
+    return found
 
 
 def cluster_vouchers(deposits, gap_hours=24):
@@ -564,10 +605,14 @@ def run_demix(
         "unresolved": unresolved,
     }
 
+    is_contract = make_contract_check(network.rpc_url)
     apply_heuristics(
         result,
         counterparties,
         gas_gate=make_gas_price_gate(network.rpc_url, log=_log),
-        is_contract=make_contract_check(network.rpc_url),
+        is_contract=is_contract,
+        withdrawal_senders=withdrawal_senders(
+            client, wallet, all_txs + internal_txs, results, network, is_contract
+        ),
     )
     return result

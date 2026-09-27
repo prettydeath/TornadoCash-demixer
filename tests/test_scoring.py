@@ -269,7 +269,7 @@ def test_evidence_lists_every_family_and_marks_what_holds():
     apply_heuristics(data, counterparties={linked})
     row = next(r for r in ranked_candidates(data) if r["address"] == linked)
     by_signal = {e["signal"]: e for e in row["evidence"]}
-    assert set(by_signal) == {"count_match", "self_relayed", "gas_price", "linked"}
+    assert set(by_signal) == {"count_match", "self_relayed", "gas_price", "linked", "linked_sender"}
     assert by_signal["linked"]["holds"] is True
     assert by_signal["count_match"]["holds"] is False
     assert "20 of 21 recipients" in by_signal["count_match"]["detail"]
@@ -370,3 +370,26 @@ def test_the_summary_lists_facts_and_counts_one_family_for_count_and_self_relay(
     assert lines[1] == "Evidence families: amount+timing (1 independent)."
     assert lines[-1].startswith("Limitations:")
     assert "strongest" not in conclusion(data).lower()
+
+
+def test_a_withdrawal_sent_by_a_counterparty_links_its_recipient():
+    res = _pool_result(n_recipients=40, n_self_relayed=0, hits_each=1)
+    exit_ = "0x%040x" % 7
+    res["detail"][exit_] = res["detail"][exit_] * 17  # 17 notes, no voucher of that size
+    res["counts"][exit_] = 17
+    tx = res["detail"][exit_][0]["hash"]
+    data = _data(res, voucher_count=3)
+    apply_heuristics(data, counterparties=set(), withdrawal_senders={tx.lower(): "0xcaller"})
+    row = next(r for r in ranked_candidates(data) if r["address"] == exit_)
+    assert "linked_sender" in row["signals"]
+    assert row["band"] == "moderate"
+    held = {e["signal"] for e in row["evidence"] if e["holds"]}
+    assert held == {"linked_sender"}
+
+
+def test_a_withdrawal_back_to_the_depositor_is_linked():
+    res = _pool_result(n_recipients=40, n_self_relayed=0, hits_each=1)
+    data = _data(res, voucher_count=3)
+    data["wallet"] = "0x%040x" % 5
+    apply_heuristics(data, counterparties=set())
+    assert "linked" in data["denoms"]["0.1 ETH"]["signals"]["0x%040x" % 5]

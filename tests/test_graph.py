@@ -58,7 +58,7 @@ def test_a_bare_count_match_does_not_merge_two_wallets():
 
 def test_self_relayed_is_not_a_wallet_specific_signal():
     assert "self_relayed" not in WALLET_SPECIFIC_SIGNALS
-    assert WALLET_SPECIFIC_SIGNALS == {"gas_price", "linked"}
+    assert WALLET_SPECIFIC_SIGNALS == {"gas_price", "linked", "linked_sender"}
 
 
 def test_a_wallet_specific_signal_on_only_one_side_does_not_merge():

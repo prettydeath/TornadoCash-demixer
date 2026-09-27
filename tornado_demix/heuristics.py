@@ -23,6 +23,7 @@ SIGNAL_WEIGHTS = {
     "self_relayed": 0.25,  # paid own gas -> funded address tied to exit
     "gas_price": 0.25,  # exact deposit gas price reused on withdrawal
     "linked": 0.40,  # directly transacts with the depositor
+    "linked_sender": 0.40,  # withdrawal sent by the depositor or its direct counterparty
     "profile_match": 0.35,  # received the full pool fingerprint
 }
 
@@ -67,6 +68,7 @@ def apply_heuristics(
     counterparties: set[str],
     gas_gate: Callable[[int], bool] | None = None,
     is_contract: Callable[[str], bool | None] | None = None,
+    withdrawal_senders: dict[str, str] | None = None,
 ) -> dict:
     """Add ``signals`` and ``confidence`` to every recipient of a run_demix() result.
 
@@ -74,13 +76,18 @@ def apply_heuristics(
     not follow the address into another. ``gas_gate(block)`` says whether the
     sender chose that block's gas price (None: ungated). ``is_contract(address)``
     returns True, False or None; a contract counterparty does not earn ``linked``.
+    ``withdrawal_senders`` maps a withdrawal tx hash to its sender when that sender
+    is the depositor or one of its direct counterparties (``linked_sender``).
     """
+    wallet = (data.get("wallet") or "").lower()
+    withdrawal_senders = withdrawal_senders or {}
     deposits = data.get("deposits", [])
     deposit_gas = {d["gas_price"] for d in deposits if d.get("gas_price")}
 
     gas_matches = []  # (pool_key, recipient, gas_price, tx_hash)
     linked_hits = []  # (pool_key, recipient)
     linked_contracts = set()  # direct counterparties that are contracts
+    sender_hits = []  # (pool_key, recipient, sender, tx_hash)
     signals = {}  # (pool_key, address) -> set of signal names
     discriminations = {}  # (pool_key, address) -> count discrimination in [0, 1]
 
@@ -115,7 +122,17 @@ def apply_heuristics(
                     gas_matches.append((pool_key, addr, gp, r["hash"]))
                     break
 
-            if addr in counterparties:
+            for r in recs:
+                sender = withdrawal_senders.get((r.get("hash") or "").lower())
+                if sender:
+                    sig.add("linked_sender")
+                    sender_hits.append((pool_key, addr, sender, r["hash"]))
+                    break
+
+            if addr == wallet:  # a withdrawal back to the depositor itself
+                sig.add("linked")
+                linked_hits.append((pool_key, addr))
+            elif addr in counterparties:
                 if is_contract is not None and is_contract(addr):
                     linked_contracts.add(addr)
                 else:
@@ -138,6 +155,7 @@ def apply_heuristics(
         "gas_price_matches": gas_matches,
         "linked_addresses": linked_hits,
         "linked_contracts": sorted(linked_contracts),
+        "linked_senders": sender_hits,
     }
     return data
 
@@ -147,6 +165,7 @@ SIGNAL_LABEL = {
     "self_relayed": "Self-relayed exit (paid own gas)",
     "gas_price": "Unique gas-price reuse",
     "linked": "Linked address (direct counterparty)",
+    "linked_sender": "Withdrawal sent by the depositor or its counterparty",
     "profile_match": "Denomination-profile match",
 }
 
@@ -205,6 +224,8 @@ def candidate_reason(row: dict) -> str:
         bits.append("reused one of the wallet's deposit gas prices")
     if "linked" in row["signals"]:
         bits.append("transacts directly with the depositor outside Tornado")
+    if "linked_sender" in row["signals"]:
+        bits.append("a withdrawal to it was sent by the depositor or its direct counterparty")
     text = "; ".join(bits)
     return text[0].upper() + text[1:] + "."
 
@@ -214,16 +235,45 @@ EVIDENCE_LABEL = {
     "self_relayed": "self-relay (same family as amount + timing)",
     "gas_price": "gas price",
     "linked": "linked address",
+    "linked_sender": "linked withdrawal sender",
     "profile_match": "denomination profile",
 }
 
 
 def _linked_detail(data, signals, address):
+    if address == (data.get("wallet") or "").lower():
+        return "is the depositor's own address"
     if "linked" in signals:
         return "transacts directly with the depositor outside Tornado"
     if address in data.get("heuristics", {}).get("linked_contracts", []):
         return "transacts with the depositor, but is a contract (router, DEX, service): not counted"
     return "no direct transaction with the depositor"
+
+
+def _sender_detail(data, pool_key, address):
+    hits = [
+        (sender, tx)
+        for pk, addr, sender, tx in data.get("heuristics", {}).get("linked_senders", [])
+        if pk == pool_key and addr == address
+    ]
+    if not hits:
+        return "no withdrawal to it was sent by the depositor or its counterparties"
+    sender = hits[0][0]
+    who = "the depositor" if sender == (data.get("wallet") or "").lower() else sender
+    return f"withdrawal {hits[0][1]} was sent by {who}"
+
+
+def _withdrawal_delay_hours(data, pool_key, recs):
+    """Hours from the pool's last deposit before the first withdrawal to that withdrawal."""
+    stamps = sorted(r["ts"] for r in recs if r.get("ts"))
+    if not stamps:
+        return None
+    last = [
+        v["last_ts"]
+        for v in data.get("vouchers", [])
+        if v["pool_key"] == pool_key and v.get("last_ts") and v["last_ts"] <= stamps[0]
+    ]
+    return (stamps[0] - max(last)) / 3600.0 if last else None
 
 
 def candidate_evidence(data: dict, pool_key: str, address: str) -> list[dict]:
@@ -246,6 +296,9 @@ def candidate_evidence(data: dict, pool_key: str, address: str) -> list[dict]:
             f"recipients in the window share this count; disc {disc:.2f} "
             f"(counted from {MIN_COUNT_DISCRIMINATION:.2f})"
         )
+        delay = _withdrawal_delay_hours(data, pool_key, recs)
+        if delay is not None:
+            count_detail += f"; first withdrawal {delay:.0f} h after the last deposit"
         if field < MIN_FIELD_SIZE:
             count_detail += f"; a field of {field} is too small to count (needs {MIN_FIELD_SIZE})"
     else:
@@ -274,6 +327,7 @@ def candidate_evidence(data: dict, pool_key: str, address: str) -> list[dict]:
             else "no deposit gas price reused (or not checkable after EIP-1559)",
         ),
         ("linked", _linked_detail(data, signals, address)),
+        ("linked_sender", _sender_detail(data, pool_key, address)),
     ]
     if "profile_match" in signals:
         lines.append(("profile_match", "received the wallet's full multi-pool fingerprint"))
@@ -291,7 +345,7 @@ def candidate_evidence(data: dict, pool_key: str, address: str) -> list[dict]:
 
 def method_breakdown(data: dict) -> list[dict]:
     """Group candidate addresses by the signal that flagged them: [{method, label, rows}]."""
-    order = ["count_match", "self_relayed", "gas_price", "linked"]
+    order = ["count_match", "self_relayed", "gas_price", "linked", "linked_sender"]
     per = {s: [] for s in order}
     for pool_key, res in data.get("denoms", {}).items():
         target = set(res.get("target_counts", []))
@@ -305,6 +359,7 @@ def method_breakdown(data: dict) -> list[dict]:
                 "self_relayed": "self_relayed" in sig and "count_match" in sig,
                 "gas_price": "gas_price" in sig,
                 "linked": "linked" in sig,
+                "linked_sender": "linked_sender" in sig,
             }
             for s in order:
                 if not include[s]:
@@ -314,6 +369,7 @@ def method_breakdown(data: dict) -> list[dict]:
                     "self_relayed": f"{n_self}/{hits} withdrawals self-relayed",
                     "gas_price": "gas price equals a deposit's",
                     "linked": "direct counterparty of the depositor",
+                    "linked_sender": "withdrawal sent by the depositor or its counterparty",
                 }[s]
                 per[s].append(
                     {
@@ -342,6 +398,7 @@ METHOD_FAMILY = {
     "profile_match": "amount+timing",
     "gas_price": "gas price",
     "linked": "linked address",
+    "linked_sender": "linked address",
 }
 
 
@@ -359,7 +416,7 @@ def confidence_band(signals):
     families = {METHOD_FAMILY[s] for s in signals if s in METHOD_FAMILY}
     if len(families) >= 2:
         return "strong"
-    if signals & {"linked", "gas_price", "self_relayed"}:
+    if signals & {"linked", "linked_sender", "gas_price", "self_relayed"}:
         return "moderate"
     return "weak"
 
@@ -490,7 +547,7 @@ def ranked_candidates(
             # Self-relaying is a property of the withdrawal, so it never admits alone.
             disc = res.get("discrimination", {}).get(addr, 0.0)
             discriminating = bool(
-                set(sig) & {"linked", "gas_price", "count_match", "profile_match"}
+                set(sig) & {"linked", "linked_sender", "gas_price", "count_match", "profile_match"}
             )
             if not discriminating or conf < min_confidence:
                 continue

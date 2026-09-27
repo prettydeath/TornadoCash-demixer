@@ -97,3 +97,18 @@ def test_deposit_decodes_commitment_and_leaf_index():
     d = decode_deposit(log)
     assert d["leaf_index"] == 7
     assert d["commitment"] == "0x" + "cd" * 32
+
+
+def test_an_empty_gas_price_in_a_log_decodes_as_zero():
+    from tornado_demix.constants import TOPIC_WITHDRAWAL
+    from tornado_demix.events import decode_withdrawal
+
+    log = {
+        "data": "0x" + "0" * 24 + "ab" * 20 + "00" * 32 + "00" * 32,
+        "topics": [TOPIC_WITHDRAWAL, "0x" + "00" * 32],
+        "gasPrice": "0x",
+        "transactionHash": "0x01",
+        "blockNumber": "0x10",
+        "timeStamp": "0x10",
+    }
+    assert decode_withdrawal(log)["gas_price"] == 0

@@ -19,7 +19,7 @@ from collections import defaultdict
 
 # Signals that say something about the wallet, not merely about the withdrawal.
 # See the module docstring for why self_relayed is not among them.
-WALLET_SPECIFIC_SIGNALS = frozenset({"gas_price", "linked"})
+WALLET_SPECIFIC_SIGNALS = frozenset({"gas_price", "linked", "linked_sender"})
 
 
 class _UnionFind:
