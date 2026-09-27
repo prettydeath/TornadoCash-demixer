@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import sys
 import time
+from collections import Counter
 from typing import Any
 
 import requests
@@ -97,6 +98,7 @@ class EtherscanClient:
         self.base_url = base_url
         self.style = style
         self.session = requests.Session()
+        self._head = None  # (block, time) of the last current_block answer
 
     def call(self, params: dict) -> Any:
         """Perform one API call and return the ``result`` field.
@@ -253,7 +255,7 @@ class EtherscanClient:
                 chunk = self.call(
                     {**query, low_key: low, high_key: end_block, "page": page, "offset": PAGE_SIZE}
                 )
-                rows.extend(chunk or [])
+                rows.extend(_number_repeats(chunk or []))
                 if not chunk or len(chunk) < PAGE_SIZE:
                     overflow = False
                     break
@@ -261,7 +263,13 @@ class EtherscanClient:
                 return collected + rows
             max_block = max(parse_block(r["blockNumber"]) for r in rows)
             if max_block <= low:
-                return collected + rows  # one block overflows the cap on its own
+                # One block holds more rows than the provider pages; the rest is lost.
+                _log(
+                    "[!] block {} holds more than {} rows; the list is truncated".format(
+                        max_block, MAX_PAGES * PAGE_SIZE
+                    )
+                )
+                return collected + rows
             collected.extend(r for r in rows if parse_block(r["blockNumber"]) < max_block)
             low = max_block
 
@@ -297,9 +305,13 @@ class EtherscanClient:
         Used to clamp a search window that ends in the future: block-by-time
         with closest="after" rejects a future timestamp.
         """
+        now = time.time()
+        if self._head and now - self._head[1] < 60:
+            return self._head[0]
         result = self.call({"module": "proxy", "action": "eth_blockNumber"})
         try:
-            return int(result, 16)
+            self._head = (int(result, 16), now)
+            return self._head[0]
         except (TypeError, ValueError) as exc:
             raise BlockLookupError(
                 "could not read the current block number: provider returned {!r}".format(result)
@@ -431,16 +443,44 @@ def _row_identity(row):
             "to",
             "value",
             "contractAddress",
+            "_repeat",
         )
     )
 
 
+def _number_repeats(chunk):
+    """Tag identical token-transfer rows within one page (0, 1, ...).
+
+    A token transfer row carries no log index, so two transfers of the same
+    amount in one transaction look identical. Within a page they are distinct
+    transfers; a row repeated across pages is a re-fetch and keeps _repeat 0.
+    Other rows are unique by hash or trace id and are left alone.
+    """
+    seen = Counter()
+    for row in chunk:
+        if isinstance(row, dict) and "tokenDecimal" in row:
+            key = (
+                row.get("hash"),
+                row.get("from"),
+                row.get("to"),
+                row.get("value"),
+                row.get("contractAddress"),
+            )
+            row["_repeat"] = seen[key]
+            seen[key] += 1
+    return chunk
+
+
 def _dedupe(rows, key):
     """Drop rows whose key was already seen (or is empty), keeping order."""
-    seen, unique = set(), []
+    seen, unique, keyless = set(), [], 0
     for row in rows:
         k = key(row)
-        if k and k not in seen:
+        if not k:
+            keyless += 1
+        elif k not in seen:
             seen.add(k)
             unique.append(row)
+    if keyless:
+        _log("[!] dropped {} row(s) without a transaction hash".format(keyless))
     return unique

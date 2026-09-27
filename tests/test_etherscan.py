@@ -445,3 +445,66 @@ def test_a_network_error_does_not_leak_the_api_key():
         client.call({"module": "proxy", "action": "eth_blockNumber"})
     assert "SECRETKEY123" not in str(err.value)
     assert "apikey=***" in str(err.value)
+
+
+def test_two_identical_token_transfers_in_one_page_are_both_kept():
+    row = {
+        "hash": "0xbatch",
+        "from": WALLET,
+        "to": "0xpool",
+        "value": "100",
+        "contractAddress": DAI,
+        "tokenDecimal": "18",
+        "blockNumber": "5",
+    }
+    assert len(_OnePage([row, dict(row)]).token_transfers(WALLET)) == 2
+
+
+def test_a_token_transfer_refetched_on_another_page_is_dropped():
+    from tornado_demix.etherscan import _dedupe, _number_repeats, _row_identity
+
+    row = {
+        "hash": "0xbatch",
+        "from": WALLET,
+        "to": "0xpool",
+        "value": "100",
+        "contractAddress": DAI,
+        "tokenDecimal": "18",
+    }
+    rows = _number_repeats([dict(row)]) + _number_repeats([dict(row)])
+    assert len(_dedupe(rows, _row_identity)) == 1
+
+
+def test_current_block_is_asked_once_per_minute():
+    calls = []
+
+    class Head(EtherscanClient):
+        def call(self, params):
+            calls.append(params["action"])
+            return "0x10"
+
+    client = Head("KEY")
+    assert client.current_block() == 16
+    assert client.current_block() == 16
+    assert calls == ["eth_blockNumber"]
+
+
+def test_rows_without_a_hash_are_reported_when_dropped(capsys):
+    from tornado_demix.etherscan import _dedupe, _row_identity
+
+    assert _dedupe([{"hash": ""}, {"hash": "0x1"}], _row_identity) == [{"hash": "0x1"}]
+    assert "dropped 1 row(s) without a transaction hash" in capsys.readouterr().err
+
+
+def test_a_block_that_overflows_every_page_is_reported(monkeypatch, capsys):
+    import tornado_demix.etherscan as es
+
+    monkeypatch.setattr(es, "MAX_PAGES", 1)
+    monkeypatch.setattr(es, "PAGE_SIZE", 2)
+
+    class Full(EtherscanClient):
+        def call(self, params):
+            return [{"hash": "0x%d" % i, "blockNumber": "7"} for i in range(2)]
+
+    Full("KEY").fetch_all("txlist", WALLET, 7, 9)
+    assert "block 7 holds more than 2 rows" in capsys.readouterr().err
