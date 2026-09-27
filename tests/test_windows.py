@@ -175,3 +175,28 @@ def test_two_withdrawals_in_one_tx_to_one_recipient_both_survive():
     )
     assert res["total_qualifying_withdrawals"] == 2
     assert res["counts"][recipient] == 2
+
+
+def test_a_past_window_end_uses_block_by_time_and_falls_back_to_the_head():
+    import time as _time
+
+    from tornado_demix.demix import _resolve_window_end
+    from tornado_demix.errors import BlockLookupError
+
+    class Client:
+        def __init__(self, fail):
+            self.fail = fail
+
+        def block_by_time(self, ts, closest):
+            if self.fail:
+                raise BlockLookupError("no block")
+            assert closest == "after"
+            return 700
+
+        def current_block(self):
+            return 900
+
+    past = _time.time() - 86400
+    assert _resolve_window_end(Client(False), past) == 700
+    assert _resolve_window_end(Client(True), past) == 900
+    assert _resolve_window_end(Client(False), _time.time() + 3600) == 900

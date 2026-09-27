@@ -866,3 +866,59 @@ def test_every_signal_weight_is_inside_the_open_unit_interval():
     from tornado_demix.heuristics import SIGNAL_WEIGHTS
 
     assert all(0 < w < 1 for w in SIGNAL_WEIGHTS.values())
+
+
+def test_the_html_writers_save_what_the_builders_return(tmp_path):
+    from tornado_demix.report import (
+        build_characterize_report,
+        write_characterize_report,
+        write_cluster_report,
+        write_multi_report,
+    )
+
+    net = _bsc_network()
+    path = write_characterize_report(_char_info(), str(tmp_path / "c.html"), net)
+    assert open(path, encoding="utf-8").read() == build_characterize_report(_char_info(), net)
+    path = write_multi_report(_multi_corr(), str(tmp_path / "m.html"), net)
+    assert open(path, encoding="utf-8").read() == build_multi_report(_multi_corr(), net)
+    path = write_cluster_report(_avax_cluster_traces(), str(tmp_path / "k.html"), net)
+    assert "<html" in open(path, encoding="utf-8").read().lower()
+
+
+def test_write_relayer_csv_marks_unverified_broadcasters(tmp_path):
+    from tornado_demix.report import write_relayer_csv
+
+    stats = {
+        "relayers": {
+            fx.ALICE: {
+                "withdrawals": 3,
+                "avg_fee": 0.01,
+                "total_fee": 0.03,
+                "asset": "BNB",
+                "unique_recipients": 2,
+            }
+        }
+    }
+    leads = [
+        {
+            "pool_key": "1 BNB",
+            "denom": 1.0,
+            "asset": "BNB",
+            "to": fx.BOB,
+            "tx_hash": "0xa",
+            "ts": 1000,
+            "fee": 0,
+        },
+        {
+            "to": fx.WALLET,
+            "tx_hash": "0xb",
+            "ts": 2000,
+            "fee": 0,
+            "broadcaster": fx.WALLET,
+            "broadcaster_status": "self",
+        },
+    ]
+    files = write_relayer_csv(stats, leads, str(tmp_path), _bsc_network())
+    relayers, leads_file = (list(csv.DictReader(open(f, encoding="utf-8"))) for f in files)
+    assert relayers[0]["relayer_address"] == fx.ALICE and relayers[0]["withdrawals"] == "3"
+    assert [r["broadcaster_status"] for r in leads_file] == ["unverified", "self"]

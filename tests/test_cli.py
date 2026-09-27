@@ -10,6 +10,8 @@ import os
 
 import pytest
 
+from tests.fixtures import demix_result as fx
+from tests.test_report import _char_info, _multi_corr
 from tornado_demix import cli
 
 WALLET = "0x019b5bb2051797e33f726d0e7a8cb9b9c2003ac2"
@@ -312,3 +314,75 @@ def test_an_explicit_exit_window_wins_over_rapid(monkeypatch):
     monkeypatch.setattr(cli, "build_parser", parser_with_probe)
     cli.main(["demix", "0x" + "1" * 40, "--rapid", "--exit-window", "24"])
     assert seen["hours"] == 24.0
+
+
+# cmd_multi and cmd_characterize, stubbed end to end.
+OTHER = "0x" + "b" * 40
+
+
+def _stub(monkeypatch, **fns):
+    monkeypatch.setattr(cli.config, "load_api_key", lambda path: "stub-key")
+    monkeypatch.setattr(cli, "EtherscanClient", lambda *a, **kw: object())
+    for name, fn in fns.items():
+        monkeypatch.setattr(cli, name, fn)
+
+
+def test_cmd_multi_prints_links_profiles_sync_and_writes_files(monkeypatch, args, capsys, tmp_path):
+    corr = _multi_corr()
+    corr["sync_groups"] = [
+        {"wallets": [fx.WALLET, fx.ALICE], "span_seconds": 600, "first_ts": 1000}
+    ]
+    corr["cross_profile"] = {fx.BOB: [fx.WALLET, fx.ALICE]}
+    corr["consolidator_grades"] = {
+        fx.BOB: {
+            "wallets": [fx.WALLET, fx.ALICE],
+            "band": "moderate",
+            "independent": [],
+            "self_relayed": False,
+            "distinct_fingerprints": 1,
+            "artefact": True,
+            "edge_reason": None,
+        }
+    }
+    seen = {}
+
+    def correlate(*a, **kw):
+        seen.update(kw)
+        return corr
+
+    _stub(monkeypatch, correlate=correlate)
+    out_dir, report = str(tmp_path / "csv"), str(tmp_path / "multi.html")
+    cli.cmd_multi(args(wallets=[WALLET, OTHER], out_dir=out_dir, report=report, max_voucher_span=6))
+
+    out = capsys.readouterr().out
+    assert "Wallets analysed: 2" in out
+    assert "Strong links (count-matched candidate shared by 2+): 1" in out
+    assert "1 exact, 1 total match(es)" in out
+    assert "2 wallets within" in out
+    assert "[moderate] (window-overlap artefact) " + fx.BOB in out
+    assert seen["max_voucher_span_hours"] == 6
+    assert os.listdir(out_dir) and os.path.getsize(report) > 0
+
+
+def test_cmd_characterize_prints_the_summary_and_writes_the_report(
+    monkeypatch, args, capsys, tmp_path
+):
+    info = _char_info()
+    info["label"] = {"label": "Hot wallet", "category": "exchange", "entity": "ExampleEx"}
+    info["pool_inflows"] = info["pool_inflows"] * 41
+    info["top_next_hops"].append({"address": OTHER, "count": 2, "kind": "call", "label": None})
+    _stub(
+        monkeypatch,
+        characterize_address=lambda *a, **kw: info,
+        load_attribution=lambda *a, **kw: {},
+    )
+    report = str(tmp_path / "c.html")
+    cli.cmd_characterize(args(address=fx.BOB, report=report))
+
+    out = capsys.readouterr().out
+    assert "Classification: AGGREGATOR" in out
+    assert "ExampleEx" in out
+    assert "... and 1 more" in out
+    assert "contract call" in out
+    assert "lead, not proof" in out
+    assert os.path.getsize(report) > 0

@@ -369,3 +369,22 @@ def test_the_result_store_keeps_only_the_newest_runs():
     tokens = [webapp._store_put({"n": i}) for i in range(webapp._STORE_MAX + 5)]
     assert len(webapp._STORE) == webapp._STORE_MAX
     assert tokens[0] not in webapp._STORE and tokens[-1] in webapp._STORE
+
+
+def test_the_json_result_and_report_of_the_last_run_download(client):
+    with client.session_transaction() as sess:
+        sess["token"] = webapp._store_put(
+            {"reports": {WALLET + ".json": '{"wallet": 1}', WALLET: "<html>r</html>"}}
+        )
+    res = client.get("/result/{}.json".format(WALLET.upper().replace("0X", "0x")))
+    assert res.status_code == 200 and res.get_json() == {"wallet": 1}
+    assert "attachment" in res.headers["Content-Disposition"]
+    report = client.get("/report/{}.html".format(WALLET))
+    assert report.status_code == 200 and "<html>r</html>" in report.get_data(as_text=True)
+    assert client.get("/result/0x{}.json".format("b" * 40)).status_code == 404
+
+
+def test_the_csv_download_needs_a_run_first(client):
+    webapp._STORE.clear()
+    res = client.get("/download.csv")
+    assert res.status_code == 404
