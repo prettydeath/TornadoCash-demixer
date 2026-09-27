@@ -361,6 +361,23 @@ class EtherscanClient:
                 firsts.append(int(rows[0]["timeStamp"]))
         return min(firsts) if firsts else None
 
+    def has_at_least_txs(self, address: str, n: int) -> bool:
+        """True when ``address`` sent or received at least ``n`` normal transactions.
+
+        One query for ``n`` rows, so a busy address costs no more than a quiet one.
+        """
+        rows = self.call(
+            {
+                "module": "account",
+                "action": "txlist",
+                "address": address.lower(),
+                "page": 1,
+                "offset": n,
+                "sort": "asc",
+            }
+        )
+        return isinstance(rows, list) and len(rows) >= n
+
     def internal_txs(self, address: str) -> list[dict]:
         """Return internal transactions touching ``address``.
 

@@ -831,3 +831,23 @@ def test_a_candidate_with_old_history_is_not_fresh():
 def test_a_client_without_first_activity_gives_no_fresh_marks():
     data = run_demix(_headline_single_note_client(), fx.WALLET, network=fx.network())
     assert data["fresh_addresses"] == {}
+
+
+def test_immediate_funders_are_plain_senders_before_the_first_deposit():
+    from tornado_demix.demix import immediate_funders
+
+    wallet = fx.WALLET
+    funder, contract, late = "0x" + "f" * 40, "0x" + "c" * 40, "0x" + "5" * 40
+
+    def incoming(frm, ts, data="0x", value=10**18):
+        return {"from": frm, "to": wallet, "value": str(value), "timeStamp": str(ts), "input": data}
+
+    txs = [
+        incoming(funder, 10),
+        incoming(funder, 20),  # listed once
+        incoming(contract, 30, data="0xa9059cbb"),  # a contract call, not funding
+        incoming(fx.POOL_1_ETH, 40),  # a pool payout
+        incoming("0x" + "6" * 40, 50, value=0),
+        incoming(late, 5000),  # after the first deposit
+    ]
+    assert immediate_funders(wallet, txs, 1000, [fx.POOL_1_ETH]) == [funder]

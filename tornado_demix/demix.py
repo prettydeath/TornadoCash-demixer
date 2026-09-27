@@ -315,6 +315,36 @@ def voucher_windows(
     return merged
 
 
+MAX_FUNDERS = 3  # earliest plain senders kept per wallet
+
+
+def immediate_funders(wallet, txs, before_ts, pool_addresses=()):
+    """Addresses that funded ``wallet`` by a plain native transfer before ``before_ts``.
+
+    Only transfers without call data count, so a contract payout is not read as a
+    funder. Earliest first, at most MAX_FUNDERS.
+    """
+    skip = {a.lower() for a in pool_addresses} | {wallet}
+    funders = []
+    for tx in sorted(txs, key=lambda t: int(t.get("timeStamp") or 0)):
+        if int(tx.get("timeStamp") or 0) >= before_ts:
+            break
+        sender = (tx.get("from") or "").lower()
+        if (
+            (tx.get("to") or "").lower() != wallet
+            or tx.get("isError") == "1"
+            or int(tx.get("value") or 0) <= 0
+            or (tx.get("input") or "0x") not in ("", "0x")
+            or sender in skip
+            or sender in funders
+        ):
+            continue
+        funders.append(sender)
+        if len(funders) == MAX_FUNDERS:
+            break
+    return funders
+
+
 # An exit address with no more than this much history before its first
 # withdrawal is a fresh, disposable one (MixLaunder: 98.6 % of laundering exits).
 FRESH_HISTORY_HOURS = 24
@@ -655,6 +685,9 @@ def run_demix(
 
     result = {
         "wallet": wallet,
+        "funders": immediate_funders(
+            wallet, all_txs, min(d["ts"] for d in deposits), [p.address for p in network.pools]
+        ),
         "params": {
             "window_days": window_days,
             "fee_window": [fee_lo, fee_hi],

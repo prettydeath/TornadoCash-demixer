@@ -349,3 +349,21 @@ def test_grade_independent_signal_beats_synchronized_downgrade():
     }
     grades = grade_consolidators({EXIT_A: [ALICE, BOB]}, results, _TWO_FPS, spans)
     assert grades[EXIT_A]["band"] == "strong"
+
+
+def test_shared_funders_skip_labelled_and_busy_funders():
+    from tornado_demix.multi import BUSY_FUNDER_TXS, shared_funders
+
+    results = {
+        "0xa": {"funders": ["0xf1", "0xex", "0xbusy"]},
+        "0xb": {"funders": ["0xf1", "0xex", "0xbusy"]},
+        "0xc": {"funders": ["0xf2"]},
+    }
+
+    class Client:
+        def has_at_least_txs(self, address, n):
+            assert n == BUSY_FUNDER_TXS
+            return address == "0xbusy"
+
+    out = shared_funders(Client(), results, labels={"0xex": {"label": "Exchange"}})
+    assert out == {"0xf1": ["0xa", "0xb"]}

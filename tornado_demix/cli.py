@@ -283,6 +283,7 @@ def cmd_multi(args: argparse.Namespace) -> None:
         network=net,
         exit_window_hours=args.exit_window,
         max_voucher_span_hours=getattr(args, "max_voucher_span", None),
+        labels=load_attribution(net.name, getattr(args, "attribution_dir", None)),
     )
 
     print("\n=== CROSS-WALLET CORRELATION ===")
@@ -306,6 +307,12 @@ def cmd_multi(args: argparse.Namespace) -> None:
                 f"  {len(g['wallets'])} wallets within {format_span(g['span_seconds'])}: "
                 f"{', '.join(g['wallets'])}"
             )
+
+    funders = corr.get("shared_funders", {})
+    if funders:
+        print("\nShared immediate funders (not labelled, not busy):")
+        for funder, ws in funders.items():
+            print(f"  {funder} -> {', '.join(ws)}")
 
     if corr["cross_profile"]:
         grades = corr.get("consolidator_grades", {})

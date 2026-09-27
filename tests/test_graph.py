@@ -199,3 +199,11 @@ def test_larger_clusters_sort_first():
     )
     clusters = cluster_wallets(corr)
     assert [len(c["wallets"]) for c in clusters] == [3, 2]
+
+
+def test_a_shared_funder_merges_two_wallets_with_its_own_reason():
+    corr = _corr({"0xa": _wallet(set()), "0xb": _wallet(set()), "0xc": _wallet(set())})
+    corr["shared_funders"] = {"0xf": ["0xa", "0xb"]}
+    clusters = cluster_wallets(corr)
+    assert _members(clusters) == [["0xa", "0xb"]]
+    assert clusters[0]["edges"] == [("0xa", "0xb", "shared funder", "0xf")]

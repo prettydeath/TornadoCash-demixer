@@ -525,3 +525,12 @@ def test_first_activity_takes_the_earlier_of_the_two_lists():
 def test_first_activity_is_none_without_transactions():
     empty = {"status": "0", "message": "No transactions found", "result": []}
     assert _proxy_client([empty, empty]).first_activity(SENDER) is None
+
+
+def test_has_at_least_txs_reads_one_page_of_n_rows():
+    rows = [{"hash": "0x%d" % i} for i in range(3)]
+    client = _proxy_client([{"status": "1", "message": "OK", "result": rows}])
+    assert client.has_at_least_txs(SENDER, 3) is True
+    assert client.session.calls[0]["offset"] == 3
+    client = _proxy_client([{"status": "1", "message": "OK", "result": rows[:1]}])
+    assert client.has_at_least_txs(SENDER, 3) is False

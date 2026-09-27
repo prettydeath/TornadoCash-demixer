@@ -2,8 +2,9 @@
 
 Heuristics are reduced to edges between wallets and connected components are
 taken with a small union-find. Two wallets are linked only on discriminating
-evidence: a shared exit candidate carrying a wallet-specific signal, or a shared
-multi-pool consolidator that is not a window-overlap artefact.
+evidence: a shared exit candidate carrying a wallet-specific signal, a shared
+multi-pool consolidator that is not a window-overlap artefact, or a shared
+immediate funder that is neither a labelled service nor a busy address.
 
 ``gas_price`` is computed against one wallet's own deposit gas prices and
 ``linked`` against its own counterparties, so either holding for two wallets at
@@ -91,6 +92,15 @@ def cluster_wallets(corr: dict) -> list[dict]:
             for j in range(i + 1, len(ws)):
                 uf.union(ws[i], ws[j])
                 edges.append((ws[i], ws[j], reason, addr))
+
+    # A shared immediate funder that is neither labelled nor busy (see
+    # multi.shared_funders): the wallets were paid from one private source.
+    for funder, ws in corr.get("shared_funders", {}).items():
+        ws = sorted(w for w in ws if w in results)
+        for i in range(len(ws)):
+            for j in range(i + 1, len(ws)):
+                uf.union(ws[i], ws[j])
+                edges.append((ws[i], ws[j], "shared funder", funder))
 
     groups = defaultdict(list)
     for w in wallets:

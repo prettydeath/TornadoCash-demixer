@@ -46,6 +46,7 @@ def correlate(
     network: Network = ETHEREUM,
     exit_window_hours: float | None = None,
     max_voucher_span_hours: float | None = None,
+    labels: dict[str, dict] | None = None,
 ) -> dict:
     """Run demix on every wallet and compute cross-wallet correlations.
 
@@ -110,6 +111,7 @@ def correlate(
         "cross_profile": cross_profile,
     }
     corr["sync_groups"] = deposit_synchronicity(results)
+    corr["shared_funders"] = shared_funders(client, results, labels)
     # The grades are the single source of truth for whether a consolidator is a
     # window-overlap artefact; the graph clustering honours the same flag.
     corr["consolidator_grades"] = grade_consolidators(
@@ -117,6 +119,34 @@ def correlate(
     )
     corr["operator_clusters"] = cluster_wallets(corr)
     return corr
+
+
+# A funder with this many transactions is a service or a busy wallet that pays
+# many unrelated people; sharing it says nothing about common control.
+BUSY_FUNDER_TXS = 200
+
+
+def shared_funders(client, results, labels=None):
+    """Immediate funders shared by two or more depositor wallets.
+
+    Returns {funder: sorted wallets}. A labelled funder (an exchange, a bridge)
+    and a busy one (BUSY_FUNDER_TXS or more transactions) are left out: they fund
+    many unrelated users. MixLaunder: 90.1 % of laundering deposit addresses
+    share an immediate funder with another deposit address of the same case.
+    """
+    labels = labels or {}
+    by_funder = defaultdict(set)
+    for wallet, data in results.items():
+        for funder in data.get("funders", []):
+            by_funder[funder].add(wallet)
+    out = {}
+    for funder, wallets in sorted(by_funder.items()):
+        if len(wallets) < 2 or labels.get(funder):
+            continue
+        if hasattr(client, "has_at_least_txs") and client.has_at_least_txs(funder, BUSY_FUNDER_TXS):
+            continue
+        out[funder] = sorted(wallets)
+    return out
 
 
 def _fp_key(fingerprint):
