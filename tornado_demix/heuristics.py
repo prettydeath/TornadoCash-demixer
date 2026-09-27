@@ -182,7 +182,7 @@ def _score(signals, discrimination):
         weight = SIGNAL_WEIGHTS.get(signal, 0.0)
         if signal == "count_match":
             weight *= discrimination
-        family = SCORE_FAMILY.get(signal, signal)
+        family = METHOD_FAMILY.get(signal, signal)
         strongest[family] = max(strongest.get(family, 0.0), weight)
     product = 1.0
     for weight in strongest.values():
@@ -281,7 +281,7 @@ def candidate_evidence(data: dict, pool_key: str, address: str) -> list[dict]:
         {
             "signal": signal,
             "label": EVIDENCE_LABEL[signal],
-            "family": METHOD_FAMILY.get(signal, "profile"),
+            "family": METHOD_FAMILY[signal],
             "holds": signal in signals,
             "detail": detail,
         }
@@ -333,18 +333,16 @@ def method_breakdown(data: dict) -> list[dict]:
     return out
 
 
-# Evidence families. count_match and self_relayed read the same withdrawals, so
-# they are one family: two families need a gas-price reuse or a linked address.
+# Evidence families. count_match, self_relayed and profile_match read the same
+# withdrawals, so they are one family: two families need a gas-price reuse or a
+# linked address.
 METHOD_FAMILY = {
     "count_match": "amount+timing",
     "self_relayed": "amount+timing",
+    "profile_match": "amount+timing",
     "gas_price": "gas price",
     "linked": "linked address",
 }
-
-
-# A profile match reads the same withdrawal counts as count_match.
-SCORE_FAMILY = {**METHOD_FAMILY, "profile_match": "amount+timing"}
 
 
 # The score is uncalibrated and a percentage reads as a probability, so results
@@ -432,7 +430,7 @@ def conclusion(data: dict) -> str:
     lines = []
     if cands:
         top = cands[0]
-        families = sorted({SCORE_FAMILY.get(s, s) for s in top["signals"]})
+        families = sorted({METHOD_FAMILY.get(s, s) for s in top["signals"]})
         lines.append(
             f"Top candidate: {top['address']} ({top['pool_key']}), band {top['band']}, "
             f"score {top['confidence']:.2f}."
@@ -487,11 +485,13 @@ def ranked_candidates(
             hits = res["counts"][addr]
             sig = res.get("signals", {}).get(addr, [])
             conf = res.get("confidence", {}).get(addr, 0.0)
-            # Admit an address only on a wallet-specific signal or a voucher-sized
-            # count that narrows the field. Self-relaying is a property of the
-            # withdrawal, not a link to this wallet, so it never admits alone.
+            # Admit an address on a wallet-specific signal, a voucher-sized count
+            # that narrows the field, or the wallet's full multi-pool fingerprint.
+            # Self-relaying is a property of the withdrawal, so it never admits alone.
             disc = res.get("discrimination", {}).get(addr, 0.0)
-            discriminating = "linked" in sig or "gas_price" in sig or "count_match" in sig
+            discriminating = bool(
+                set(sig) & {"linked", "gas_price", "count_match", "profile_match"}
+            )
             if not discriminating or conf < min_confidence:
                 continue
             rows.append(

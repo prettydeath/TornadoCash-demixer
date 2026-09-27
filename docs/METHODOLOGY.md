@@ -166,7 +166,7 @@ Given several wallets we compute:
 
 | Result | Definition | How much it says |
 |--------|-----------|----------|
-| **Profile match (exact, multi-pool)** | one address received a wallet's *entire* fingerprint, e.g. `6×0.1 + 4×1.0` | single-wallet signal (`profile_match`); it raises the score within the amount+timing family but does not change the band or admit a candidate on its own |
+| **Profile match (exact, multi-pool)** | one address received a wallet's *entire* fingerprint, e.g. `6×0.1 + 4×1.0` | single-wallet signal (`profile_match`); it admits a candidate and belongs to the amount+timing family, so on its own it is `weak` and it needs gas price or linked for `strong` |
 | **Cross consolidator** | one address is a full-fingerprint match for 2+ wallets | graded: `strong` with an independent gas-price/linked signal, `moderate` for distinct fingerprints of wallets that did not deposit together, `weak` (window-overlap artefact) otherwise |
 | **Synchronous deposits** | wallets whose deposits chain within `SYNC_GAP_HOURS` (6 h) | behavioural link in its own right |
 | **Strong link (single pool)** | a count-matched candidate shared by 2+ wallets | lead; often shared window |

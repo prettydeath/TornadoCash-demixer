@@ -198,3 +198,23 @@ def test_a_gas_price_the_wallet_never_used_is_not_credited():
     data["deposits"] = [{"gas_price": 99}]
     apply_heuristics(data, set())
     assert "gas_price" not in data["denoms"]["1 ETH"]["signals"][ADDR]
+
+
+def test_a_profile_match_alone_admits_a_weak_candidate():
+    from tornado_demix.heuristics import ranked_candidates
+
+    data = _result(set(), hits=2, disc=0.0)
+    res = data["denoms"]["1 ETH"]
+    res["signals"][ADDR] = []
+    res["detail"][ADDR] = [{"self_relayed": False, "value": 0.99, "ts": 1}] * 2
+    data["denoms"]["10 ETH"] = {**res, "signals": dict(res["signals"]), "confidence": {}}
+    credit_profile_match(data, ["1 ETH", "10 ETH"], ADDR)
+    rows = [r for r in ranked_candidates(data) if r["address"] == ADDR]
+    assert rows and {r["band"] for r in rows} == {"weak"}
+
+
+def test_a_profile_match_is_the_amount_timing_family():
+    from tornado_demix.heuristics import confidence_band
+
+    assert confidence_band({"profile_match", "count_match"}) == "weak"
+    assert confidence_band({"profile_match", "gas_price"}) == "strong"
