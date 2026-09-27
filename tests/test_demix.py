@@ -726,3 +726,73 @@ def test_a_none_client_does_not_fetch_token_transfers_on_a_chain_with_token_pool
     from tornado_demix.networks import get_network
 
     assert detect_deposits(None, fx.WALLET, network=get_network("ethereum"), txs=[]) == []
+
+
+def _two_session_client(winner):
+    deposits = [
+        _tx(fx.POOL_1_ETH, 1.0, 1000, 10, "0xdA0"),
+        _tx(fx.POOL_1_ETH, 1.0, 1010, 11, "0xdA1"),
+        _tx(fx.POOL_1_ETH, 1.0, 1000 + 30 * 3600, 40, "0xdB0"),
+        _tx(fx.POOL_1_ETH, 1.0, 1010 + 30 * 3600, 41, "0xdB1"),
+        _tx(fx.POOL_1_ETH, 1.0, 1020 + 30 * 3600, 42, "0xdB2"),
+    ]
+    logs = [_wlog(winner, format(9000 + k, "064x"), ZERO_ADDRESS, 0) for k in range(5)]
+    logs.extend(_wlog(_recipient(i), format(i, "064x"), ZERO_ADDRESS, 0) for i in range(2, 22))
+    return _FakeClient(deposits, logs)
+
+
+def test_all_notes_of_two_sessions_in_one_pool_make_a_candidate():
+    from tornado_demix.heuristics import ranked_candidates
+
+    winner = _recipient(1)
+    data = run_demix(_two_session_client(winner), fx.WALLET, network=fx.network())
+    res = data["denoms"]["1 ETH"]
+    assert sorted(res["target_counts"]) == [2, 3, 5]
+    row = next(r for r in ranked_candidates(data) if r["address"] == winner)
+    count_line = next(e for e in row["evidence"] if e["signal"] == "count_match")
+    assert "all 5 notes of the pool's vouchers" in count_line["detail"]
+
+
+def test_a_voucher_stops_at_the_maximum_span():
+    deposits = [
+        {"pool_key": "1 ETH", "denom": 1.0, "asset": "ETH", "ts": h * 3600, "block": h}
+        for h in range(0, 60, 20)
+    ]
+    assert len(cluster_vouchers(deposits, gap_hours=24)) == 1
+    assert len(cluster_vouchers(deposits, gap_hours=24, max_span_hours=30)) == 2
+
+
+def test_an_erc20_transfer_between_depositor_and_exit_is_linked():
+    from tornado_demix.heuristics import ranked_candidates
+
+    dai = "0x6b175474e89094c44da98b954eedeac495271d0f"
+    net = Network(
+        "ethereum",
+        1,
+        "ETH",
+        [Pool(fx.POOL_1_ETH, 1.0, "ETH", 18, None), Pool("0x" + "d" * 40, 100.0, "DAI", 18, dai)],
+    )
+    exit_ = _recipient(3)
+    deposits = [
+        _tx(fx.POOL_1_ETH, 1.0, 1000, 10, "0xd0"),
+        _tx(fx.POOL_1_ETH, 1.0, 1010, 11, "0xd1"),
+    ]
+    logs = [_wlog(_recipient(i), format(i, "064x"), "0x" + "cc" * 20, 10**15) for i in range(2, 22)]
+    token_row = {
+        "hash": "0xtok",
+        "from": fx.WALLET,
+        "to": exit_,
+        "value": "5",
+        "contractAddress": dai,
+        "tokenDecimal": "18",
+        "timeStamp": "900",
+        "blockNumber": "9",
+    }
+
+    class TokenClient(_FakeClient):
+        def token_transfers(self, addr, contract=None):
+            return [token_row]
+
+    data = run_demix(TokenClient(deposits, logs), fx.WALLET, network=net)
+    row = next(r for r in ranked_candidates(data) if r["address"] == exit_)
+    assert "linked" in row["signals"]

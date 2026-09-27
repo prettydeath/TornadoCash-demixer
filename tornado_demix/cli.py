@@ -89,6 +89,14 @@ def _add_common(parser):
         "withdrawals delayed longer than HOURS",
     )
     parser.add_argument(
+        "--max-voucher-span",
+        type=_positive_hours,
+        default=None,
+        metavar="HOURS",
+        help="start a new voucher when a deposit comes more than HOURS after the "
+        "voucher's first one (default: no limit)",
+    )
+    parser.add_argument(
         "--rapid",
         action="store_true",
         help="shortcut for --exit-window 168: in public laundering cases "
@@ -181,6 +189,7 @@ def cmd_demix(args: argparse.Namespace) -> None:
         mode=args.mode,
         network=net,
         exit_window_hours=args.exit_window,
+        max_voucher_span_hours=getattr(args, "max_voucher_span", None),
     )
 
     print("\n=== DEMIX SUMMARY ===")
@@ -262,6 +271,7 @@ def cmd_multi(args: argparse.Namespace) -> None:
         mode=args.mode,
         network=net,
         exit_window_hours=args.exit_window,
+        max_voucher_span_hours=getattr(args, "max_voucher_span", None),
     )
 
     print("\n=== CROSS-WALLET CORRELATION ===")

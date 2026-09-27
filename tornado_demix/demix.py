@@ -233,11 +233,13 @@ def withdrawal_senders(client, wallet, txs, results, network, is_contract):
     return found
 
 
-def cluster_vouchers(deposits, gap_hours=24):
+def cluster_vouchers(deposits, gap_hours=24, max_span_hours=None):
     """Group deposits into the same pool that are close in time.
 
     Deposits into one pool separated by more than ``gap_hours`` start a new
-    voucher. Returns a list of voucher dicts sorted by (pool_key, first_ts).
+    voucher; so does a deposit more than ``max_span_hours`` after the voucher's
+    first one, which stops a chain of close deposits from spanning days.
+    Returns a list of voucher dicts sorted by (pool_key, first_ts).
     """
     by_pool = defaultdict(list)
     for deposit in deposits:
@@ -248,7 +250,10 @@ def cluster_vouchers(deposits, gap_hours=24):
         items.sort(key=lambda d: d["ts"])
         cluster = [items[0]]
         for deposit in items[1:]:
-            if deposit["ts"] - cluster[-1]["ts"] <= gap_hours * 3600:
+            within_span = max_span_hours is None or (
+                deposit["ts"] - cluster[0]["ts"] <= max_span_hours * 3600
+            )
+            if deposit["ts"] - cluster[-1]["ts"] <= gap_hours * 3600 and within_span:
                 cluster.append(deposit)
             else:
                 vouchers.append(_make_voucher(pool_key, cluster))
@@ -507,6 +512,7 @@ def run_demix(
     mode: str = "events",
     network: Network | None = None,
     exit_window_hours: float | None = None,
+    max_voucher_span_hours: float | None = None,
 ) -> dict:
     """Full single-wallet demix. Returns a structured result dict.
 
@@ -524,9 +530,19 @@ def run_demix(
 
     all_txs = client.outgoing_txs(wallet)  # txlist returns both directions
     internal_txs = client.internal_txs(wallet)
-    counterparties = wallet_counterparties(wallet, all_txs + internal_txs)
+    # Token transfers are read once: for token-pool deposits and so that a direct
+    # ERC-20 transfer between the depositor and a candidate earns linked too.
+    token_txs = (
+        client.token_transfers(wallet) if any(not p.is_native for p in network.pools) else []
+    )
+    counterparties = wallet_counterparties(wallet, all_txs + internal_txs + token_txs)
     deposits = detect_deposits(
-        client, wallet, network=network, txs=all_txs, internal_txs=internal_txs
+        client,
+        wallet,
+        network=network,
+        txs=all_txs,
+        internal_txs=internal_txs,
+        token_txs=token_txs,
     )
     _log("[*] Tornado deposits detected: {}".format(len(deposits)))
     if not deposits:
@@ -547,7 +563,9 @@ def run_demix(
             },
         }
 
-    vouchers = cluster_vouchers(deposits, gap_hours=gap_hours)
+    vouchers = cluster_vouchers(
+        deposits, gap_hours=gap_hours, max_span_hours=max_voucher_span_hours
+    )
     for voucher in vouchers:
         _log(
             "    voucher: {} x {} @ {:%Y-%m-%d %H:%M} UTC".format(
@@ -580,7 +598,10 @@ def run_demix(
     # Candidates: recipients whose count equals a voucher size. The gate is
     # applied once, here, so every consumer sees the same candidate set.
     for pool_key, res in results.items():
-        target_counts = sorted({v["count"] for v in vouchers if v["pool_key"] == pool_key})
+        sizes = [v["count"] for v in vouchers if v["pool_key"] == pool_key]
+        # Several sessions into one pool consolidated to one address show up as the
+        # sum of the vouchers, not as any single voucher size.
+        target_counts = sorted(set(sizes) | ({sum(sizes)} if len(sizes) > 1 else set()))
         res["target_counts"] = target_counts
         res["candidates_by_count"] = {
             n: (

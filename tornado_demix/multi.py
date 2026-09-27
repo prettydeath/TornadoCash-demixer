@@ -45,6 +45,7 @@ def correlate(
     mode: str = "events",
     network: Network = ETHEREUM,
     exit_window_hours: float | None = None,
+    max_voucher_span_hours: float | None = None,
 ) -> dict:
     """Run demix on every wallet and compute cross-wallet correlations.
 
@@ -70,6 +71,7 @@ def correlate(
             mode=mode,
             network=network,
             exit_window_hours=exit_window_hours,
+            max_voucher_span_hours=max_voucher_span_hours,
         )
         results[wallet] = data
         for pool_key, res in data["denoms"].items():

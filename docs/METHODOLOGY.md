@@ -44,7 +44,9 @@ into a **voucher**. A voucher of size *N* means the depositor put *N* notes of t
 in during one session — e.g. `9 × 1 ETH`. Grouping is by pool, not by denomination, so
 two contracts at one denomination produce two independent vouchers rather than one merged
 one. Grouping chains: deposits each within `--gap-hours` of the previous one form one
-voucher even if the whole session spans much longer than the gap.
+voucher even if the whole session spans much longer than the gap;
+`--max-voucher-span HOURS` starts a new voucher once a deposit is more than HOURS
+after the voucher's first one.
 
 ## 2a. Withdrawal side — event mode (default, exact)
 
@@ -136,9 +138,10 @@ reaches 1.0 although a chance match is still likely. A count match therefore als
 needs a field of at least `MIN_FIELD_SIZE` (5) recipients, and the report shows the
 field size next to `disc`.
 
-The count is compared with each voucher's size, not with their sum. An address that
-collected every note of two sessions in one pool (2 + 3 = 5 withdrawals) is not a
-`demix` candidate; `cluster` finds that case.
+The count is compared with each voucher's size and, when a pool holds several
+vouchers, with their sum: an address that collected every note of two sessions in
+one pool (2 + 3 = 5 withdrawals) is a candidate, and its evidence line says "all 5
+notes of the pool's vouchers". The same gate applies.
 
 ## Search windows
 
@@ -224,7 +227,8 @@ gas-price gate and the contract check make bounded, memoised RPC calls.
   a contract (`eth_getCode` over the network's RPC) is a router, a DEX or a service
   rather than a person and does not earn `linked`; the evidence line says so. When
   the check cannot be made the signal is kept. A withdrawal back to the depositor's
-  own address is `linked` as well.
+  own address is `linked` as well, and so is a direct ERC-20 transfer between the
+  depositor and the candidate (token transfers are read once per run).
 - **Linked withdrawal sender.** `withdraw()` may be called by anyone, and the
   caller is recorded as the transaction sender. If the depositor, or one of its
   direct non-contract counterparties, sent a withdrawal transaction, its recipient

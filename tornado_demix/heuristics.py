@@ -293,9 +293,11 @@ def candidate_evidence(data: dict, pool_key: str, address: str) -> list[dict]:
     sharing = sum(1 for c in res["counts"].values() if c == hits)
     disc = res.get("discrimination", {}).get(address, 0.0)
 
+    sizes = [v["count"] for v in data.get("vouchers", []) if v["pool_key"] == pool_key]
+    what = f"a {hits}-note voucher" if hits in sizes else f"all {hits} notes of the pool's vouchers"
     if hits in targets:
         count_detail = (
-            f"{hits} withdrawal(s) = a {hits}-note voucher; {sharing} of {field} "
+            f"{hits} withdrawal(s) = {what}; {sharing} of {field} "
             f"recipients in the window share this count; disc {disc:.2f} "
             f"(counted from {MIN_COUNT_DISCRIMINATION:.2f})"
         )
