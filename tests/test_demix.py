@@ -619,12 +619,12 @@ def test_a_future_window_end_clamps_to_the_current_block(monkeypatch):
         "first_block": 1,
         "deposits": [],
     }
-    client = _WindowClient(current=999)
+    client = _WindowClient(current=now + 10)
 
     res = demix.analyze_denom_events(client, pool, [voucher], window_days=30)
 
     window = res["windows"][0]
-    assert window["end_block"] == 999  # clamped to the head
+    assert window["end_block"] == now + 10  # clamped to the head
     # The future timestamp was never sent to the "after" lookup that would fail.
     assert all(closest != "after" for _ts, closest in client.by_time)
     assert window["start_block"] == now - 100  # start still resolved by time
@@ -683,9 +683,27 @@ def test_a_future_end_that_still_reaches_the_lookup_falls_back_on_the_error(monk
                 raise BlockLookupError("Block timestamp too far in the future")
             return int(ts)
 
-    client = Raising(current=777)
+    client = Raising(current=5000)
     res = demix.analyze_denom_events(client, pool, [voucher], window_days=30)
-    assert res["windows"][0]["end_block"] == 777
+    assert res["windows"][0]["end_block"] == 5000
+
+
+def test_a_lagging_current_block_never_ends_a_window_before_it_starts(monkeypatch):
+    from tornado_demix import demix
+
+    monkeypatch.setattr(demix.time, "time", lambda: 10**10)
+    pool = fx.network().by_key["1 ETH"]
+    voucher = {
+        "pool_key": "1 ETH",
+        "count": 1,
+        "first_ts": 1000,
+        "last_ts": 1000,
+        "first_block": 1,
+        "deposits": [],
+    }
+    res = demix.analyze_denom_events(_WindowClient(current=10), pool, [voucher], window_days=30)
+    window = res["windows"][0]
+    assert window["end_block"] >= window["start_block"]
 
 
 def test_without_the_router_a_polygon_router_deposit_is_missed():

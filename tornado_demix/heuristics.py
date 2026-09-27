@@ -26,6 +26,9 @@ SIGNAL_WEIGHTS = {
     "linked_sender": 0.40,  # withdrawal sent by the depositor or its direct counterparty
     "profile_match": 0.35,  # received the full pool fingerprint
 }
+# Noisy-OR keeps the score in [0, 1] only for weights inside (0, 1).
+if not all(0.0 < w < 1.0 for w in SIGNAL_WEIGHTS.values()):
+    raise ValueError("every signal weight must lie strictly between 0 and 1")
 
 
 # Below this discrimination a count match is not a signal at all (no score, no

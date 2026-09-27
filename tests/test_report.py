@@ -850,3 +850,19 @@ def test_totals_never_use_scientific_notation():
     from tornado_demix.report import format_totals
 
     assert format_totals({"cDAI": 4_500_000.0, "ETH": 1.8}) == "ETH:1.8; cDAI:4500000"
+
+
+def test_replacing_an_existing_report_is_announced(tmp_path, capsys):
+    from tornado_demix.report import _write
+
+    path = tmp_path / "x.csv"
+    _write(str(path), ["a"], [["1"]])
+    assert "overwriting" not in capsys.readouterr().err
+    _write(str(path), ["a"], [["2"]])
+    assert "overwriting" in capsys.readouterr().err
+
+
+def test_every_signal_weight_is_inside_the_open_unit_interval():
+    from tornado_demix.heuristics import SIGNAL_WEIGHTS
+
+    assert all(0 < w < 1 for w in SIGNAL_WEIGHTS.values())

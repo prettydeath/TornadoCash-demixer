@@ -329,7 +329,10 @@ def _resolve_windows(client, pool, windows):
     """Attach start_block / end_block to each window, logging the range."""
     for window in windows:
         window["start_block"] = client.block_by_time(window["first_ts"], "before")
-        window["end_block"] = _resolve_window_end(client, window["end_ts"])
+        # A lagging current-block answer must not produce an empty, inverted range.
+        window["end_block"] = max(
+            _resolve_window_end(client, window["end_ts"]), window["start_block"]
+        )
         _log(
             "  [{}] pool {} | blocks {}..{} ({:%Y-%m-%d} .. {:%Y-%m-%d})".format(
                 pool.key,

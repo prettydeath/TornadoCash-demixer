@@ -16,7 +16,7 @@ For ``Withdrawal`` the only indexed parameter is ``relayer`` (topics[1]); ``to``
 
 from __future__ import annotations
 
-from .constants import TOPIC_DEPOSIT, TOPIC_WITHDRAWAL, ZERO_ADDRESS
+from .constants import TOPIC_WITHDRAWAL, ZERO_ADDRESS
 from .etherscan import EtherscanClient
 
 
@@ -99,11 +99,3 @@ def fetch_withdrawals(
     """Return decoded Withdrawal events for a pool within a block range."""
     logs = client.get_logs(pool, TOPIC_WITHDRAWAL, start_block, end_block)
     return [decode_withdrawal(log) for log in logs]
-
-
-def fetch_deposits(
-    client: EtherscanClient, pool: str, start_block: int, end_block: int
-) -> list[dict]:
-    """Return decoded Deposit events for a pool within a block range."""
-    logs = client.get_logs(pool, TOPIC_DEPOSIT, start_block, end_block)
-    return [decode_deposit(log) for log in logs]

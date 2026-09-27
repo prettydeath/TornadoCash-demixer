@@ -10,6 +10,7 @@ import csv
 import html
 import json
 import os
+import sys
 from collections import Counter
 from datetime import datetime, timezone
 
@@ -65,11 +66,18 @@ def _write(path, header, rows):
     codepage. No BOM: the content is ASCII in practice (addresses, hashes, pool
     keys), and the package's own readers accept one anyway.
     """
+    _warn_overwrite(path)
     with open(path, "w", newline="", encoding="utf-8") as fh:
         writer = csv.writer(fh)
         writer.writerow(_sanitize_row(header))
         writer.writerows(_sanitize_row(r) for r in rows)
     return path
+
+
+def _warn_overwrite(path):
+    """A saved report can be case material; say so when a run replaces one."""
+    if os.path.exists(path):
+        print("[!] overwriting {}".format(path), file=sys.stderr)
 
 
 # Leading characters Excel and LibreOffice treat as the start of a formula.
