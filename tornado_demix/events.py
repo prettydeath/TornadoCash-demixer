@@ -69,7 +69,7 @@ def decode_withdrawal(log: dict) -> dict:
         "broadcaster": None,
         "broadcaster_status": "unverified",
         # The logs endpoint returns gasPrice, so no extra tx fetch is needed.
-        "gas_price": int(log.get("gasPrice", "0x0"), 16),
+        "gas_price": int(log.get("gasPrice") or "0x0", 16) if log.get("gasPrice") != "0x" else 0,
         "tx_hash": log.get("transactionHash"),
         "block": int(log.get("blockNumber", "0x0"), 16),
         "ts": int(log.get("timeStamp", "0x0"), 16),
