@@ -160,6 +160,39 @@ of wallets.
   the window-overlap suppression, while two wallets of one operator that share a
   consolidator are still merged in 91 % of trials (94 % naive).
 
+## Two public laundering cases
+
+`tools/real_cases.py` runs the tool on the depositors of two cases attributed to the
+Lazarus group, with addresses from the public investigations collected at
+github.com/tayvano/lazarus-bluenoroff-research. Default settings, 30-day window.
+
+| Case | Depositors (deposits) | Exits known | Exits in a window | Candidates | True | Other |
+|---|---|---|---|---|---|---|
+| KuCoin 2020 | 2 (55) | 7 | 6 per depositor | 7 | 6 | 1 `moderate` (chance gas-price reuse) |
+| Harmony 2022 | 14 (857) | 30 of 55 listed | 0-30 per depositor | 0 | 0 | 0 |
+
+**KuCoin.** The attacker ran its own withdrawal caller, `0x82e6...`, which sent 128
+withdrawals to 7 addresses. That is the ground truth; no demix signal uses the
+transaction sender, except `linked_sender` when the sender is a counterparty of the
+depositor. Before `linked_sender` the tool listed nothing: each exit received 11-29
+withdrawals, none equal to a voucher (24 or 30 notes), because the exits collected
+notes of several deposits. With it, the depositor `0x820a...`, which had transacted
+with the caller, gets 6 candidates, all 6 true exits (the seventh exit received its
+withdrawals months later, outside the window). The other depositor gets one
+unrelated `moderate` candidate from a chance gas-price match.
+
+**Harmony.** Investigators listed 55 withdrawal addresses; 30 of them received 180
+withdrawals from the 100 ETH pool within 30 days of the deposits, 6 per address in
+most cases, against vouchers of 60 notes. The tool lists no candidate and no false
+one. The investigators selected these addresses partly by withdrawal count and
+batching, so this list is not independent of count-based reasoning.
+
+Both cases show the same limit as the synthetic counter-measures: when notes are
+pooled and redistributed, a count match finds nothing, and the tool reports no
+lead rather than a wrong one. Real laundering elsewhere shows the same pattern:
+in the 27 MixLaunder cases, direct linkage covers 1.27 % of laundering addresses
+(4 cases), the same address on both sides 1.48 % (3 cases).
+
 ## Limits
 
 The field model is simple: recipients are independent, gas prices are drawn from a

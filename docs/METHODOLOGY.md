@@ -148,6 +148,14 @@ wallet that used a pool twice, two years apart, produces two windows, not one
 spanning both, which would make every withdrawal in between a candidate. A window
 that ends in the future is clamped to the current block.
 
+Laundering tends to use the mixer as a fast transit. In 27 public laundering cases
+(the MixLaunder set, Fu et al., arXiv:2609.27807) 85.5 % of the intervals between
+adjacent deposits and withdrawals were within a day and 95.8 % within seven days,
+and deposits and withdrawals interleaved in 25 of the cases. `--rapid` is a
+shortcut for `--exit-window 168`; a narrower window shrinks the field, which is
+what makes a count match discriminate. In the KuCoin case below the first exits
+came 7 days after the last deposit, so a narrower window would have missed them.
+
 ## When the analysis stops
 
 A timestamp that cannot be resolved to a block number aborts that pool and is
@@ -215,14 +223,24 @@ gas-price gate and the contract check make bounded, memoised RPC calls.
   flagged `linked`, the single strongest structural signal. A counterparty that is
   a contract (`eth_getCode` over the network's RPC) is a router, a DEX or a service
   rather than a person and does not earn `linked`; the evidence line says so. When
-  the check cannot be made the signal is kept.
+  the check cannot be made the signal is kept. A withdrawal back to the depositor's
+  own address is `linked` as well.
+- **Linked withdrawal sender.** `withdraw()` may be called by anyone, and the
+  caller is recorded as the transaction sender. If the depositor, or one of its
+  direct non-contract counterparties, sent a withdrawal transaction, its recipient
+  is flagged `linked_sender` (linked-address family). The tool reads the outgoing
+  transactions of at most 25 counterparties, busiest first, within the searched
+  blocks only. It catches an operator that relays its own withdrawals: in the
+  KuCoin case it listed 6 of the 7 exits, and nothing else, for the depositor whose
+  counterparty called the withdrawals ([EVALUATION.md](EVALUATION.md)).
 
 **Band, evidence and score.** Each recipient accumulates a signal set
-(`count_match`, `self_relayed`, `gas_price`, `linked`, and `profile_match` on
-`multi` runs). The signals fall into evidence families: amount+timing
-(`count_match`, `self_relayed`), gas price, linked address. The **band** is read
-from the families that hold: `strong` for two or more, `moderate` for one family
-with a structural tie (`self_relayed`, `gas_price` or `linked`), `weak` for a bare
+(`count_match`, `self_relayed`, `gas_price`, `linked`, `linked_sender`, and
+`profile_match` on `multi` runs). The signals fall into evidence families:
+amount+timing (`count_match`, `self_relayed`, `profile_match`), gas price, linked
+address (`linked`, `linked_sender`). The **band** is read from the families that
+hold: `strong` for two or more, `moderate` for one family with a structural tie
+(`self_relayed`, `gas_price`, `linked` or `linked_sender`), `weak` for a bare
 count match. Every candidate carries its **evidence**: each family, whether it
 holds, and the numbers behind it (share of the field with the same count, `disc`,
 gas price, number of relayer-free withdrawals).

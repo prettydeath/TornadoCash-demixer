@@ -60,6 +60,7 @@ The method, thresholds and the reasoning behind them are in
 | `tools/calibrate.py` | precision/recall against confirmed cases (needs private data) |
 | `tools/sensitivity.py` | ranking stability of saved results under perturbed weights |
 | `tools/simulate.py` | synthetic benchmark: ablation, negative controls, counter-measures ([results](docs/EVALUATION.md)) |
+| `tools/real_cases.py` | the method on two public laundering cases (KuCoin, Harmony) |
 
 ## Requirements
 
@@ -134,6 +135,9 @@ python -m tornado_demix demix 0x019b5bb2051797e33f726d0e7a8cb9b9c2003ac2 \
 # narrow the search to 6 hours after each voucher's last deposit
 python -m tornado_demix demix <wallet> --exit-window 6
 
+# a 7-day exit window, as seen in public laundering cases
+python -m tornado_demix demix <wallet> --rapid
+
 # several wallets
 python -m tornado_demix multi <wallet1> <wallet2> --report out/multi.html
 python -m tornado_demix multi --wallets-csv config/wallets.csv
@@ -207,6 +211,9 @@ windows are clamped to the current block.
 - A careful user defeats the method: relayers, long delays, split withdrawals
   to fresh addresses. The result is then "no lead", or weak leads on unrelated
   addresses that happen to share the voucher count, never a corroborated one.
+  On the public KuCoin and Harmony laundering cases the count match found no exit
+  (every exit collected notes of several deposits); in KuCoin the linked withdrawal
+  sender found 6 of 7 exits for one depositor ([docs/EVALUATION.md](docs/EVALUATION.md)).
 - Only Tornado Cash pools in the registry are covered. Bridges, other mixers and
   cross-asset hops are not followed; `cluster` follows one hop only.
 - Native chains other than Ethereum, Polygon and Avalanche have no verified
@@ -234,6 +241,12 @@ Synthetic benchmark (no API calls, about half a minute):
 
 ```bash
 python tools/simulate.py --experiment all --trials 200 --seed 1
+```
+
+Public laundering cases (KuCoin 2020, Harmony 2022; needs an API key):
+
+```bash
+python tools/real_cases.py
 ```
 
 CI runs the tests on Linux and Windows with Python 3.9 and 3.13, a test under a
