@@ -121,7 +121,9 @@ def test_api_csv_with_a_bom_still_loads(tmp_path):
 def test_no_shipped_module_opens_a_file_without_an_encoding():
     """A new `open(path, "w")` reintroduces the whole class of defect."""
     offenders = []
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     for folder in ("tornado_demix", "tools", "webui"):
+        folder = os.path.join(root, folder)
         for name in sorted(os.listdir(folder)):
             if not name.endswith(".py"):
                 continue

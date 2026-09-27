@@ -63,3 +63,7 @@ anyone acting on a name:
 
 Corroborate any address independently before it appears in a referral, a filing,
 or a freeze request.
+
+The web UI keeps the last runs' reports in the memory of its process. Run it as
+one process (`python webui/app.py`); under a multi-worker server a download may
+land on a worker that never saw the run and answer 404.

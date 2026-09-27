@@ -294,7 +294,8 @@ def test_routes_without_a_prior_run(client, path, expected):
 
 
 def test_the_server_binds_to_localhost_only():
-    source = open(os.path.join("webui", "app.py"), encoding="utf-8").read()
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    source = open(os.path.join(root, "webui", "app.py"), encoding="utf-8").read()
     assert 'host="127.0.0.1"' in source
     assert "debug=False" in source
 
@@ -361,3 +362,10 @@ def test_a_web_csv_cell_that_looks_like_a_formula_is_escaped(client):
         sess["token"] = webapp._store_put({"csv": {"header": ["a"], "rows": [["=HYPERLINK(1)"]]}})
     body = client.get("/download.csv").get_data(as_text=True)
     assert "'=HYPERLINK(1)" in body
+
+
+def test_the_result_store_keeps_only_the_newest_runs():
+    webapp._STORE.clear()
+    tokens = [webapp._store_put({"n": i}) for i in range(webapp._STORE_MAX + 5)]
+    assert len(webapp._STORE) == webapp._STORE_MAX
+    assert tokens[0] not in webapp._STORE and tokens[-1] in webapp._STORE

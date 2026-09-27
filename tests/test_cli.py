@@ -6,6 +6,7 @@ the printed summary to the pool-keyed shape.
 """
 
 import argparse
+import os
 
 import pytest
 
@@ -276,7 +277,8 @@ def test_the_declared_version_matches_pyproject():
     tomllib = pytest.importorskip("tomllib", reason="stdlib from Python 3.11")
     from tornado_demix import __version__
 
-    with open("pyproject.toml", "rb") as fh:
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root, "pyproject.toml"), "rb") as fh:
         assert tomllib.load(fh)["project"]["version"] == __version__
 
 

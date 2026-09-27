@@ -40,6 +40,7 @@ def _no_network(request, monkeypatch):
 
     monkeypatch.setattr(socket.socket, "connect", denied)
     monkeypatch.setattr(socket, "create_connection", denied)
+    monkeypatch.setattr(socket, "getaddrinfo", denied)
 
 
 @pytest.fixture(autouse=True)

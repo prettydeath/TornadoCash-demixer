@@ -178,3 +178,26 @@ def test_commas_inside_quoted_fields_parse_correctly(tmp_path):
     labels = load_attribution("ethereum", directory=str(tmp_path))
     assert labels[CEX.lower()]["category"] == "exchange"
     assert labels[CEX.lower()]["entity"] == "Coinbase, Inc."
+
+
+def test_the_label_cache_rereads_a_changed_file(tmp_path, monkeypatch):
+    import os
+    import time
+
+    from tornado_demix import attribution
+
+    monkeypatch.setenv("TORNADO_DEMIX_ATTRIBUTION_DIR", str(tmp_path))
+    path = tmp_path / "ethereum.csv"
+    path.write_text(
+        "address,entity,label,category,source,confidence\n0x" + "1" * 40 + ",A,a,exchange,s,high\n",
+        encoding="utf-8",
+    )
+    first = attribution.load_attribution("ethereum", str(tmp_path))
+    path.write_text(
+        "address,entity,label,category,source,confidence\n0x" + "2" * 40 + ",B,b,exchange,s,high\n",
+        encoding="utf-8",
+    )
+    later = time.time() + 5
+    os.utime(path, (later, later))
+    second = attribution.load_attribution("ethereum", str(tmp_path))
+    assert "0x" + "1" * 40 in first and "0x" + "2" * 40 in second

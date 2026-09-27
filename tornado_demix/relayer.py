@@ -69,7 +69,7 @@ def analyze_relayers(withdrawals: list[dict]) -> dict:
         "total": len(withdrawals),
         "unique_relayers": len(counts),
         "self_relayed": self_relayed,
-        "relayers": dict(sorted(relayers.items(), key=lambda kv: -kv[1]["withdrawals"])),
+        "relayers": dict(sorted(relayers.items(), key=lambda kv: (-kv[1]["withdrawals"], kv[0]))),
     }
 
 

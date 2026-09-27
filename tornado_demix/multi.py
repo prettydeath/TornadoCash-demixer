@@ -289,6 +289,9 @@ def _profile_match(fingerprints, addr_detail):
     """
     profile_matches = defaultdict(list)  # wallet -> [(addr, detail, exact)]
     addr_profile_wallets = defaultdict(set)  # addr -> wallets it fully matches
+    by_pool = defaultdict(list)  # pool_key -> [(addr, by_wallet)], built once
+    for (pool_key, addr), by_wallet in addr_detail.items():
+        by_pool[pool_key].append((addr, by_wallet))
 
     for wallet, fingerprint in fingerprints.items():
         pool_keys = list(fingerprint.keys())
@@ -296,9 +299,7 @@ def _profile_match(fingerprints, addr_detail):
         for pool_key in pool_keys:
             need = fingerprint[pool_key]
             matching = {
-                addr
-                for (p, addr), by_wallet in addr_detail.items()
-                if p == pool_key and by_wallet.get(wallet, 0) >= need
+                addr for addr, by_wallet in by_pool[pool_key] if by_wallet.get(wallet, 0) >= need
             }
             per_pool_sets.append(matching)
 

@@ -387,7 +387,7 @@ def method_breakdown(data: dict) -> list[dict]:
                 )
     out = []
     for s in order:
-        rows = sorted(per[s], key=lambda r: (-r["confidence"], -r["hits"]))
+        rows = sorted(per[s], key=lambda r: (-r["confidence"], -r["hits"], r["address"]))
         out.append({"method": s, "label": SIGNAL_LABEL[s], "rows": rows})
     return out
 
@@ -479,7 +479,7 @@ def cross_method(data: dict, min_methods: int = 2) -> list[dict]:
                     "confidence": e["conf"],
                 }
             )
-    out.sort(key=lambda r: (-r["n_methods"], -r["confidence"]))
+    out.sort(key=lambda r: (-r["n_methods"], -r["confidence"], r["address"]))
     return out
 
 
@@ -576,5 +576,5 @@ def ranked_candidates(
             )
     # Band first: the score orders leads within a band but cannot lift a
     # single-family lead above a corroborated one.
-    rows.sort(key=lambda r: (-BAND_ORDER[r["band"]], -r["confidence"], -r["hits"]))
+    rows.sort(key=lambda r: (-BAND_ORDER[r["band"]], -r["confidence"], -r["hits"], r["address"]))
     return rows[:limit] if limit else rows

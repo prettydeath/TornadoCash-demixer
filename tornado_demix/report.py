@@ -229,7 +229,7 @@ def write_demix_csv(data: dict, out_dir: str, network: Network) -> list[str]:
                     hashes,
                 ]
             )
-        rows.sort(key=lambda r: (r[2] != "yes", -r[1]))
+        rows.sort(key=lambda r: (r[2] != "yes", -r[1], r[0]))
         safe = pool_key.replace(".", "_").replace(" ", "_").replace("#", "_")
         header, out_rows = _with_network(
             network,
@@ -680,7 +680,7 @@ def demix_json(data: dict, attribution: dict[str, dict] | None = None) -> str:
         "candidates": ranked_candidates(data, attribution=attribution),
         "result": data,
     }
-    return json.dumps(doc, indent=1, default=_json_default)
+    return json.dumps(doc, indent=1, default=_json_default, sort_keys=True)
 
 
 def write_demix_json(data: dict, path: str, attribution: dict[str, dict] | None = None) -> str:
