@@ -57,6 +57,11 @@ def _positive_hours(value):
     return hours
 
 
+# --rapid: MixLaunder (27 public laundering cases) found 95.8 % of the intervals
+# between adjacent deposits and withdrawals within 7 days.
+RAPID_EXIT_WINDOW_HOURS = 168.0
+
+
 def _add_common(parser):
     parser.add_argument(
         "--api-csv",
@@ -82,6 +87,12 @@ def _add_common(parser):
         "cuts the recipient field so a count match actually "
         "discriminates, surfacing fast exits; it misses "
         "withdrawals delayed longer than HOURS",
+    )
+    parser.add_argument(
+        "--rapid",
+        action="store_true",
+        help="shortcut for --exit-window 168: in public laundering cases "
+        "95.8%% of deposit-to-withdrawal intervals were within 7 days",
     )
     parser.add_argument(
         "--fee-lo",
@@ -499,6 +510,8 @@ def main(argv: list[str] | None = None) -> None:
     """
     parser = build_parser()
     args = parser.parse_args(argv)
+    if getattr(args, "rapid", False) and getattr(args, "exit_window", None) is None:
+        args.exit_window = RAPID_EXIT_WINDOW_HOURS
     try:
         args.func(args)
     except TornadoDemixError as exc:

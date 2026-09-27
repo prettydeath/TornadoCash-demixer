@@ -278,3 +278,35 @@ def test_the_declared_version_matches_pyproject():
 
     with open("pyproject.toml", "rb") as fh:
         assert tomllib.load(fh)["project"]["version"] == __version__
+
+
+def test_rapid_sets_a_seven_day_exit_window(monkeypatch):
+    seen = {}
+    real = cli.build_parser
+
+    def parser_with_probe():
+        parser = real()
+        for action in parser._subparsers._group_actions:
+            for sub in action.choices.values():
+                sub.set_defaults(func=lambda args: seen.setdefault("hours", args.exit_window))
+        return parser
+
+    monkeypatch.setattr(cli, "build_parser", parser_with_probe)
+    cli.main(["demix", "0x" + "1" * 40, "--rapid"])
+    assert seen["hours"] == 168.0
+
+
+def test_an_explicit_exit_window_wins_over_rapid(monkeypatch):
+    seen = {}
+    real = cli.build_parser
+
+    def parser_with_probe():
+        parser = real()
+        for action in parser._subparsers._group_actions:
+            for sub in action.choices.values():
+                sub.set_defaults(func=lambda args: seen.setdefault("hours", args.exit_window))
+        return parser
+
+    monkeypatch.setattr(cli, "build_parser", parser_with_probe)
+    cli.main(["demix", "0x" + "1" * 40, "--rapid", "--exit-window", "24"])
+    assert seen["hours"] == 24.0
