@@ -5,6 +5,7 @@ Subcommands:
   multi         - analyse several wallets and correlate them
   cluster       - trace split-exit reconvergence for one or more wallets
   characterize  - describe one exit-candidate address
+  trace         - follow withdrawn funds forward over several hops
 
 The API key is read from api.csv (see tornado_demix.config), never from argv.
 """
@@ -12,6 +13,7 @@ The API key is read from api.csv (see tornado_demix.config), never from argv.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from datetime import datetime, timezone
 
@@ -44,6 +46,8 @@ from .report import (
     write_multi_report,
     write_relayer_csv,
 )
+from .rpc import make_contract_check
+from .trace import MAX_HOPS, trace_funds
 
 
 def _positive_hours(value):
@@ -432,6 +436,50 @@ def cmd_characterize(args: argparse.Namespace) -> None:
         print(f"\n[*] HTML report: {args.report}", file=sys.stderr)
 
 
+def cmd_trace(args: argparse.Namespace) -> None:
+    address = _valid_address(args.address)
+    key = config.load_api_key(args.api_csv)
+    net = _network(args)
+    client = EtherscanClient(key, **net.client_kwargs())
+    labels = load_attribution(net.name, getattr(args, "attribution_dir", None))
+    token = _valid_address(args.token) if args.token else None
+    result = trace_funds(
+        client,
+        address,
+        args.amount,
+        start_block=args.start_block,
+        token=token,
+        currency=net.currency,
+        max_hops=args.max_hops,
+        labels=labels,
+        is_contract=make_contract_check(net.rpc_url),
+    )
+
+    print("\n=== MULTI-HOP TRACE (FIFO) ===")
+    print(f"Start: {result['start']}  {args.amount} {result['asset']}")
+    for e in result["edges"]:
+        swap = f" -> swapped to {e['swapped_to']}" if e["kind"] == "swap" else ""
+        print(
+            f"{'  ' * e['hop']}hop {e['hop']}: {e['from']} -> {e['to']}  "
+            f"{e['attributed']} of {e['value']} {e['asset']}{swap}  {e['tx_hash']}"
+        )
+    print("\nWhere the traced funds stop:")
+    for t in result["terminals"]:
+        tag = format_label(t["label"]) if t["label"] else ""
+        print(
+            f"  {t['address']}  {t['amount']} {t['asset']}  hop {t['hop']}  [{t['reason']}]"
+            + (f"  {tag}" if tag else "")
+        )
+    print(
+        "\nFIFO attribution is a convention: funds in one account are fungible, "
+        "so each edge is a lead to corroborate."
+    )
+    if getattr(args, "json", ""):
+        with open(args.json, "w", encoding="utf-8") as fh:
+            json.dump(result, fh, indent=1, sort_keys=True)
+        print(f"[*] JSON trace: {args.json}", file=sys.stderr)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="tornado-demix",
@@ -521,6 +569,38 @@ def build_parser() -> argparse.ArgumentParser:
         "--report", default="", help="write a downloadable HTML characterisation report here"
     )
     p_char.set_defaults(func=cmd_characterize)
+
+    p_trace = sub.add_parser(
+        "trace", help="follow withdrawn funds forward over several hops (FIFO, swaps)"
+    )
+    p_trace.add_argument("address", help="exit address the funds were withdrawn to (0x...)")
+    p_trace.add_argument("--amount", type=float, required=True, help="amount to follow")
+    p_trace.add_argument(
+        "--token", default="", help="ERC-20 contract of the amount (default: native currency)"
+    )
+    p_trace.add_argument(
+        "--start-block", type=int, default=0, help="block the funds arrived in (default 0)"
+    )
+    p_trace.add_argument(
+        "--max-hops", type=int, default=MAX_HOPS, help=f"hops to follow (default {MAX_HOPS})"
+    )
+    p_trace.add_argument("--json", default="", help="write the trace as JSON to this path")
+    p_trace.add_argument(
+        "--api-csv", default=None, help="CSV with an api_key for the explorer (see demix)"
+    )
+    p_trace.add_argument(
+        "--network",
+        default="ethereum",
+        help="network name from config/networks.csv (default ethereum)",
+    )
+    p_trace.add_argument("--networks-csv", default=None, help="CSV defining pools per network")
+    p_trace.add_argument(
+        "--attribution-dir",
+        default=None,
+        help="directory holding <network>.csv attribution tables; a labelled "
+        "address ends the trace",
+    )
+    p_trace.set_defaults(func=cmd_trace)
 
     return parser
 

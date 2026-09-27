@@ -386,3 +386,54 @@ def test_cmd_characterize_prints_the_summary_and_writes_the_report(
     assert "contract call" in out
     assert "lead, not proof" in out
     assert os.path.getsize(report) > 0
+
+
+def test_cmd_trace_prints_edges_and_terminals_and_writes_json(monkeypatch, args, capsys, tmp_path):
+    result = {
+        "start": fx.BOB,
+        "amount": 1.0,
+        "asset": "ETH",
+        "edges": [
+            {
+                "hop": 1,
+                "from": fx.BOB,
+                "to": OTHER,
+                "tx_hash": "0xa",
+                "ts": 0,
+                "asset": "ETH",
+                "value": 2.0,
+                "attributed": 1.0,
+                "kind": "swap",
+                "swapped_to": "DAI",
+            }
+        ],
+        "terminals": [
+            {
+                "address": OTHER,
+                "asset": "DAI",
+                "amount": 3000.0,
+                "hop": 2,
+                "reason": "labelled address",
+                "label": {"label": "Hot wallet", "category": "exchange"},
+            }
+        ],
+        "nodes_expanded": 1,
+    }
+    seen = {}
+
+    def trace_funds(*a, **kw):
+        seen.update(kw)
+        return result
+
+    _stub(monkeypatch, trace_funds=trace_funds, load_attribution=lambda *a, **kw: {})
+    path = str(tmp_path / "t.json")
+    cli.cmd_trace(args(address=fx.BOB, amount=1.0, token="", start_block=5, max_hops=3, json=path))
+    out = capsys.readouterr().out
+    assert "swapped to DAI" in out and "[labelled address]" in out
+    assert seen["start_block"] == 5 and seen["max_hops"] == 3 and seen["token"] is None
+    assert '"nodes_expanded": 1' in open(path, encoding="utf-8").read()
+
+
+def test_the_trace_subcommand_parses():
+    ns = cli.build_parser().parse_args(["trace", fx.BOB, "--amount", "2"])
+    assert ns.func is cli.cmd_trace and ns.max_hops == cli.MAX_HOPS
