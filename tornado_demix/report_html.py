@@ -107,6 +107,9 @@ _REPORT_CSS = """
  .badge.strong{background:var(--accent-soft);color:var(--accent);border-color:var(--accent)}
  .badge.moderate{background:#fbecd6;color:var(--flag);border-color:var(--flag)}
  .badge.weak{background:var(--head);color:var(--muted);border-color:var(--line)}
+ .flow-wrap{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+   padding:.6rem;margin:.7rem 0;overflow-x:auto}
+ .flow{display:block;width:100%;min-width:560px;height:auto}
  .lead-card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
    padding:.85rem 1.05rem;margin:.7rem 0}
  .lead-card .top{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}
@@ -186,6 +189,103 @@ def _fresh_html(fresh: dict | None) -> str:
             "withdrawal (not scored)"
         )
     return f'<div class="rat">{_e(text)}.</div>'
+
+
+_BAND_COLOUR = {"strong": "#0f766e", "moderate": "#b45309", "weak": "#8a8780"}
+
+
+def _short(addr: str) -> str:
+    return f"{addr[:6]}…{addr[-4:]}" if len(addr) > 12 else addr
+
+
+def _flow_svg(data: dict, cands: list[dict], limit: int = 8) -> str:
+    """Depositor → pools → candidate exits as an inline SVG, edges coloured by band."""
+    notes = Counter()
+    for voucher in data["vouchers"]:
+        notes[voucher["pool_key"]] += voucher["count"]
+    pools = sorted(notes)
+    shown = cands[:limit]
+    rows = max(len(pools), len(shown), 1)
+    row_h, width = 44, 760
+    height = rows * row_h + 20
+
+    def y(i, n):
+        return 10 + (rows * row_h) * (i + 0.5) / n
+
+    dep_y = y(0, 1)
+    pool_y = {k: y(i, len(pools)) for i, k in enumerate(pools)}
+    parts = [
+        f'<svg class="flow" viewBox="0 0 {width} {height}" role="img" '
+        f'aria-label="Flow from the depositor through the pools to the candidate exits" '
+        f'xmlns="http://www.w3.org/2000/svg" font-family="inherit" font-size="12">'
+    ]
+    for k in pools:
+        parts.append(
+            f'<path d="M150 {dep_y:.0f} C230 {dep_y:.0f} 230 {pool_y[k]:.0f} 310 {pool_y[k]:.0f}" '
+            f'fill="none" stroke="#b9b5ad" stroke-width="{1 + min(notes[k], 10) / 2:.1f}"/>'
+            f'<text x="230" y="{(dep_y + pool_y[k]) / 2 - 4:.0f}" text-anchor="middle" '
+            f'fill="#6b6860">{notes[k]} note(s)</text>'
+        )
+    for i, c in enumerate(shown):
+        cy = y(i, len(shown))
+        py = pool_y.get(c["pool_key"], dep_y)
+        colour = _BAND_COLOUR.get(c["band"], "#8a8780")
+        parts.append(
+            f'<path d="M450 {py:.0f} C520 {py:.0f} 520 {cy:.0f} 590 {cy:.0f}" fill="none" '
+            f'stroke="{colour}" stroke-width="2"/>'
+            f'<text x="584" y="{cy - 5:.0f}" text-anchor="end" '
+            f'fill="{colour}">{c["hits"]}×</text>'
+        )
+        fresh = " · fresh" if (c.get("fresh") or {}).get("fresh") else ""
+        parts.append(
+            f'<rect x="590" y="{cy - 15:.0f}" width="165" height="30" rx="6" fill="#fff" '
+            f'stroke="{colour}"/>'
+            f'<text x="598" y="{cy - 2:.0f}" fill="#1f1d1a" font-family="monospace">'
+            f"{_e(_short(c['address']))}</text>"
+            f'<text x="598" y="{cy + 11:.0f}" fill="{colour}" font-size="10">'
+            f"{_e(c['band'])}{fresh}</text>"
+        )
+    parts.append(
+        f'<rect x="10" y="{dep_y - 18:.0f}" width="140" height="36" rx="6" fill="#e6f1ef" '
+        f'stroke="#0f766e"/><text x="18" y="{dep_y - 3:.0f}" fill="#1f1d1a">Depositor</text>'
+        f'<text x="18" y="{dep_y + 11:.0f}" fill="#1f1d1a" font-family="monospace" '
+        f'font-size="11">{_e(_short(data["wallet"]))}</text>'
+    )
+    for k in pools:
+        parts.append(
+            f'<rect x="310" y="{pool_y[k] - 15:.0f}" width="140" height="30" rx="6" '
+            f'fill="#f2f0eb" stroke="#b9b5ad"/><text x="380" y="{pool_y[k] + 4:.0f}" '
+            f'text-anchor="middle" fill="#1f1d1a">{_e(k)} pool</text>'
+        )
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def _case_summary_html(data: dict, cands: list[dict]) -> str:
+    """A case-style overview: what was deposited, what was found, and the flow."""
+    first = min(v["first_ts"] for v in data["vouchers"])
+    last = max(v.get("last_ts", v["first_ts"]) for v in data["vouchers"])
+    n_notes = sum(v["count"] for v in data["vouchers"])
+    per_band = Counter(c["band"] for c in cands)
+    fresh = sum(1 for f in data.get("fresh_addresses", {}).values() if f["fresh"])
+    pools = sorted({v["pool_key"] for v in data["vouchers"]})
+    found = (
+        ", ".join(f"{per_band[b]} {b}" for b in ("strong", "moderate", "weak") if per_band[b])
+        or "none"
+    )
+    text = (
+        f"The depositor made {n_notes} deposit(s) into {len(pools)} pool(s) "
+        f"({', '.join(pools)}) in {len(data['vouchers'])} voucher(s) between "
+        f"{_ts(first)} and {_ts(last)} UTC. Candidate exits by band: {found}."
+    )
+    if fresh:
+        text += f" {fresh} of the top candidates are fresh addresses (context, not scored)."
+    more = f" The diagram shows the first 8 of {len(cands)}." if len(cands) > 8 else ""
+    return (
+        '<h2>Case overview<span class="rule"></span></h2>'
+        f'<div class="meta">{_e(text)}{_e(more)}</div>'
+        f'<div class="flow-wrap">{_flow_svg(data, cands)}</div>'
+    )
 
 
 def build_html_report(
@@ -275,6 +375,7 @@ def build_html_report(
         f'<div class="v">{_e(top_band)}</div><div class="s">{len(leads)} self-relayed leads</div></div>'
     )
     p.append("</div>")
+    p.append(_case_summary_html(data, cands))
     p.append(_assumptions_html(analysis_assumptions(data)))
 
     # Strong first, then moderate; a bare count match is never shown here.

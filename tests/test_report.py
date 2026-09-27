@@ -932,3 +932,19 @@ def test_the_fresh_note_says_it_is_not_scored():
     assert "Fresh address" in fresh and "not scored" in fresh
     old = _fresh_html({"fresh": False, "history_hours": 240})
     assert "10 day(s)" in old and "not scored" in old
+
+
+def test_demix_report_opens_with_a_case_overview_and_flow_diagram():
+    from tornado_demix.heuristics import ranked_candidates
+
+    data = _linked_bsc_data()
+    data["fresh_addresses"] = {}
+    top = ranked_candidates(data)[0]
+    data["fresh_addresses"][top["address"]] = {"fresh": True, "history_hours": 2}
+    html = build_html_report(data, _bsc_network())
+    assert html.index("Case overview") < html.index("Most likely candidates")
+    svg = html[html.index('<svg class="flow"') : html.index("</svg>")]
+    assert "Depositor" in svg and "pool</text>" in svg
+    assert top["address"][:6] in svg and "fresh" in svg
+    assert "#0f766e" in svg or "#b45309" in svg
+    assert "fresh addresses (context, not scored)" in html
