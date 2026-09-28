@@ -28,7 +28,7 @@ dependencies = [
 
 [project.optional-dependencies]
 web = ["flask>=3.0,<4"]
-dev = ["pytest>=8.0,<10", "ruff>=0.6,<0.17"]
+dev = ["pytest>=8.0,<10", "ruff>=0.6,<0.17", "hypothesis>=6.100,<7"]
 
 [project.scripts]
 tornado-demix = "tornado_demix.cli:main"
