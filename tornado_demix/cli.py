@@ -45,6 +45,7 @@ from .report import (
     write_multi_csv,
     write_multi_report,
     write_relayer_csv,
+    write_trace_report,
 )
 from .rpc import make_contract_check
 from .trace import MAX_HOPS, trace_funds
@@ -485,6 +486,9 @@ def cmd_trace(args: argparse.Namespace) -> None:
         with open(args.json, "w", encoding="utf-8") as fh:
             json.dump(result, fh, indent=1, sort_keys=True)
         print(f"[*] JSON trace: {args.json}", file=sys.stderr)
+    if getattr(args, "report", ""):
+        write_trace_report(result, args.report, net)
+        print(f"[*] HTML report: {args.report}", file=sys.stderr)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -592,6 +596,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--max-hops", type=int, default=MAX_HOPS, help=f"hops to follow (default {MAX_HOPS})"
     )
     p_trace.add_argument("--json", default="", help="write the trace as JSON to this path")
+    p_trace.add_argument("--report", default="", help="write an HTML trace report to this path")
     p_trace.add_argument(
         "--api-csv", default=None, help="CSV with an api_key for the explorer (see demix)"
     )

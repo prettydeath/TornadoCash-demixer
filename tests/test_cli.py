@@ -437,3 +437,15 @@ def test_cmd_trace_prints_edges_and_terminals_and_writes_json(monkeypatch, args,
 def test_the_trace_subcommand_parses():
     ns = cli.build_parser().parse_args(["trace", fx.BOB, "--amount", "2"])
     assert ns.func is cli.cmd_trace and ns.max_hops == cli.MAX_HOPS
+
+
+def test_cmd_trace_writes_an_html_report(monkeypatch, args, tmp_path):
+    from tests.test_webui import _TRACE
+
+    _stub(monkeypatch, trace_funds=lambda *a, **kw: _TRACE, load_attribution=lambda *a, **kw: {})
+    path = str(tmp_path / "t.html")
+    cli.cmd_trace(
+        args(address=fx.BOB, amount=2.0, token="", start_block=0, max_hops=4, json="", report=path)
+    )
+    html = open(path, encoding="utf-8").read()
+    assert "Multi-hop trace of withdrawn funds" in html and "swap → DAI" in html

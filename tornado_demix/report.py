@@ -24,10 +24,12 @@ from .report_html import (  # noqa: F401
     build_cluster_report,
     build_html_report,
     build_multi_report,
+    build_trace_report,
     write_characterize_report,
     write_cluster_report,
     write_html_report,
     write_multi_report,
+    write_trace_report,
 )
 from .report_json import (  # noqa: F401
     analysis_assumptions,

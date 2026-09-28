@@ -119,7 +119,7 @@ def test_an_unknown_analysis_is_rejected_not_silently_run_as_cluster(client):
 
 
 def test_the_real_analyses_are_accepted():
-    assert set(webapp.ANALYSES) == {"demix", "multi", "cluster", "characterize"}
+    assert set(webapp.ANALYSES) == {"demix", "multi", "cluster", "characterize", "trace"}
 
 
 def test_characterize_needs_exactly_one_address(client):
@@ -388,3 +388,79 @@ def test_the_csv_download_needs_a_run_first(client):
     webapp._STORE.clear()
     res = client.get("/download.csv")
     assert res.status_code == 404
+
+
+# trace
+_TRACE = {
+    "start": WALLET,
+    "amount": 2.0,
+    "asset": "ETH",
+    "edges": [
+        {
+            "hop": 1,
+            "from": WALLET,
+            "to": "0x" + "7" * 40,
+            "tx_hash": "0x" + "ab" * 32,
+            "ts": 0,
+            "asset": "ETH",
+            "value": 3.0,
+            "attributed": 2.0,
+            "kind": "swap",
+            "swapped_to": "DAI",
+        }
+    ],
+    "terminals": [
+        {
+            "address": "0x" + "8" * 40,
+            "asset": "DAI",
+            "amount": 5000.0,
+            "hop": 2,
+            "reason": "labelled address",
+            "label": {"label": "Hot wallet", "category": "exchange"},
+        }
+    ],
+    "nodes_expanded": 2,
+}
+
+
+@pytest.mark.parametrize(
+    "form, message",
+    [
+        ({}, "amount to follow, as a number"),
+        ({"trace_amount": "0"}, "greater than 0"),
+        ({"trace_amount": "1", "trace_max_hops": "99"}, "hops between 1 and"),
+        ({"trace_amount": "1", "trace_start_block": "x"}, "whole numbers"),
+        ({"trace_amount": "1", "trace_token": "DAI"}, "0x contract address"),
+    ],
+)
+def test_trace_fields_are_validated_before_any_call(client, form, message):
+    response, body = _post(client, analysis="trace", **form)
+    assert response.status_code == 200 and message in body
+
+
+def test_trace_needs_exactly_one_address(client):
+    response, body = _post(client, analysis="trace", wallets=WALLET + "\n0x" + "b" * 40)
+    assert "exactly one exit address" in body
+
+
+def test_trace_runs_renders_and_serves_its_report_and_json(client, monkeypatch):
+    seen = {}
+
+    def fake_trace(*a, **kw):
+        seen.update(kw)
+        return _TRACE
+
+    monkeypatch.setattr(webapp, "trace_funds", fake_trace)
+    monkeypatch.setattr(webapp, "load_attribution", lambda *a, **k: {})
+    response, body = _post(
+        client, analysis="trace", trace_amount="2", trace_start_block="100", trace_max_hops="3"
+    )
+    assert response.status_code == 200
+    assert seen["start_block"] == 100 and seen["max_hops"] == 3 and seen["token"] is None
+    assert "Where the traced funds stop" in body and "swap → DAI" in body
+    assert "Hot wallet (exchange)" in body
+    report = client.get("/report/trace.html").get_data(as_text=True)
+    assert "Multi-hop trace of withdrawn funds" in report and "labelled address" in report
+    assert client.get(f"/result/{WALLET}.json").get_json()["nodes_expanded"] == 2
+    csv_text = client.get("/download.csv").get_data(as_text=True)
+    assert csv_text.startswith("hop,from,to,asset,attributed,value,kind,tx_hash")

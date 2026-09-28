@@ -1153,6 +1153,91 @@ def write_characterize_report(info: dict, path: str, network: Network) -> str:
     return path
 
 
+def build_trace_report(result: dict, network: Network) -> str:
+    """Render a multi-hop FIFO trace (see trace.py) as a self-contained HTML string."""
+    p, generated = _report_head(
+        "Multi-hop trace of withdrawn funds", "FIFO attribution · research use"
+    )
+    p.append(
+        f'<div class="meta">Start <b class="mono">{_e(result["start"])}</b> · '
+        f"{_e(result['amount'])} {_e(result['asset'])} · network <b>{_e(network.name)}</b> · "
+        f"generated <b>{generated}</b></div>"
+    )
+    p.append("</div></div>")
+    p.append('<div class="sheet">')
+    edges, terminals = result["edges"], result["terminals"]
+    swaps = sum(1 for e in edges if e["kind"] == "swap")
+    p.append('<div class="metrics">')
+    for k, v, s in (
+        ("Edges", len(edges), f"{swaps} swap(s)"),
+        ("End points", len(terminals), "where the traced funds stop"),
+        ("Addresses expanded", result["nodes_expanded"], "bounds the API calls"),
+    ):
+        p.append(
+            f'<div class="metric"><div class="k">{k}</div><div class="v">{v}</div>'
+            f'<div class="s">{_e(s)}</div></div>'
+        )
+    p.append("</div>")
+    p.append(
+        '<div class="callout">FIFO attribution is a convention: funds in one account are '
+        "fungible, so each edge says where the traced amount would have gone under that "
+        "rule. Treat every edge as a lead to corroborate.</div>"
+    )
+
+    p.append('<h2>Where the traced funds stop<span class="rule"></span></h2>')
+    if terminals:
+        p.append(
+            '<table><colgroup><col style="width:38%"><col style="width:16%">'
+            '<col style="width:8%"><col></colgroup>'
+            "<tr><th>Address</th><th>Amount</th><th>Hop</th><th>Reason</th></tr>"
+        )
+        for t in terminals:
+            label = format_label(t["label"]) if t.get("label") else ""
+            tag = f' <span class="pill flag">{_e(label)}</span>' if label else ""
+            p.append(
+                f'<tr><td class="mono">{_addr_link(network, t["address"])}</td>'
+                f'<td class="num">{_e(t["amount"])} {_e(t["asset"])}</td>'
+                f'<td class="num">{t["hop"]}</td><td>{_e(t["reason"])}{tag}</td></tr>'
+            )
+        p.append("</table>")
+    else:
+        p.append('<div class="meta">The traced amount was fully attributed along the edges.</div>')
+
+    p.append('<h2>Edges<span class="rule"></span></h2>')
+    if edges:
+        p.append(
+            '<table><colgroup><col style="width:6%"><col style="width:22%">'
+            '<col style="width:22%"><col style="width:18%"><col></colgroup>'
+            "<tr><th>Hop</th><th>From</th><th>To</th><th>Attributed / sent</th>"
+            "<th>Transaction</th></tr>"
+        )
+        for e in edges:
+            swap = (
+                f'<div class="meta">swap → {_e(e["swapped_to"])}</div>'
+                if e.get("swapped_to")
+                else ""
+            )
+            p.append(
+                f'<tr><td class="num">{e["hop"]}</td>'
+                f'<td class="mono">{_addr_link(network, e["from"])}</td>'
+                f'<td class="mono">{_addr_link(network, e["to"])}</td>'
+                f'<td class="num">{_e(e["attributed"])} / {_e(e["value"])} {_e(e["asset"])}{swap}</td>'
+                f'<td class="mono">{_tx_link(network, e["tx_hash"])}</td></tr>'
+            )
+        p.append("</table>")
+    else:
+        p.append('<div class="meta">No outgoing transfer after the start block.</div>')
+    p.append("</div></body></html>")
+    return "".join(p)
+
+
+def write_trace_report(result: dict, path: str, network: Network) -> str:
+    """Write the multi-hop trace HTML report to ``path``."""
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(build_trace_report(result, network))
+    return path
+
+
 def build_cluster_report(traces: list[dict], network: Network) -> str:
     """Render cluster split-exit traces as a self-contained HTML string.
 

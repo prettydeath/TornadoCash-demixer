@@ -18,6 +18,7 @@
          --err-bg:#fdecef; --err-line:#f2b8c1; --err-ink:#8a1c2b;
          --mod-bg:#fbeecf; --weak-bg:#eef1f6; color-scheme:light; }
   *{ box-sizing:border-box; }
+  [hidden]{ display:none !important; }
   body{ margin:0; padding:2.5rem 1.25rem; background:var(--bg); color:var(--ink);
         font:15px/1.6 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif; }
   .wrap{ max-width:1120px; margin:0 auto; }
@@ -118,6 +119,7 @@
           <option value="multi" {% if analysis=='multi' %}selected{% endif %}>multi, correlate wallets</option>
           <option value="cluster" {% if analysis=='cluster' %}selected{% endif %}>cluster, split exits</option>
           <option value="characterize" {% if analysis=='characterize' %}selected{% endif %}>characterize, one exit address</option>
+          <option value="trace" {% if analysis=='trace' %}selected{% endif %}>trace, follow funds from one exit</option>
         </select>
       </div>
       <div>
@@ -139,6 +141,28 @@
                placeholder="off" value="{{ exit_window }}" style="width:6.5rem">
       </div>
       <button type="submit">Analyse</button>
+    </div>
+    <div class="row" id="traceFields" {% if analysis!='trace' %}hidden{% endif %}>
+      <div>
+        <label for="trace_amount" title="Amount the exit address received and you want to follow, e.g. 10 for ten 1 ETH notes.">Amount to follow</label>
+        <input id="trace_amount" name="trace_amount" type="number" min="0" step="any"
+               placeholder="e.g. 10" value="{{ trace_amount }}" style="width:8rem">
+      </div>
+      <div>
+        <label for="trace_start_block" title="Block the funds arrived in; earlier outgoing transfers are not attributed. 0 = from the start.">Start block</label>
+        <input id="trace_start_block" name="trace_start_block" type="number" min="0"
+               placeholder="0" value="{{ trace_start_block }}" style="width:9rem">
+      </div>
+      <div>
+        <label for="trace_token" title="ERC-20 contract of the amount; leave empty for the network's native currency.">Token (optional)</label>
+        <input id="trace_token" name="trace_token" placeholder="native currency"
+               value="{{ trace_token }}" style="width:22rem" class="mono">
+      </div>
+      <div>
+        <label for="trace_max_hops">Hops (1–{{ max_trace_hops }})</label>
+        <input id="trace_max_hops" name="trace_max_hops" type="number" min="1" max="{{ max_trace_hops }}"
+               placeholder="{{ default_hops }}" value="{{ trace_max_hops }}" style="width:5.5rem">
+      </div>
     </div>
   </form>
   <div class="note">Results are probabilistic leads, not proof. Several wallets on a busy pool can take a
@@ -361,6 +385,46 @@
       </table>
       {% else %}<div class="note">No outgoing transfers found.</div>{% endif %}
 
+    {% elif result.kind == 'trace' %}
+      <div class="card">
+        <h3 class="mono">{{ result.start }}
+          <a class="btn" style="float:right;padding:.3rem .7rem;margin-left:.4rem" href="/result/{{ result.start }}.json">JSON</a>
+        </h3>
+        <div class="metrics">
+          <div class="metric"><div class="k">Followed</div><div class="v">{{ result.amount }}</div><div class="s">{{ result.asset }}</div></div>
+          <div class="metric"><div class="k">Edges</div><div class="v">{{ result.edges|length }}</div><div class="s">{{ result.edges|selectattr('kind','equalto','swap')|list|length }} swap(s)</div></div>
+          <div class="metric"><div class="k">End points</div><div class="v">{{ result.terminals|length }}</div><div class="s">where the funds stop</div></div>
+          <div class="metric"><div class="k">Expanded</div><div class="v">{{ result.nodes_expanded }}</div><div class="s">addresses read</div></div>
+        </div>
+        <div class="callout">FIFO attribution is a convention: funds in one account are fungible, so each edge says where the traced amount would have gone under that rule. Treat every edge as a lead to corroborate.</div>
+      </div>
+      <h3>Where the traced funds stop</h3>
+      {% if result.terminals %}
+      <table>
+        <colgroup><col style="width:38%"><col style="width:16%"><col style="width:7%"><col></colgroup>
+        <tr><th>Address</th><th>Amount</th><th>Hop</th><th>Reason</th></tr>
+        {% for t in result.terminals %}
+        <tr><td class="mono"><a href="{{ t.url }}" target="_blank" rel="noopener">{{ t.address }}</a></td>
+          <td class="num">{{ t.amount }} {{ t.asset }}</td><td class="num">{{ t.hop }}</td>
+          <td>{{ t.reason }}{% if t.label %} <span class="flag">{{ t.label }}</span>{% endif %}</td></tr>
+        {% endfor %}
+      </table>
+      {% else %}<div class="note">The traced amount was fully attributed along the edges.</div>{% endif %}
+      <h3>Edges</h3>
+      {% if result.edges %}
+      <table>
+        <colgroup><col style="width:6%"><col style="width:24%"><col style="width:24%"><col style="width:18%"><col></colgroup>
+        <tr><th>Hop</th><th>From</th><th>To</th><th>Attributed / sent</th><th>Transaction</th></tr>
+        {% for e in result.edges %}
+        <tr><td class="num">{{ e.hop }}</td>
+          <td class="mono"><a href="{{ e.from_url }}" target="_blank" rel="noopener">{{ e['from'] }}</a></td>
+          <td class="mono"><a href="{{ e.to_url }}" target="_blank" rel="noopener">{{ e.to }}</a></td>
+          <td class="num">{{ e.attributed }} / {{ e.value }} {{ e.asset }}{% if e.swapped_to %}<div class="note">swap → {{ e.swapped_to }}</div>{% endif %}</td>
+          <td class="mono"><a href="{{ e.tx_url }}" target="_blank" rel="noopener">{{ e.tx_hash }}</a></td></tr>
+        {% endfor %}
+      </table>
+      {% else %}<div class="note">No outgoing transfer after the start block.</div>{% endif %}
+
     {% else %}
       {% for t in result.traces %}
       <div class="card">
@@ -384,6 +448,8 @@
 </div>
 <script>
 (function(){
+  var sel=document.getElementById('analysis'), tf=document.getElementById('traceFields');
+  if(sel && tf) sel.addEventListener('change',function(){ tf.hidden = sel.value!=='trace'; });
   var root=document.documentElement, b=document.getElementById('themeToggle');
   if(b) b.addEventListener('click',function(){
     var cur=(root.getAttribute('data-theme')==='light')?'dark':'light';

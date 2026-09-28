@@ -157,7 +157,7 @@ python -m tornado_demix cluster <wallet> --cache-dir .cache/case-42
 python -m tornado_demix characterize <address> --attribution-dir path/to/labels
 
 # follow 10 ETH withdrawn to <address> in block 12000000 over up to 4 hops
-python -m tornado_demix trace <address> --amount 10 --start-block 12000000 --json out/trace.json
+python -m tornado_demix trace <address> --amount 10 --start-block 12000000 --report out/trace.html
 ```
 
 `python -m tornado_demix <command> --help` lists every option. A configuration or
@@ -170,16 +170,22 @@ to stderr; the summary to stdout.
 python webui/app.py      # http://127.0.0.1:5000
 ```
 
-The form runs the same four analyses. For a demix run it shows the strongest
+The form runs the same five analyses. For a demix run it shows the strongest
 band, the ranked candidates with their band and score, and for each candidate an
 **Evidence** panel listing every evidence family that was checked, whether it
 holds, and the numbers behind it. **Analysis parameters** lists the assumptions
 (voucher gap, window, thresholds) and the block ranges read. The CSV table, the
 HTML report and the full JSON result can be downloaded.
 
+For `trace`, enter one exit address, the amount to follow and optionally the
+block the funds arrived in, an ERC-20 token and the number of hops (up to 8). The
+page lists where the traced funds stop and why (labelled address, hop limit, a
+contract that paid nothing back, not moved on) and every edge with its attributed
+amount, swaps included; the HTML report, CSV and JSON can be downloaded.
+
 ![demix in the web UI: AVAX 500 pool, strong band with its evidence](docs/img/demix-evidence.png)
 
-The UI binds to localhost and has no authentication or CSRF protection; see
+The UI binds to localhost and has no authentication (forms carry a CSRF token); see
 [SECURITY.md](SECURITY.md).
 
 ## Documented cases

@@ -52,11 +52,14 @@ from tornado_demix.report import (  # noqa: E402
     build_cluster_report,
     build_html_report,
     build_multi_report,
+    build_trace_report,
     demix_json,
     deposited_by_asset,
     format_fingerprint,
     format_totals,
 )
+from tornado_demix.rpc import make_contract_check  # noqa: E402
+from tornado_demix.trace import MAX_HOPS, trace_funds  # noqa: E402
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET", os.urandom(16))
@@ -65,7 +68,8 @@ app.config["SESSION_COOKIE_SAMESITE"] = "Strict"
 MAX_WALLETS = 25
 
 # Validated, not defaulted: the dispatch below ends in a bare else.
-ANALYSES = ("demix", "multi", "cluster", "characterize")
+ANALYSES = ("demix", "multi", "cluster", "characterize", "trace")
+MAX_TRACE_HOPS = 8
 
 # Above a year the run becomes a whole-chain scan that exhausts an API key.
 MIN_WINDOW_DAYS = 1
@@ -157,6 +161,12 @@ def _base_context():
         "result": None,
         "error": None,
         "max_wallets": MAX_WALLETS,
+        "max_trace_hops": MAX_TRACE_HOPS,
+        "default_hops": MAX_HOPS,
+        "trace_amount": "",
+        "trace_start_block": "",
+        "trace_token": "",
+        "trace_max_hops": "",
     }
 
 
@@ -394,6 +404,94 @@ def _run_cluster(client, wallets, net, window_days, cache_dir=".cache"):
     return traces, (header, rows), {"cluster": report}
 
 
+def _trace_params(form):
+    """Parse the trace fields. Returns ``(params, error_or_None)``."""
+    try:
+        amount = float((form.get("trace_amount") or "").strip())
+    except ValueError:
+        return None, "Trace needs the amount to follow, as a number."
+    if not amount > 0:
+        return None, "The amount to follow must be greater than 0."
+    raw_block = (form.get("trace_start_block") or "").strip()
+    raw_hops = (form.get("trace_max_hops") or "").strip()
+    try:
+        start_block = int(raw_block) if raw_block else 0
+        max_hops = int(raw_hops) if raw_hops else MAX_HOPS
+    except ValueError:
+        return None, "Start block and hops must be whole numbers."
+    if start_block < 0 or not 1 <= max_hops <= MAX_TRACE_HOPS:
+        return None, "Start block must be 0 or more and hops between 1 and {}.".format(
+            MAX_TRACE_HOPS
+        )
+    token = (form.get("trace_token") or "").strip().lower()
+    if token and not config.is_address(token):
+        return None, "The token must be a 0x contract address, or empty for the native currency."
+    return {
+        "amount": amount,
+        "start_block": start_block,
+        "max_hops": max_hops,
+        "token": token or None,
+    }, None
+
+
+def _run_trace(client, address, net, params):
+    """Follow withdrawn funds forward from one address. Returns (view, table, reports)."""
+    import json
+
+    labels = load_attribution(net.name)
+    result = trace_funds(
+        client,
+        address,
+        params["amount"],
+        start_block=params["start_block"],
+        token=params["token"],
+        currency=net.currency,
+        max_hops=params["max_hops"],
+        labels=labels,
+        is_contract=make_contract_check(net.rpc_url),
+    )
+    edges = [
+        {
+            **e,
+            "from_url": net.addr_url(e["from"]),
+            "to_url": net.addr_url(e["to"]),
+            "tx_url": net.tx_url(e["tx_hash"]),
+        }
+        for e in result["edges"]
+    ]
+    terminals = [
+        {**t, "url": net.addr_url(t["address"]), "label": format_label(t.get("label"))}
+        for t in result["terminals"]
+    ]
+    view = {
+        "start": result["start"],
+        "amount": result["amount"],
+        "asset": result["asset"],
+        "edges": edges,
+        "terminals": terminals,
+        "nodes_expanded": result["nodes_expanded"],
+    }
+    header = ["hop", "from", "to", "asset", "attributed", "value", "kind", "tx_hash"]
+    rows = [
+        [
+            e["hop"],
+            e["from"],
+            e["to"],
+            e["asset"],
+            e["attributed"],
+            e["value"],
+            e["kind"],
+            e["tx_hash"],
+        ]
+        for e in result["edges"]
+    ]
+    reports = {
+        "trace": build_trace_report(result, net),
+        address + ".json": json.dumps(result, indent=1, sort_keys=True),
+    }
+    return view, (header, rows), reports
+
+
 def _run_characterize(client, address, net):
     """Characterise one exit-candidate address. Returns (view, table, reports)."""
     labels = load_attribution(net.name)
@@ -457,6 +555,8 @@ def index():
     # Parse the numeric fields before the try block so bad input becomes a message,
     # not a 500, and echo them back so one error does not blank the other field.
     ctx["exit_window"] = request.form.get("exit_window") or ""
+    for field in ("trace_amount", "trace_start_block", "trace_token", "trace_max_hops"):
+        ctx[field] = request.form.get(field) or ""
     window_days, error = _window_days(request.form.get("window_days"))
     ctx["window_days"] = window_days
     if error:
@@ -488,6 +588,15 @@ def index():
     if analysis == "characterize" and len(wallets) != 1:
         ctx["error"] = "Characterise takes exactly one candidate address."
         return render_template("index.html", **ctx)
+    trace_params = None
+    if analysis == "trace":
+        if len(wallets) != 1:
+            ctx["error"] = "Trace takes exactly one exit address."
+            return render_template("index.html", **ctx)
+        trace_params, error = _trace_params(request.form)
+        if error:
+            ctx["error"] = error
+            return render_template("index.html", **ctx)
 
     networks = load_networks(DEFAULT_NETWORKS_CSV)
     if network_name not in networks:
@@ -515,6 +624,9 @@ def index():
         elif analysis == "characterize":
             view, table, reports = _run_characterize(client, wallets[0], net)
             payload = {"kind": "characterize", **view}
+        elif analysis == "trace":
+            view, table, reports = _run_trace(client, wallets[0], net, trace_params)
+            payload = {"kind": "trace", **view}
         else:
             traces, table, reports = _run_cluster(client, wallets, net, window_days)
             payload = {"kind": "cluster", "traces": traces}
@@ -529,9 +641,9 @@ def index():
             "reports": reports,
         }
     )
-    # multi/cluster/characterize produce one report, stored under the analysis name.
+    # multi/cluster/characterize/trace produce one report, stored under the analysis name.
     report_key = None
-    if analysis in ("multi", "cluster", "characterize") and reports:
+    if analysis in ("multi", "cluster", "characterize", "trace") and reports:
         report_key = analysis
     payload.update(
         skipped=bad,

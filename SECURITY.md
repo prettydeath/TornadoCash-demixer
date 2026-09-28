@@ -43,8 +43,9 @@ because it is a constant rather than case input.
 ## The web UI
 
 `webui/app.py` binds to `127.0.0.1` with `debug=False` and is meant for one
-local analyst. It has **no authentication and no CSRF protection**, and results
-are held in a process-wide store keyed by a session cookie. Do not put it on a
+local analyst. It has **no authentication**; the form carries a per-session CSRF
+token and the session cookie is `SameSite=Strict`. Results are held in a
+process-wide store keyed by the session cookie. Do not put it on a
 network interface, behind a reverse proxy, or on a shared machine. Anyone who
 can reach the port can spend your API quota and read the last run's results.
 
