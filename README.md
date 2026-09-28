@@ -327,6 +327,11 @@ The method on both public cases, with the numbers behind each claim, is in
   within a band (check a saved result with `tools/sensitivity.py`). How each
   component behaves on generated data with a known answer is in
   [docs/EVALUATION.md](docs/EVALUATION.md).
+- On 31 depositor/exit pairs labelled through ENS (2019-2026), demix found 16 of
+  the 21 pairs inside its window, all through a direct transaction between the
+  two addresses, which the label sees as well; without that signal it found one.
+  Most labelled depositors made single-note deposits, which the count match
+  cannot narrow ([details](docs/EVALUATION.md#a-labelled-set-from-ens)).
 - Single-note vouchers cannot be narrowed by count: every recipient in the
   window has count 1.
 - Busy pools and long windows produce many equal counts. `--exit-window` trades
