@@ -213,3 +213,27 @@ inside the window unless a counter-measure says otherwise. Real pools have burst
 relayer-specific patterns and post-EIP-1559 fee markets. The benchmark is a controlled
 test of the method's components and failure modes; a labelled set of real deposit →
 withdrawal pairs remains the only way to measure its accuracy.
+
+## Checks of the code itself
+
+Run on 2026-09-28 at the commit that added this section.
+
+| Check | Result |
+|---|---|
+| `pytest` (network blocked, incl. `getaddrinfo`) | 616 passed |
+| `pytest-randomly`, seeds 1, 2, 3 | all pass in every order |
+| Branch coverage (`--cov-branch`) | 92 % overall; `heuristics` 97 %, `demix` 84 %, `cli` 82 % |
+| Property-based tests (Hypothesis, 24) and edge-case tests (10) from the independent audit | pass; the four that documented defects now pin the fixes |
+| Mutation testing (`mutmut` 3.8 on `heuristics.py` and `demix.py`, 2479 mutants) | 1751 killed (71 %), 726 survived, 2 not reached |
+| `pip-audit -r requirements-lock.txt` | no known vulnerabilities |
+| `pytest -m live` (every shipped pool re-verified on chain) | 55 pools on 8 networks verified |
+| README cases re-run (Ronin, Wintermute, Beanstalk) | same figures: 12,595.3 ETH hop; one 9.9435 ETH inflow; 271 deposits in 2.97 h, one `weak` candidate |
+
+Most surviving mutants change log and evidence wording, result keys that no
+test reads, or fallback values that the pipeline never reaches (a signal
+without a weight, a boundary that no input can hit). Mutation testing raised
+the score from 65 % by pinning what it found in the core: transfer mode had no
+test at all, and the voucher span limit, counterparty collection, the shape of a
+voucher and the end-to-end run of `run_demix` were unpinned at their edges.
+mutmut does not run natively on Windows; the run used the `python:3.13-slim`
+container.

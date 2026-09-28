@@ -149,3 +149,39 @@ def test_transfer_mode_counts_only_pool_payouts_inside_the_fee_window():
     assert [d["hash"] for d in res["detail"][fx.BOB]] == ["0x3", "0x4"]
     assert res["fee_window"] == [0.9, 0.995]
     assert res["window_blocks"] == [100, 200]
+
+
+def test_run_demix_end_to_end_keys_span_and_a_self_sent_withdrawal():
+    """One run: a mixed-case wallet, the voucher span limit, the result keys and
+    params, and a withdrawal the depositor sent itself (linked_sender)."""
+    from tests.test_demix import RELAYER, _FakeClient, _recipient, _tx, _wlog
+    from tornado_demix.constants import ZERO_ADDRESS
+    from tornado_demix.demix import run_demix
+
+    deposits = [_tx(fx.POOL_01_ETH, 0.1, 1000 + i * 3600, 10 + i, "0xdep%d" % i) for i in range(3)]
+    winner = _recipient(1)
+    nullifiers = [format(9000 + k, "064x") for k in range(2)]
+    logs = [_wlog(winner, n, RELAYER, 10**15) for n in nullifiers]
+    logs += [_wlog(_recipient(i), format(i, "064x"), RELAYER, 10**15) for i in range(2, 41)]
+    # The depositor itself broadcast the first withdrawal (value 0: not a deposit).
+    sent = _tx(fx.POOL_01_ETH, 0, 1100, 100, "0x" + nullifiers[0])
+    client = _FakeClient(deposits + [sent], logs)
+
+    data = run_demix(
+        client,
+        fx.WALLET.upper().replace("0X", "0x"),
+        network=fx.network(),
+        max_voucher_span_hours=1.5,
+    )
+
+    assert data["wallet"] == fx.WALLET
+    assert [v["count"] for v in data["vouchers"]] == [2, 1]  # the span limit applied
+    assert data["params"]["network"] == fx.network().name
+    assert data["params"]["currency"] == fx.network().currency
+    assert data["params"]["gap_hours"] == 24
+    res = data["denoms"]["0.1 ETH"]
+    assert res["target_counts"] == [1, 2, 3]
+    assert "linked_sender" in res["signals"][winner]
+    assert data["heuristics"]["linked_senders"][0][1] == winner
+    assert "deposit_gas_prices" in data["heuristics"]
+    assert ZERO_ADDRESS not in res["counts"]
