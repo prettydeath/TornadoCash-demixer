@@ -17,6 +17,7 @@ from .constants import WEI
 from .errors import ApiError, ApiKeyError, BlockLookupError
 from .etherscan import EtherscanClient
 from .events import fetch_withdrawals
+from .groups import exit_groups
 from .heuristics import apply_heuristics, count_is_evidence, ranked_candidates
 from .networks import Network, load_networks
 from .pools import Pool
@@ -584,6 +585,7 @@ def run_demix(
     network: Network | None = None,
     exit_window_hours: float | None = None,
     max_voucher_span_hours: float | None = None,
+    known_exits=(),
 ) -> dict:
     """Full single-wallet demix. Returns a structured result dict.
 
@@ -714,4 +716,7 @@ def run_demix(
         ),
     )
     result["fresh_addresses"] = fresh_addresses(client, result)
+    # Exits withdrawn in joint bursts; anchored by a corroborated candidate or a
+    # known exit. Context only, like the fresh mark.
+    result["exit_groups"] = exit_groups(result, ranked_candidates(result), known_exits)
     return result

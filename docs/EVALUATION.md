@@ -199,6 +199,14 @@ of the 5 funders received its funds directly from the bridge exploiter
 `0x0d04...ded00`. A sixth funder, shared by 4 depositors, has 200 or more
 transactions and is left out as busy.
 
+**Exit groups.** In Harmony, 287 of the 295 true exits found in the depositors'
+windows sit in an exit group. With one true exit as the only anchor, the group
+holds 23.0 addresses on average, 16.8 of them (73 %) on the investigators' list;
+the other members were paid out in the same bursts and are leads, not errors, as
+the list itself is partial. In KuCoin the exits, sent by the attacker's own
+caller at different times, form no group, and the chance `moderate` candidate of
+the second depositor is in none either, so it anchors nothing.
+
 Both cases show the same limit as the synthetic counter-measures: when notes are
 pooled and redistributed, a count match finds nothing, and the tool reports no
 lead rather than a wrong one. Real laundering elsewhere shows the same pattern:

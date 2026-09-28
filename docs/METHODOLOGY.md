@@ -317,6 +317,22 @@ candidates. Tracing hundreds of false candidates, or a count that discriminates 
 dilutes the signal. Absence of a 1-hop reconvergence is itself informative: it suggests
 dispersed exits (good operational security) or reconvergence deeper than one hop.
 
+## 5a. Exit groups
+
+When an operator pools several deposits and pays the notes out to many fresh
+addresses, no exit receives a voucher-sized count and the count match finds
+nothing (both public cases in docs/EVALUATION.md). The payout rhythm remains:
+the operator withdraws in bursts and its exits recur in the same bursts. Among
+the recipients with two or more withdrawals, two are joined when at least
+`MIN_JOINT` = 2 of their withdrawals fall within `JOINT_WINDOW_S` = 10 minutes of
+each other; connected groups of three or more are exit groups.
+
+A group says that its members were paid out together, not whose notes they
+were: another busy withdrawer forms groups as well. It is therefore tied to the
+depositor only through an anchor, a member that is a `strong` or `moderate`
+candidate or an exit the investigator already knows (`--known-exit`). Unanchored
+groups are counted, not listed, and no group enters a score or a band.
+
 ## 5b. Multi-hop tracing (trace)
 
 `trace` follows an amount forward from an exit address, after MixGuard's

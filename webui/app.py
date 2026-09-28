@@ -167,10 +167,11 @@ def _base_context():
         "trace_start_block": "",
         "trace_token": "",
         "trace_max_hops": "",
+        "known_exits": "",
     }
 
 
-def _run_demix(client, wallets, net, window_days, mode, exit_window_hours=None):
+def _run_demix(client, wallets, net, window_days, mode, exit_window_hours=None, known_exits=()):
     """Per-wallet demix. Returns (blocks, csv_rows, reports)."""
     blocks, rows, reports = [], [], {}
     labels = load_attribution(net.name)
@@ -182,6 +183,7 @@ def _run_demix(client, wallets, net, window_days, mode, exit_window_hours=None):
             mode=mode,
             network=net,
             exit_window_hours=exit_window_hours,
+            known_exits=known_exits,
         )
         reports[wallet] = build_html_report(data, net, attribution=labels)
         reports[wallet + ".json"] = demix_json(data, attribution=labels)
@@ -303,6 +305,17 @@ def _run_demix(client, wallets, net, window_days, mode, exit_window_hours=None):
                 "methods": methods,
                 "xmatch": xmatch,
                 "conclusion": conclusion(data),
+                "groups": [
+                    {
+                        "pool_key": g["pool_key"],
+                        "notes": g["notes"],
+                        "anchors": ", ".join(f"{a['address']} ({a['why']})" for a in g["anchors"]),
+                        "members": [{"address": a, "url": net.addr_url(a)} for a in g["members"]],
+                    }
+                    for g in data.get("exit_groups", [])
+                    if g["anchored"]
+                ],
+                "n_unanchored": sum(1 for g in data.get("exit_groups", []) if not g["anchored"]),
                 "no_deposits": not data["vouchers"],
                 "deposited": format_totals(deposited_by_asset(data["vouchers"])),
                 # Never searched, which is not the same as "no candidates".
@@ -555,7 +568,13 @@ def index():
     # Parse the numeric fields before the try block so bad input becomes a message,
     # not a 500, and echo them back so one error does not blank the other field.
     ctx["exit_window"] = request.form.get("exit_window") or ""
-    for field in ("trace_amount", "trace_start_block", "trace_token", "trace_max_hops"):
+    for field in (
+        "trace_amount",
+        "trace_start_block",
+        "trace_token",
+        "trace_max_hops",
+        "known_exits",
+    ):
         ctx[field] = request.form.get(field) or ""
     window_days, error = _window_days(request.form.get("window_days"))
     ctx["window_days"] = window_days
@@ -589,6 +608,10 @@ def index():
         ctx["error"] = "Characterise takes exactly one candidate address."
         return render_template("index.html", **ctx)
     trace_params = None
+    known_exits, bad_known = _parse_wallets(request.form.get("known_exits") or "")
+    if bad_known:
+        ctx["error"] = "Known exits must be 0x addresses: {}".format(", ".join(bad_known))
+        return render_template("index.html", **ctx)
     if analysis == "trace":
         if len(wallets) != 1:
             ctx["error"] = "Trace takes exactly one exit address."
@@ -615,7 +638,7 @@ def index():
         client = EtherscanClient(api_key, **net.client_kwargs())
         if analysis == "demix":
             blocks, table, reports = _run_demix(
-                client, wallets, net, window_days, mode, exit_window
+                client, wallets, net, window_days, mode, exit_window, known_exits
             )
             payload = {"kind": "demix", "blocks": blocks}
         elif analysis == "multi":

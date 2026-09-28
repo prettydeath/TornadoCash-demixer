@@ -142,6 +142,13 @@
       </div>
       <button type="submit">Analyse</button>
     </div>
+    <div class="row" id="demixFields" {% if analysis not in ('demix', '') %}hidden{% endif %}>
+      <div style="flex:1">
+        <label for="known_exits" title="Exits already known from the investigation. The recipients withdrawn with them in joint bursts (their exit group) are listed; context, not scored.">Known exits (optional, demix)</label>
+        <input id="known_exits" name="known_exits" class="mono" style="width:100%"
+               placeholder="0x…, 0x…" value="{{ known_exits }}">
+      </div>
+    </div>
     <div class="row" id="traceFields" {% if analysis!='trace' %}hidden{% endif %}>
       <div>
         <label for="trace_amount" title="Amount the exit address received and you want to follow, e.g. 10 for ten 1 ETH notes.">Amount to follow</label>
@@ -306,6 +313,14 @@
                 {% endfor %}
               </table>
             {% endif %}
+            {% if b.groups or b.n_unanchored %}
+            <h4 style="margin:1.1rem 0 .3rem;font-size:.9rem;">Exit groups</h4>
+            <div class="note" style="margin-bottom:.3rem;">Recipients withdrawn together in repeated bursts, as an operator paying out pooled notes does. Tied to this depositor only through an anchor (a corroborated candidate or a known exit); context, not scored. {{ b.n_unanchored }} group(s) without an anchor are not listed.</div>
+            {% for g in b.groups %}
+              <div style="font-size:.82rem;margin:.5rem 0 .2rem;"><span class="pill">{{ g.pool_key }}</span> {{ g.members|length }} addresses · {{ g.notes }} notes · anchor <span class="mono">{{ g.anchors }}</span></div>
+              <div class="mono" style="font-size:.76rem;">{% for m in g.members %}<a href="{{ m.url }}" target="_blank" rel="noopener">{{ m.address }}</a>{% if not loop.last %}<br>{% endif %}{% endfor %}</div>
+            {% endfor %}
+            {% endif %}
             <h4 style="margin:1.1rem 0 .3rem;font-size:.9rem;">Summary</h4>
             <div class="callout" style="white-space:pre-line">{{ b.conclusion }}</div>
           {% endif %}
@@ -449,7 +464,9 @@
 <script>
 (function(){
   var sel=document.getElementById('analysis'), tf=document.getElementById('traceFields');
-  if(sel && tf) sel.addEventListener('change',function(){ tf.hidden = sel.value!=='trace'; });
+  var df=document.getElementById('demixFields');
+  if(sel && tf) sel.addEventListener('change',function(){
+    tf.hidden = sel.value!=='trace'; if(df) df.hidden = sel.value!=='demix'; });
   var root=document.documentElement, b=document.getElementById('themeToggle');
   if(b) b.addEventListener('click',function(){
     var cur=(root.getAttribute('data-theme')==='light')?'dark':'light';

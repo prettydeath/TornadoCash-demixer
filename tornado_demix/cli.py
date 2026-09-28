@@ -195,6 +195,7 @@ def cmd_demix(args: argparse.Namespace) -> None:
         network=net,
         exit_window_hours=args.exit_window,
         max_voucher_span_hours=getattr(args, "max_voucher_span", None),
+        known_exits=[_valid_address(a) for a in getattr(args, "known_exit", None) or []],
     )
 
     print("\n=== DEMIX SUMMARY ===")
@@ -223,6 +224,17 @@ def cmd_demix(args: argparse.Namespace) -> None:
         print("  their first withdrawal (disposable exit; context, not scored):")
         for addr in fresh:
             print(f"     {addr}")
+
+    anchored = [g for g in data.get("exit_groups", []) if g["anchored"]]
+    if anchored:
+        print("\n[groups] exits withdrawn in joint bursts with an anchor (context, not scored):")
+        for g in anchored:
+            why = ", ".join(f"{a['address']} ({a['why']})" for a in g["anchors"])
+            print(
+                f"  [{g['pool_key']}] {len(g['members'])} addresses, {g['notes']} notes; anchor {why}"
+            )
+            for addr in g["members"]:
+                print(f"     {addr}")
 
     # A pool whose block lookup failed was never searched; say so per pool.
     for unresolved in data.get("unresolved", []):
@@ -511,6 +523,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--json",
         default="",
         help="write the full result (parameters, candidates, raw data) as JSON to this path",
+    )
+    p_demix.add_argument(
+        "--known-exit",
+        action="append",
+        default=[],
+        metavar="ADDRESS",
+        help="an exit already known from the investigation (repeatable); its exit "
+        "group, the recipients withdrawn with it in joint bursts, is listed",
     )
     p_demix.add_argument(
         "--attribution-dir",

@@ -464,3 +464,21 @@ def test_trace_runs_renders_and_serves_its_report_and_json(client, monkeypatch):
     assert client.get(f"/result/{WALLET}.json").get_json()["nodes_expanded"] == 2
     csv_text = client.get("/download.csv").get_data(as_text=True)
     assert csv_text.startswith("hop,from,to,asset,attributed,value,kind,tx_hash")
+
+
+def test_known_exits_must_be_addresses(client):
+    response, body = _post(client, analysis="demix", known_exits="not-an-address")
+    assert "Known exits must be 0x addresses" in body
+
+
+def test_known_exits_reach_the_demix_run(client, monkeypatch):
+    seen = {}
+    real = webapp.run_demix
+
+    def spy(*a, **kw):
+        seen.update(kw)
+        return real(*a, **kw)
+
+    monkeypatch.setattr(webapp, "run_demix", spy)
+    _post(client, analysis="demix", known_exits="0x" + "c" * 40)
+    assert seen["known_exits"] == ["0x" + "c" * 40]

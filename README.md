@@ -35,6 +35,9 @@ traces users leave around it.
   signal counts). Reports state the analysis parameters and the block ranges read.
 - Marks the top candidates that had at most a day of history before their first
   withdrawal (fresh, disposable exits; shown as context, never scored).
+- Groups exits withdrawn together in repeated bursts, the payout rhythm of an
+  operator that pooled several deposits; a group is listed when a corroborated
+  candidate or an exit you already know (`--known-exit`) anchors it.
 - Opens the HTML report with a case overview and a flow diagram: depositor, pools,
   candidate exits coloured by band.
 - For several wallets: shared candidates, denomination-profile matches,
@@ -58,6 +61,7 @@ The method, thresholds and the reasoning behind them are in
 | `tornado_demix/heuristics.py` | signals, `count_discrimination`, noisy-OR score, bands |
 | `tornado_demix/multi.py`, `graph.py` | multi-wallet correlation, consolidator grading, clustering |
 | `tornado_demix/cluster.py` | one-hop tracing of split exits, on-disk cache |
+| `tornado_demix/groups.py` | exit groups from joint withdrawal bursts |
 | `tornado_demix/trace.py` | multi-hop FIFO tracing of withdrawn funds with swap resolution |
 | `tornado_demix/characterize.py`, `attribution.py` | recipient-side analysis, address labels |
 | `tornado_demix/etherscan.py`, `rpc.py`, `events.py` | explorer client, JSON-RPC probes, event decoding |
@@ -142,6 +146,9 @@ python -m tornado_demix demix 0x019b5bb2051797e33f726d0e7a8cb9b9c2003ac2 \
 
 # narrow the search to 6 hours after each voucher's last deposit
 python -m tornado_demix demix <wallet> --exit-window 6
+
+# list the exit group of an exit already known from the investigation
+python -m tornado_demix demix <wallet> --known-exit <exit address>
 
 # a 7-day exit window, as seen in public laundering cases
 python -m tornado_demix demix <wallet> --rapid

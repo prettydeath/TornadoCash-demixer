@@ -34,6 +34,7 @@ from tornado_demix.constants import TOPIC_WITHDRAWAL  # noqa: E402
 from tornado_demix.demix import detect_deposits, run_demix  # noqa: E402
 from tornado_demix.etherscan import EtherscanClient  # noqa: E402
 from tornado_demix.events import decode_withdrawal  # noqa: E402
+from tornado_demix.groups import co_withdrawal_groups  # noqa: E402
 from tornado_demix.heuristics import ranked_candidates  # noqa: E402
 from tornado_demix.multi import shared_funders  # noqa: E402
 from tornado_demix.networks import get_network  # noqa: E402
@@ -175,6 +176,29 @@ def evaluate(client, network, wallets, truth):
     print(
         f"  exits in a window with at most a day of history before it: {fresh} of {len(first_in)}"
     )
+    # Exit groups: from each true exit as the only anchor, how many of the group's
+    # members are on the truth list.
+    seeds = anchored = found = size = 0
+    for data in results.values():
+        for res in data["denoms"].values():
+            groups = co_withdrawal_groups(res)
+            for addr in res["counts"]:
+                if addr not in truth:
+                    continue
+                seeds += 1
+                group = next((g for g in groups if addr in g), None)
+                if group:
+                    anchored += 1
+                    size += len(group)
+                    found += len(group & truth)
+    if anchored:
+        print(
+            f"  exit groups: {anchored} of {seeds} true exits sit in a group; from one of them "
+            f"the group has {size / anchored:.1f} addresses, {found / anchored:.1f} on the "
+            f"truth list ({found / size:.0%})"
+        )
+    else:
+        print(f"  exit groups: none of {seeds} true exits sits in a group")
     funders = _quiet(shared_funders, client, results)
     print(f"  funders shared by 2+ depositors (not busy): {len(funders)}")
     for funder, ws in funders.items():

@@ -261,6 +261,33 @@ def _flow_svg(data: dict, cands: list[dict], limit: int = 8) -> str:
     return "".join(parts)
 
 
+def _groups_html(groups: list[dict], network: Network) -> str:
+    """Exit groups (see groups.py): anchored ones in full, the rest as a count."""
+    if not groups:
+        return ""
+    anchored = [g for g in groups if g["anchored"]]
+    parts = [
+        '<h2>Exit groups<span class="rule"></span></h2>',
+        '<div class="meta">Recipients withdrawn together in repeated bursts (two or more '
+        "withdrawals within ten minutes of each other), as an operator paying out pooled "
+        "notes does. A group is tied to this depositor only through an anchor: a "
+        "corroborated candidate or a known exit. Context for the investigation, not "
+        f"scored. {len(groups) - len(anchored)} group(s) without an anchor are not listed.</div>",
+    ]
+    for g in anchored:
+        anchors = ", ".join(f"{_short(a['address'])} ({a['why']})" for a in g["anchors"])
+        members = "".join(f'<li class="mono">{_addr_link(network, a)}</li>' for a in g["members"])
+        parts.append(
+            '<div class="lead-card">'
+            f'<div class="top"><span class="pill">{_e(g["pool_key"])}</span>'
+            f"<b>{len(g['members'])} addresses · {g['notes']} notes</b>"
+            f'<span class="conf pct">{_e(_ts(g["first_ts"]))} – {_e(_ts(g["last_ts"]))} UTC</span></div>'
+            f'<div class="why">Anchor: {_e(anchors)}</div>'
+            f'<ul class="evidence">{members}</ul></div>'
+        )
+    return "".join(parts)
+
+
 def _case_summary_html(data: dict, cands: list[dict]) -> str:
     """A case-style overview: what was deposited, what was found, and the flow."""
     first = min(v["first_ts"] for v in data["vouchers"])
@@ -416,6 +443,7 @@ def build_html_report(
             "rests on the amount+timing match alone; treat them as starting "
             "points and trace the funding source.</div>"
         )
+    p.append(_groups_html(data.get("exit_groups", []), network))
 
     # A pool whose block lookup failed was never searched; that must not read
     # as "no exits found".

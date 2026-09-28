@@ -449,3 +449,40 @@ def test_cmd_trace_writes_an_html_report(monkeypatch, args, tmp_path):
     )
     html = open(path, encoding="utf-8").read()
     assert "Multi-hop trace of withdrawn funds" in html and "swap → DAI" in html
+
+
+def test_cmd_demix_prints_anchored_exit_groups(monkeypatch, args, capsys):
+    _stub(monkeypatch, load_attribution=lambda *a, **kw: {})
+    data = {
+        "wallet": WALLET,
+        "vouchers": [],
+        "denoms": {},
+        "exit_groups": [
+            {
+                "pool_key": "100 ETH",
+                "members": [fx.BOB, OTHER],
+                "notes": 12,
+                "anchors": [{"address": fx.BOB, "why": "known exit"}],
+                "anchored": True,
+            },
+            {
+                "pool_key": "100 ETH",
+                "members": [fx.ALICE],
+                "notes": 3,
+                "anchors": [],
+                "anchored": False,
+            },
+        ],
+    }
+    seen = {}
+
+    def run_demix(*a, **kw):
+        seen.update(kw)
+        return data
+
+    monkeypatch.setattr(cli, "run_demix", run_demix)
+    cli.cmd_demix(args(wallet=WALLET, known_exit=[fx.BOB.upper().replace("0X", "0x")]))
+    out = capsys.readouterr().out
+    assert seen["known_exits"] == [fx.BOB]
+    assert "2 addresses, 12 notes; anchor " + fx.BOB + " (known exit)" in out
+    assert OTHER in out and fx.ALICE not in out
