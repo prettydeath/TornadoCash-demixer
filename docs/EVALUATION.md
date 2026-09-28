@@ -113,6 +113,26 @@ of wallets.
 | denominations | both pools to one exit | 1.00 | 0.01 | 0.00 | 0.12 | 0.88 | 0.01 |
 | denominations | each pool to its own exit | 1.00 | 0.01 | 0.00 | 0.14 | 0.86 | 0.01 |
 
+#### Counter-measure intensity, six-note voucher (full model)
+
+`python tools/simulate.py --experiment intensity`: the share of trials in which
+the exit is listed, against the number of notes withdrawn after the window and
+the number of exit addresses the notes are spread over.
+
+| Exit leaves | Counter-measure | 0 / 1 | 1 / 2 | 3 / 4 | 5 / 6 | 6 delayed |
+|---|---|---|---|---|---|---|
+| amount and timing only | delayed notes (0, 1, 3, 5, 6 of 6) | 1.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| amount and timing only | exit addresses (1, 2, 4, 6) | 1.00 | 0.00 | 0.00 | 0.00 | |
+| also a direct transfer | delayed notes (0, 1, 3, 5, 6 of 6) | 1.00 | 1.00 | 1.00 | 1.00 | 0.00 |
+| also a direct transfer | exit addresses (1, 2, 4, 6) | 1.00 | 1.00 | 1.00 | 1.00 | |
+
+One delayed note or a second exit address is enough to remove an exit that
+left only amount and timing. An exit that also transacted with the depositor is
+found as long as one note lands in the window; with k exit addresses only that
+one is found, so the share of exits found falls as 1/k (0.50, 0.25, 0.17). A
+bystander reaches `strong` in 3-7 % of trials at every intensity, through a
+chance gas-price match.
+
 #### Operator links between two wallets (configuration G)
 
 | Wallets | merged without suppression | merged with suppression |
@@ -261,6 +281,18 @@ nothing about them. The set covers only users careless enough to put an ENS
 name on both sides, names are read as they are today, and a pair links two
 addresses, not a deposit to a withdrawal. The pairs link named people to
 Tornado Cash use, so they stay local; only these aggregates are published.
+
+## Do the signals move together?
+
+The families are assumed independent. Across the real runs behind the two
+evaluations above (27 ENS-labelled depositors and 4 depositors of the KuCoin and
+Harmony cases: 43,424 recipient-pool rows), every pair of signals fired together
+about as often as independence predicts: count match and self-relay 4 times
+(6.97 expected), count match and gas price 3 (2.68), count match and linked 4
+(2.56), every other pair 0 against expectations below 0.4; the phi coefficient
+stays within -0.006 and 0.004. The signals are rare (gas price 42, linked 40,
+linked sender 6), so this describes the background rather than true pairs, where
+signals are meant to coincide.
 
 ## Checks of the code itself
 

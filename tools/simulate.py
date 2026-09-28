@@ -12,6 +12,7 @@ Experiments (``--experiment``):
 * ``ablation``    - configurations A-F, each adding one component to the last;
 * ``controls``    - negative controls: wallets with no findable exit in the window;
 * ``counter``     - counter-measures, one at a time;
+* ``intensity``   - detection against the strength of a counter-measure;
 * ``operators``   - operator links between two wallets, with and without the
   window-overlap suppression (configuration G);
 * ``sensitivity`` - the same measures under other assumptions about the field.
@@ -452,6 +453,47 @@ def experiment_counter(trials, seed, size):
     return out
 
 
+INTENSITY_NOTES = 6
+INTENSITY_EXITS = {
+    "amount+timing only": Case(notes={POOL_1: INTENSITY_NOTES}),
+    "with a direct transfer": Case(notes={POOL_1: INTENSITY_NOTES}, linked=True),
+}
+
+
+def experiment_intensity(trials, seed, size):
+    """Detection against the strength of a counter-measure, for a six-note voucher.
+
+    Two sweeps: notes withdrawn after the window (0..6) and exit addresses the
+    notes are spread over (1..6), each for an exit that leaves only amount and
+    timing and for one that also transacted directly with the depositor.
+    """
+    out = {}
+    for exit_label, base in INTENSITY_EXITS.items():
+        for sweep, values, make in (
+            ("delayed notes", range(INTENSITY_NOTES + 1), lambda b, v: replace(b, delayed=v)),
+            ("exit addresses", range(1, INTENSITY_NOTES + 1), lambda b, v: replace(b, split=v)),
+        ):
+            for v in values:
+                rng = random.Random(seed)
+                score = Score()
+                case = make(base, v)
+                for _ in range(trials):
+                    data, truth = single_trial(rng, case, Field(size=size))
+                    score.add(data, truth, ranking(data, FULL, rng))
+                out[(exit_label, sweep, v)] = score.metrics()
+    return out
+
+
+def print_intensity(result):
+    print("\n### Counter-measure intensity, six-note voucher (full model)\n")
+    cols = ["found", "recall", "top-1", "bystander strong", "bystander moderate"]
+    keys = ["found", "recall", "top1", "bystander_strong", "bystander_moderate"]
+    print(_row(["exit", "sweep", "value"] + cols))
+    print(_row(["---"] * (len(cols) + 3)))
+    for (exit_label, sweep, v), m in result.items():
+        print(_row([exit_label, sweep, str(v)] + [f"{m[k]:.2f}" for k in keys]))
+
+
 OPERATOR_KINDS = (
     "unrelated, identical fingerprints, same hour",
     "unrelated, distinct fingerprints, same hour",
@@ -569,7 +611,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument(
         "--experiment",
-        choices=["ablation", "controls", "counter", "operators", "sensitivity", "all"],
+        choices=["ablation", "controls", "counter", "intensity", "operators", "sensitivity", "all"],
         default="all",
     )
     parser.add_argument("--trials", type=int, default=200)
@@ -577,7 +619,7 @@ def main(argv=None):
     parser.add_argument("--sizes", type=int, nargs="+", default=[10, 50, 200])
     args = parser.parse_args(argv)
     todo = (
-        ["ablation", "controls", "counter", "operators", "sensitivity"]
+        ["ablation", "controls", "counter", "intensity", "operators", "sensitivity"]
         if args.experiment == "all"
         else [args.experiment]
     )
@@ -597,6 +639,8 @@ def main(argv=None):
             experiment_counter(args.trials, args.seed, size),
             "counter-measure",
         )
+    if "intensity" in todo:
+        print_intensity(experiment_intensity(args.trials, args.seed, size))
     if "operators" in todo:
         print_operators(experiment_operators(args.trials, args.seed, size))
     if "sensitivity" in todo:
