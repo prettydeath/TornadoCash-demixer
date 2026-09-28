@@ -190,35 +190,133 @@ page lists where the traced funds stop and why (labelled address, hop limit, a
 contract that paid nothing back, not moved on) and every edge with its attributed
 amount, swaps included; the HTML report, CSV and JSON can be downloaded.
 
-![demix in the web UI: AVAX 500 pool, strong band with its evidence](docs/img/demix-evidence.png)
+![demix in the web UI with the evidence panel open](docs/img/demix-evidence.png)
+*A demix run on Avalanche: two vouchers, a `strong` candidate (count match plus a direct transaction with the depositor) and the evidence panel listing every family that was checked.*
 
 The UI binds to localhost and has no authentication (forms carry a CSRF token); see
 [SECURITY.md](SECURITY.md).
 
 ## Documented cases
 
-The three cases below have an external source of truth and can be re-run from the
-addresses shown. In each, the tool does not recover the laundering path; it shows
-facts that can be checked independently.
+Five public cases with an external source of truth. Each can be re-run from the
+addresses shown (an Etherscan API key is enough; the Ronin labels need an
+attribution set). The screenshots are from the web UI; the CLI prints the same
+results. A new run can show slightly different counts as the chain grows and open
+search windows are clamped to the current block.
 
-| Case | Command | What the tool shows | Needs |
-|---|---|---|---|
-| Ronin Bridge exploiter `0x098B716B8Aaf21512996dC57EB0615e2383E2f96` | `characterize` | the address labelled as OFAC-sanctioned; its next transactions: contract calls to Circle: USDC and the Ronin Bridge, and 12,595 ETH sent to a second sanctioned address | the wallet-attribution dataset (it contains these OFAC SDN entries); without labels the same hops are shown unlabelled |
-| Wintermute attacker `0xe74b28c2eAe8679e3cCc3a94d5d0dE83CCB84705` | `characterize` | one inflow of 9.9435 ETH from the 10 ETH pool on the day of the attack | API key |
-| Beanstalk attacker `0x1c5dCdd006EA78a7E4783f9e6021C32935a10fb4` | `demix --exit-window 24` | 271 deposits (247 x 100, 14 x 10, 9 x 1, 1 x 0.1 ETH) within about three hours; no candidate above `weak` | API key |
+| # | Case | Analysis | What it shows | Source of truth |
+|---|---|---|---|---|
+| 1 | Ronin Bridge 2022 | `characterize` | OFAC-labelled exploiter, bridge and USDC calls, 12,595 ETH to a second sanctioned address | [OFAC, 14 Apr 2022](https://ofac.treasury.gov/recent-actions/20220414) |
+| 2 | Wintermute 2022 | `characterize` | one 9.9435 ETH inflow from the 10 ETH pool; a disposable address | [Merkle Science](https://www.merklescience.com/blog/hack-track-analysis-of-wintermute-attack) |
+| 3 | Beanstalk 2022 | `demix --exit-window 24` | 271 deposits in three hours; no candidate above `weak` | [Merkle Science](https://www.merklescience.com/blog/hack-track-analysis-of-beanstalk-flash-loan-attack) |
+| 4 | KuCoin 2020 | `demix` | 6 of 7 exits found through the linked withdrawal sender | [tayvano/lazarus-bluenoroff-research](https://github.com/tayvano/lazarus-bluenoroff-research) |
+| 5 | Harmony 2022 | `demix --known-exit`, `multi`, `trace` | an exit group from one known exit; 14 depositors in 5 funder clusters; a three-hop trace | [tayvano/lazarus-bluenoroff-research](https://github.com/tayvano/lazarus-bluenoroff-research) |
 
-Sources: [OFAC action of 14 Apr 2022](https://ofac.treasury.gov/recent-actions/20220414),
-[Merkle Science on Wintermute](https://www.merklescience.com/blog/hack-track-analysis-of-wintermute-attack),
-[Merkle Science on Beanstalk](https://www.merklescience.com/blog/hack-track-analysis-of-beanstalk-flash-loan-attack).
-Attributing the Ronin theft to Lazarus was government intelligence, not on-chain
-analysis; the identity of the other two attackers is not established.
+Attributing the Ronin, KuCoin and Harmony thefts to Lazarus is the conclusion of
+government and industry investigators, not of on-chain analysis; the identity of
+the Wintermute and Beanstalk attackers is not established.
 
-![characterize: Ronin exploiter](docs/img/case-ronin.png)
-![characterize: Wintermute attacker](docs/img/case-wintermute.png)
-![demix: Beanstalk attacker](docs/img/case-beanstalk.png)
+### 1. Ronin Bridge exploiter
 
-A new run can show slightly different counts as the chain grows and open search
-windows are clamped to the current block.
+```bash
+python -m tornado_demix characterize 0x098B716B8Aaf21512996dC57EB0615e2383E2f96
+```
+
+The exploiter received nothing from a Tornado pool; `characterize` shows where
+its funds went next. With the attribution set loaded, the address itself and the
+12,595.3 ETH destination are labelled OFAC-sanctioned, and the contract calls go
+to Circle: USDC and the Ronin Bridge. Without labels the same hops are shown
+unlabelled.
+
+![Ronin exploiter in characterize](docs/img/case-ronin.png)
+*`characterize` on the Ronin exploiter: attribution labels, no pool inflows, and the dominant next hops with the 12,595.3 ETH transfer to a second sanctioned address.*
+
+### 2. Wintermute attacker
+
+```bash
+python -m tornado_demix characterize 0xe74b28c2eAe8679e3cCc3a94d5d0dE83CCB84705
+```
+
+One inflow of 9.9435 ETH from the 10 ETH pool on the day of the attack
+(2022-09-20), the first activity of the address: it is flagged as disposable, the
+pattern of 98.6 % of laundering exits in the MixLaunder cases.
+
+![Wintermute attacker in characterize](docs/img/case-wintermute.png)
+*`characterize` on the Wintermute attacker: one pool inflow, classified as a possible personal exit and flagged disposable.*
+
+### 3. Beanstalk attacker
+
+```bash
+python -m tornado_demix demix 0x1c5dCdd006EA78a7E4783f9e6021C32935a10fb4 --exit-window 24
+```
+
+271 deposits (247 x 100, 14 x 10, 9 x 1 and 1 x 0.1 ETH) within about three
+hours. With a 24-hour exit window the count match leaves one `weak` candidate and
+nothing corroborated: a careful operator leaves no lead, and the tool says so
+rather than naming an unrelated address.
+
+![Beanstalk attacker in demix](docs/img/case-beanstalk.png)
+*`demix` on the Beanstalk attacker: four vouchers, 271 notes, and a single weak count-match candidate.*
+
+### 4. KuCoin hack (2020)
+
+```bash
+python -m tornado_demix demix 0x820a7a97dd146fd97f79881afdf4767624973368
+```
+
+The attacker called `withdraw()` itself from an address investigators attribute
+to it: 128 withdrawals to 7 exits. No exit received a voucher-sized count (each
+got 11-29 notes against a 24-note voucher), so the count match finds nothing. The
+depositor had transacted with that caller, so every withdrawal it sent marks its
+recipient (`linked_sender`): 6 candidates, all 6 true exits; the seventh
+received its withdrawals months later, outside the window. The report opens with
+a flow diagram from the depositor through the pool to the candidates.
+
+![KuCoin depositor in demix](docs/img/case-kucoin.png)
+*`demix` on a KuCoin depositor: six moderate candidates, each an exit that received withdrawals sent by the depositor's counterparty; the evidence panel shows which families hold.*
+
+![KuCoin case overview in the HTML report](docs/img/case-kucoin-flow.png)
+*The case overview of the HTML report: depositor, pool and the six candidates, coloured by band.*
+
+### 5. Harmony Bridge hack (2022)
+
+Investigators listed 14 depositors and 55 withdrawal addresses. The attacker
+pooled 857 notes of the 100 ETH pool and paid them out mostly six at a time, so
+the count match finds no exit and no false one. Three other analyses do.
+
+**Exit groups.** Starting from one exit known from the investigation, `demix`
+lists the recipients paid out in the same bursts:
+
+```bash
+python -m tornado_demix demix 0xe71d5fa89d1086d5c3b0ab03eeee2483d2d5ca97 \
+    --known-exit 0x0562ddf7ea5ab56728852eea2eacab61c4b78a1a
+```
+
+![Harmony exit group from one known exit](docs/img/case-harmony-groups.png)
+*An exit group anchored by one known exit: 22 addresses paid out in joint bursts, 20 of them on the investigators' list. Across all depositors, one known exit gives 23 addresses on average, 73 % of them on the list.*
+
+**Shared funders.** Correlating the 14 depositors links all of them through five
+immediate funders, each of which was paid directly by the bridge exploiter
+`0x0d04...ded00`; a sixth, busy funder is left out:
+
+```bash
+python -m tornado_demix multi --wallets-csv docs/cases/harmony_depositors.csv
+```
+
+![Harmony depositors linked by shared funders](docs/img/case-harmony-funders.png)
+*`multi` on the 14 Harmony depositors: operator clusters linked by a shared funder, and the funders themselves.*
+
+**Trace.** From an exit, `trace` follows the 100 ETH it received forward:
+
+```bash
+python -m tornado_demix trace 0x04bca8fa79f36749fa605597e9c9f6788c126944 --amount 100 --max-hops 3
+```
+
+![Three-hop trace from a Harmony exit](docs/img/case-harmony-trace.png)
+*`trace` from a Harmony exit: the 100 ETH moves through two intermediate addresses; the trace stops at the hop limit.*
+
+The method on both public cases, with the numbers behind each claim, is in
+[docs/EVALUATION.md](docs/EVALUATION.md); `python tools/real_cases.py` repeats it.
 
 ## Limitations
 

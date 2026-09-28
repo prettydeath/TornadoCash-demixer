@@ -386,7 +386,23 @@ def _run_multi(client, wallets, net, window_days, mode, exit_window_hours=None):
     )
     header = ["wallet", "fingerprint", "consolidator_address", "match_type", "received_vs_needed"]
     return (
-        {"strong": strong, "profiles": profiles, "cross": cross, "n_strong": len(corr["strong"])},
+        {
+            "strong": strong,
+            "profiles": profiles,
+            "cross": cross,
+            "n_strong": len(corr["strong"]),
+            "funders": [
+                {"address": f, "url": net.addr_url(f), "wallets": ws}
+                for f, ws in corr.get("shared_funders", {}).items()
+            ],
+            "clusters": [
+                {
+                    "wallets": c["wallets"],
+                    "reasons": sorted({e[2] for e in c["edges"]}),
+                }
+                for c in corr.get("operator_clusters", [])
+            ],
+        },
         (header, rows),
         {"multi": report},
     )
@@ -542,6 +558,7 @@ def _run_characterize(client, address, net):
         "totals": totals,
         "inflows": inflows,
         "next_hops": next_hops,
+        "disposable": info.get("disposable", False),
     }
     header = ["when_utc", "value", "asset", "pool"]
     rows = [[r["when"], r["value"], r["asset"], r["pool"]] for r in inflows]

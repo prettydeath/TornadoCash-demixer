@@ -355,6 +355,30 @@
       <div class="note"><b>strong</b>: an independent gas-price or linked signal; <b>moderate</b>: distinct fingerprints of wallets that did not deposit together; <b>weak</b>: explained by the shared search window.</div>
       {% else %}<div class="note">None. No single address matched two wallets' fingerprints.</div>{% endif %}
 
+      <h3>Operator clusters <span class="chip">{{ result.clusters|length }}</span></h3>
+      {% if result.clusters %}
+      <table>
+        <colgroup><col style="width:8%"><col style="width:30%"><col></colgroup>
+        <tr><th>Wallets</th><th>Linked by</th><th>Members</th></tr>
+        {% for c in result.clusters %}
+        <tr><td class="num">{{ c.wallets|length }}</td><td>{% for r in c.reasons %}<span class="pill">{{ r }}</span>{% endfor %}</td>
+          <td class="mono">{{ c.wallets|join(', ') }}</td></tr>
+        {% endfor %}
+      </table>
+      {% else %}<div class="note">No two wallets are linked by discriminating evidence.</div>{% endif %}
+
+      <h3>Shared funders <span class="chip">not labelled, not busy</span></h3>
+      {% if result.funders %}
+      <table>
+        <colgroup><col style="width:38%"><col style="width:8%"><col></colgroup>
+        <tr><th>Funder</th><th>Wallets</th><th>Funded depositors</th></tr>
+        {% for f in result.funders %}
+        <tr><td class="mono"><a href="{{ f.url }}" target="_blank" rel="noopener">{{ f.address }}</a></td>
+          <td class="num">{{ f.wallets|length }}</td><td class="mono">{{ f.wallets|join(', ') }}</td></tr>
+        {% endfor %}
+      </table>
+      {% else %}<div class="note">No immediate funder is shared by two depositors.</div>{% endif %}
+
       <h3>Strong links <span class="chip">{{ result.n_strong }} total</span></h3>
       <div class="note">Caveat: wallets that deposited at similar times with equal voucher sizes share
         candidate sets by construction, so treat raw overlaps as a window artefact.</div>
@@ -375,6 +399,7 @@
         {% if result.label %}<div class="chip flag">Attribution: {{ result.label }}</div>{% endif %}
         <div class="chip">{{ result.classification }}</div>
         <div class="note">{{ result.reason }}</div>
+        {% if result.disposable %}<div class="chip flag" style="margin-top:.4rem">Disposable: first activity at most a day before the first pool inflow (context, not proof)</div>{% endif %}
         <p>Activity: {{ result.normal_txs }} normal tx · {{ result.internal_txs }} internal ·
           {{ result.n_inflows }} pool inflow(s) across {{ result.n_pools }} pool(s){% if result.totals %} · total {{ result.totals }}{% endif %}</p>
       </div>

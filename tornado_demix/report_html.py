@@ -281,7 +281,7 @@ def _groups_html(groups: list[dict], network: Network) -> str:
             '<div class="lead-card">'
             f'<div class="top"><span class="pill">{_e(g["pool_key"])}</span>'
             f"<b>{len(g['members'])} addresses · {g['notes']} notes</b>"
-            f'<span class="conf pct">{_e(_ts(g["first_ts"]))} – {_e(_ts(g["last_ts"]))} UTC</span></div>'
+            f'<span class="conf pct">{_e(_ts(g["first_ts"]))} – {_e(_ts(g["last_ts"]))}</span></div>'
             f'<div class="why">Anchor: {_e(anchors)}</div>'
             f'<ul class="evidence">{members}</ul></div>'
         )
@@ -303,7 +303,7 @@ def _case_summary_html(data: dict, cands: list[dict]) -> str:
     text = (
         f"The depositor made {n_notes} deposit(s) into {len(pools)} pool(s) "
         f"({', '.join(pools)}) in {len(data['vouchers'])} voucher(s) between "
-        f"{_ts(first)} and {_ts(last)} UTC. Candidate exits by band: {found}."
+        f"{_ts(first)} and {_ts(last)}. Candidate exits by band: {found}."
     )
     if fresh:
         text += f" {fresh} of the top candidates are fresh addresses (context, not scored)."
