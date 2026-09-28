@@ -267,7 +267,7 @@ python -m tornado_demix demix 0x820a7a97dd146fd97f79881afdf4767624973368
 
 The attacker called `withdraw()` itself from an address investigators attribute
 to it: 128 withdrawals to 7 exits. No exit received a voucher-sized count (each
-got 11-29 notes against a 24-note voucher), so the count match finds nothing. The
+got 11-29 notes against vouchers of 24 and 30 notes), so the count match finds nothing. The
 depositor had transacted with that caller, so every withdrawal it sent marks its
 recipient (`linked_sender`): 6 candidates, all 6 true exits; the seventh
 received its withdrawals months later, outside the window. The report opens with

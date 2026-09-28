@@ -279,13 +279,13 @@ measure the other signals. Those find almost nothing here, for a reason the
 method states in advance: 24 of the 31 pairs come from depositors whose only
 voucher in that pool is a single note, where the count match cannot narrow the
 field (discrimination 0.12-0.33 against the 0.5 threshold), and a gas-price
-match is rarely checkable after EIP-1559. The one pair with a two-note voucher
-is found as `strong`. Ten pairs fall outside the window (withdrawals 50-447 days
-after the deposit).
+match is rarely checkable after EIP-1559. The count match fires for one pair only
+(a two-note voucher), and that pair is found as `strong`. Ten pairs fall outside
+the window (withdrawals 50-1,794 days after the deposit).
 
-The precision is a lower bound: the 69 other `moderate` candidates are direct
-counterparties of the depositor that received withdrawals, and the labels say
-nothing about them. The set covers only users careless enough to put an ENS
+The precision is a lower bound. The labels say nothing about the 69 other
+`strong` and `moderate` candidates: 24 are direct counterparties of the
+depositor, 41 match a deposit gas price, 4 received self-relayed withdrawals. The set covers only users careless enough to put an ENS
 name on both sides, names are read as they are today, and a pair links two
 addresses, not a deposit to a withdrawal. The pairs link named people to
 Tornado Cash use, so they stay local; only these aggregates are published.
@@ -308,7 +308,7 @@ Run on 2026-09-28 at the commit that added this section.
 
 | Check | Result |
 |---|---|
-| `pytest` (network blocked, incl. `getaddrinfo`) | 616 passed |
+| `pytest` (network blocked, incl. `getaddrinfo`) | 645 passed |
 | `pytest-randomly`, seeds 1, 2, 3 | all pass in every order |
 | Branch coverage (`--cov-branch`) | 92 % overall; `heuristics` 97 %, `demix` 84 %, `cli` 82 % |
 | Property-based tests (Hypothesis, 24) and edge-case tests (10) from the independent audit | pass; the four that documented defects now pin the fixes |
