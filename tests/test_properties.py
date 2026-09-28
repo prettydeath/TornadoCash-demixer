@@ -6,7 +6,6 @@ window construction over generated inputs rather than hand-picked cases.
 
 from __future__ import annotations
 
-import itertools
 import random
 
 import pytest
@@ -39,7 +38,7 @@ def _counts_dicts(draw, min_size=1, max_size=25):
     n = draw(st.integers(min_value=min_size, max_value=max_size))
     addrs = draw(st.lists(_addresses, min_size=n, max_size=n, unique=True))
     hits = draw(st.lists(st.integers(min_value=0, max_value=20), min_size=n, max_size=n))
-    return dict(zip(addrs, hits, strict=True))
+    return dict(zip(addrs, hits))
 
 
 @given(_counts_dicts(), st.integers(min_value=0, max_value=25))
@@ -203,7 +202,7 @@ def _deposit_lists(draw, max_size=15):
     )
     return [
         {"pool_key": pk, "denom": 1.0, "asset": "ETH", "ts": ts, "block": ts}
-        for pk, ts in zip(pool_keys, timestamps, strict=True)
+        for pk, ts in zip(pool_keys, timestamps)
     ]
 
 
@@ -243,9 +242,7 @@ def _voucher_lists(draw, max_size=10):
     n = draw(st.integers(min_value=0, max_value=max_size))
     firsts = draw(st.lists(st.integers(min_value=0, max_value=10_000_000), min_size=n, max_size=n))
     spans = draw(st.lists(st.integers(min_value=0, max_value=100_000), min_size=n, max_size=n))
-    return [
-        {"first_ts": f, "last_ts": f + s, "count": 1} for f, s in zip(firsts, spans, strict=True)
-    ]
+    return [{"first_ts": f, "last_ts": f + s, "count": 1} for f, s in zip(firsts, spans)]
 
 
 @given(_voucher_lists(), st.integers(min_value=0, max_value=60))
@@ -259,7 +256,7 @@ def test_voucher_windows_conserves_every_voucher(vouchers, window_days):
 @_settings
 def test_voucher_windows_are_sorted_and_strictly_separated(vouchers, window_days):
     windows = voucher_windows(vouchers, window_days=window_days)
-    for a, b in itertools.pairwise(windows):
+    for a, b in zip(windows, windows[1:]):
         assert a["first_ts"] <= b["first_ts"]
         assert b["first_ts"] > a["end_ts"]  # the merge condition is "<=", so a gap is strict
 
