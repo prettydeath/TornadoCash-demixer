@@ -222,6 +222,46 @@ relayer-specific patterns and post-EIP-1559 fee markets. The benchmark is a cont
 test of the method's components and failure modes; a labelled set of real deposit →
 withdrawal pairs remains the only way to measure its accuracy.
 
+## A labelled set from ENS
+
+There is no public set of matched deposits and withdrawals. As in Béres et al.
+(2021), Tutela (2022) and Wang et al. (2023), ENS provides a partial one:
+`tools/ens_labels.py` collects every deposit into and withdrawal from the four
+Ethereum ETH pools from December 2019 to September 2026 (289,887 deposits by
+64,681 depositors; 276,676 withdrawals to 129,752 recipients), reads the primary
+ENS name of every address (4,606 have one) and links two addresses when one
+controls the other's name (447 links; an owner of more than five names is taken
+for a service and ignored). A depositor and a recipient of the same pool linked
+this way, with the withdrawal after the deposit, form a labelled pair: 31 pairs
+of 27 depositors. Only 2 of them deposited after the sanctions of August 2022.
+
+`tools/evaluate_labels.py` runs `demix` with default settings (30-day window,
+attribution labels loaded) on every labelled depositor:
+
+| | strong | up to moderate | all bands |
+|---|---|---|---|
+| Pairs found (of 31; 21 inside the window) | 1 | 16 (76 % of those in the window) | 16 |
+| Precision, lower bound | 1 of 7 | 16 of 85 (19 %) | 16 of 2,849 |
+| Pairs found without the `linked` signal | 0 | 0 | 1 |
+
+All 16 pairs are found through a direct transaction between the depositor and
+the recipient (`linked`). The ENS link and `linked` see the same relationship,
+so this confirms that careless users also transact directly; it does not
+measure the other signals. Those find almost nothing here, for a reason the
+method states in advance: 24 of the 31 pairs come from depositors whose only
+voucher in that pool is a single note, where the count match cannot narrow the
+field (discrimination 0.12-0.33 against the 0.5 threshold), and a gas-price
+match is rarely checkable after EIP-1559. The one pair with a two-note voucher
+is found as `strong`. Ten pairs fall outside the window (withdrawals 50-447 days
+after the deposit).
+
+The precision is a lower bound: the 69 other `moderate` candidates are direct
+counterparties of the depositor that received withdrawals, and the labels say
+nothing about them. The set covers only users careless enough to put an ENS
+name on both sides, names are read as they are today, and a pair links two
+addresses, not a deposit to a withdrawal. The pairs link named people to
+Tornado Cash use, so they stay local; only these aggregates are published.
+
 ## Checks of the code itself
 
 Run on 2026-09-28 at the commit that added this section.

@@ -73,6 +73,7 @@ The method, thresholds and the reasoning behind them are in
 | `tools/sensitivity.py` | ranking stability of saved results under perturbed weights |
 | `tools/simulate.py` | synthetic benchmark: ablation, negative controls, counter-measures ([results](docs/EVALUATION.md)) |
 | `tools/real_cases.py` | the method on two public laundering cases (KuCoin, Harmony) |
+| `tools/ens_labels.py`, `tools/evaluate_labels.py` | an ENS-labelled set of depositor/exit pairs and the evaluation on it ([results](docs/EVALUATION.md#a-labelled-set-from-ens)) |
 
 ## Requirements
 
