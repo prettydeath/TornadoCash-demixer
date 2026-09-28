@@ -184,6 +184,7 @@ def _run_demix(client, wallets, net, window_days, mode, exit_window_hours=None, 
             network=net,
             exit_window_hours=exit_window_hours,
             known_exits=known_exits,
+            labels=labels,
         )
         reports[wallet] = build_html_report(data, net, attribution=labels)
         reports[wallet + ".json"] = demix_json(data, attribution=labels)
