@@ -12,8 +12,8 @@ were. It is tied to the depositor only through an anchor: a member that is
 itself a corroborated candidate (strong or moderate band) or an exit the
 investigator already knows. Groups never enter a score or a band.
 
-On the Harmony case (2022), one listed exit as the anchor gave a group of 18-22
-addresses of which 76-92 % are on the investigators' list (docs/EVALUATION.md).
+On the Harmony case (2022), one listed exit as the anchor gives a group of 23
+addresses on average, 73 % of them on the investigators' list (docs/EVALUATION.md).
 """
 
 from __future__ import annotations
