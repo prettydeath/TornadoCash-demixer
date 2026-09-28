@@ -224,7 +224,7 @@ Run on 2026-09-28 at the commit that added this section.
 | `pytest-randomly`, seeds 1, 2, 3 | all pass in every order |
 | Branch coverage (`--cov-branch`) | 92 % overall; `heuristics` 97 %, `demix` 84 %, `cli` 82 % |
 | Property-based tests (Hypothesis, 24) and edge-case tests (10) from the independent audit | pass; the four that documented defects now pin the fixes |
-| Mutation testing (`mutmut` 3.8 on `heuristics.py` and `demix.py`, 2479 mutants) | 1751 killed (71 %), 726 survived, 2 not reached |
+| Mutation testing (`mutmut` 3.8 on `heuristics.py` and `demix.py`, 2479 mutants) | 1751 killed (71 %), 726 survived, 2 not reached (measured before the last `run_demix` test was added) |
 | `pip-audit -r requirements-lock.txt` | no known vulnerabilities |
 | `pytest -m live` (every shipped pool re-verified on chain) | 55 pools on 8 networks verified |
 | README cases re-run (Ronin, Wintermute, Beanstalk) | same figures: 12,595.3 ETH hop; one 9.9435 ETH inflow; 271 deposits in 2.97 h, one `weak` candidate |
