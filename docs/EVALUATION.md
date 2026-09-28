@@ -119,17 +119,25 @@ of wallets.
 the exit is listed, against the number of notes withdrawn after the window and
 the number of exit addresses the notes are spread over.
 
-| Exit leaves | Counter-measure | 0 / 1 | 1 / 2 | 3 / 4 | 5 / 6 | 6 delayed |
+Notes withdrawn after the window (of 6):
+
+| Exit leaves | 0 | 1 | 2 | 3 | 4 | 5 | 6 |
+|---|---|---|---|---|---|---|---|
+| amount and timing only | 1.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| also a direct transfer | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 0.00 |
+
+Exit addresses the six notes are spread over:
+
+| Exit leaves | 1 | 2 | 3 | 4 | 5 | 6 |
 |---|---|---|---|---|---|---|
-| amount and timing only | delayed notes (0, 1, 3, 5, 6 of 6) | 1.00 | 0.00 | 0.00 | 0.00 | 0.00 |
-| amount and timing only | exit addresses (1, 2, 4, 6) | 1.00 | 0.00 | 0.00 | 0.00 | |
-| also a direct transfer | delayed notes (0, 1, 3, 5, 6 of 6) | 1.00 | 1.00 | 1.00 | 1.00 | 0.00 |
-| also a direct transfer | exit addresses (1, 2, 4, 6) | 1.00 | 1.00 | 1.00 | 1.00 | |
+| amount and timing only | 1.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| also a direct transfer | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 |
+| also a direct transfer, share of exits found | 1.00 | 0.50 | 0.33 | 0.25 | 0.20 | 0.17 |
 
 One delayed note or a second exit address is enough to remove an exit that
 left only amount and timing. An exit that also transacted with the depositor is
 found as long as one note lands in the window; with k exit addresses only that
-one is found, so the share of exits found falls as 1/k (0.50, 0.25, 0.17). A
+one is found, so the share of exits found falls as 1/k. A
 bystander reaches `strong` in 3-7 % of trials at every intensity, through a
 chance gas-price match.
 
