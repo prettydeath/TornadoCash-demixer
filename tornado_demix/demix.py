@@ -26,6 +26,10 @@ from .rpc import make_contract_check, make_gas_price_gate
 # Direct counterparties whose own transactions are read for Tornado withdrawal
 # calls (linked_sender). Busier counterparties are checked first.
 MAX_SENDER_COUNTERPARTIES = 25
+# A counterparty with this many transactions is a service (an exchange hot
+# wallet); its history is not read: it would take thousands of requests and a
+# service does not broadcast a depositor's withdrawals.
+BUSY_COUNTERPARTY_TXS = 5000
 
 # A native deposit may differ from the denomination by this fraction (wallets
 # and routers are not always exact to the wei).
@@ -197,11 +201,11 @@ def wallet_counterparties(wallet: str, txs: list[dict]) -> set[str]:
     return parties
 
 
-def withdrawal_senders(client, wallet, txs, results, network, is_contract):
+def withdrawal_senders(client, wallet, txs, results, network, is_contract, labels=None):
     """{withdrawal tx hash: sender} for withdrawals sent by the wallet or a direct counterparty.
 
-    Only non-contract counterparties are read, at most MAX_SENDER_COUNTERPARTIES,
-    and only within the searched block range, so the cost stays bounded.
+    Only non-contract, non-busy counterparties are read, at most MAX_SENDER_COUNTERPARTIES,
+    and only within the searched block ranges, so the cost stays bounded.
     """
     wallet = wallet.lower()
     hashes = {
@@ -210,8 +214,21 @@ def withdrawal_senders(client, wallet, txs, results, network, is_contract):
         for recs in res.get("detail", {}).values()
         for r in recs
     }
-    blocks = [b for res in results.values() for b in res.get("window_blocks") or []]
-    if not hashes or not blocks:
+    # The searched block ranges, merged: reading one span from the first to the
+    # last window would cover the months between vouchers as well.
+    spans = sorted(
+        (w["start_block"], w["end_block"])
+        for res in results.values()
+        for w in res.get("windows") or []
+        if w.get("start_block") is not None and w.get("end_block") is not None
+    ) or sorted(tuple(res["window_blocks"]) for res in results.values() if res.get("window_blocks"))
+    merged = []
+    for lo, hi in spans:
+        if merged and lo <= merged[-1][1] + 1:
+            merged[-1][1] = max(merged[-1][1], hi)
+        else:
+            merged.append([lo, hi])
+    if not hashes or not merged:
         return {}
     tornado = {p.address for p in network.pools} | set(network.routers)
     seen = Counter()
@@ -220,13 +237,34 @@ def withdrawal_senders(client, wallet, txs, results, network, is_contract):
             addr = (tx.get(side) or "").lower()
             if addr and addr != wallet and addr not in tornado:
                 seen[addr] += 1
-    senders = [wallet] + [a for a, _n in seen.most_common() if not is_contract(a)]
+    busy = getattr(client, "has_at_least_txs", None)
+
+    def senders():
+        """The wallet, then up to MAX_SENDER_COUNTERPARTIES non-contract, non-busy
+        counterparties, busiest first. Checked one by one and stopped at the cap:
+        a wallet can have thousands of counterparties, each a lookup."""
+        yield wallet
+        taken = 0
+        for addr, _n in seen.most_common():
+            if taken >= MAX_SENDER_COUNTERPARTIES:
+                return
+            if labels and addr in labels:
+                continue  # a labelled exchange, bridge or protocol: no history read
+            if is_contract(addr):
+                continue
+            if busy is not None and busy(addr, BUSY_COUNTERPARTY_TXS):
+                _log("  [linked_sender] skipped busy counterparty {}".format(addr))
+                continue
+            taken += 1
+            yield addr
+
     found = {}
-    for addr in senders[: MAX_SENDER_COUNTERPARTIES + 1]:
+    for addr in senders():
         fetch = getattr(client, "fetch_all", None)
-        rows = (
-            fetch("txlist", addr, min(blocks), max(blocks)) if fetch else client.outgoing_txs(addr)
-        )
+        if fetch:
+            rows = [tx for lo, hi in merged for tx in fetch("txlist", addr, lo, hi)]
+        else:
+            rows = client.outgoing_txs(addr)
         for tx in rows:
             h = (tx.get("hash") or "").lower()
             if (tx.get("from") or "").lower() == addr and h in hashes:
@@ -586,6 +624,7 @@ def run_demix(
     exit_window_hours: float | None = None,
     max_voucher_span_hours: float | None = None,
     known_exits=(),
+    labels: dict[str, dict] | None = None,
 ) -> dict:
     """Full single-wallet demix. Returns a structured result dict.
 
@@ -712,7 +751,7 @@ def run_demix(
         gas_gate=make_gas_price_gate(network.rpc_url, log=_log),
         is_contract=is_contract,
         withdrawal_senders=withdrawal_senders(
-            client, wallet, all_txs + internal_txs, results, network, is_contract
+            client, wallet, all_txs + internal_txs, results, network, is_contract, labels
         ),
     )
     result["fresh_addresses"] = fresh_addresses(client, result)

@@ -73,6 +73,7 @@ def correlate(
             network=network,
             exit_window_hours=exit_window_hours,
             max_voucher_span_hours=max_voucher_span_hours,
+            labels=labels,
         )
         results[wallet] = data
         for pool_key, res in data["denoms"].items():

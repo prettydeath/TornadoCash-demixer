@@ -196,6 +196,7 @@ def cmd_demix(args: argparse.Namespace) -> None:
         exit_window_hours=args.exit_window,
         max_voucher_span_hours=getattr(args, "max_voucher_span", None),
         known_exits=[_valid_address(a) for a in getattr(args, "known_exit", None) or []],
+        labels=labels,
     )
 
     print("\n=== DEMIX SUMMARY ===")

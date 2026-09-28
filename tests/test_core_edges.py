@@ -185,3 +185,94 @@ def test_run_demix_end_to_end_keys_span_and_a_self_sent_withdrawal():
     assert data["heuristics"]["linked_senders"][0][1] == winner
     assert "deposit_gas_prices" in data["heuristics"]
     assert ZERO_ADDRESS not in res["counts"]
+
+
+def test_a_busy_counterparty_is_not_read_for_withdrawal_senders():
+    from tornado_demix.demix import BUSY_COUNTERPARTY_TXS, withdrawal_senders
+
+    exchange, friend = "0x" + "e" * 40, "0x" + "f" * 40
+    results = {"1 ETH": {"detail": {"0xr": [{"hash": "0xw"}]}, "window_blocks": [10, 20]}}
+    txs = [{"from": fx.WALLET, "to": exchange}, {"from": friend, "to": fx.WALLET}]
+
+    class Client:
+        def __init__(self):
+            self.read = []
+
+        def has_at_least_txs(self, addr, n):
+            assert n == BUSY_COUNTERPARTY_TXS
+            return addr == exchange
+
+        def fetch_all(self, action, addr, lo, hi):
+            self.read.append(addr)
+            return [{"from": friend, "hash": "0xw"}] if addr == friend else []
+
+    client = Client()
+    found = withdrawal_senders(client, fx.WALLET, txs, results, fx.network(), lambda a: False)
+    assert found == {"0xw": friend}
+    assert exchange not in client.read and fx.WALLET in client.read
+
+
+def test_withdrawal_senders_stop_checking_counterparties_at_the_cap():
+    from tornado_demix.demix import MAX_SENDER_COUNTERPARTIES, withdrawal_senders
+
+    parties = ["0x" + format(i, "040x") for i in range(1, 500)]
+    txs = [{"from": fx.WALLET, "to": p} for p in parties]
+    results = {"1 ETH": {"detail": {"0xr": [{"hash": "0xw"}]}, "window_blocks": [10, 20]}}
+    checked = []
+
+    def is_contract(addr):
+        checked.append(addr)
+        return False
+
+    class Client:
+        def fetch_all(self, action, addr, lo, hi):
+            return []
+
+    withdrawal_senders(Client(), fx.WALLET, txs, results, fx.network(), is_contract)
+    assert len(checked) == MAX_SENDER_COUNTERPARTIES
+
+
+def test_a_labelled_counterparty_is_skipped_without_any_lookup():
+    from tornado_demix.demix import withdrawal_senders
+
+    exchange = "0x" + "e" * 40
+    txs = [{"from": fx.WALLET, "to": exchange}]
+    results = {"1 ETH": {"detail": {"0xr": [{"hash": "0xw"}]}, "window_blocks": [10, 20]}}
+    looked_up = []
+
+    class Client:
+        def has_at_least_txs(self, addr, n):
+            looked_up.append(addr)
+            return False
+
+        def fetch_all(self, action, addr, lo, hi):
+            looked_up.append(addr)
+            return []
+
+    labels = {exchange: {"label": "Exchange hot wallet", "category": "exchange"}}
+    withdrawal_senders(Client(), fx.WALLET, txs, results, fx.network(), lambda a: False, labels)
+    assert exchange not in looked_up
+
+
+def test_counterparty_histories_are_read_only_inside_the_windows():
+    from tornado_demix.demix import withdrawal_senders
+
+    results = {
+        "1 ETH": {
+            "detail": {"0xr": [{"hash": "0xw"}]},
+            "windows": [
+                {"start_block": 100, "end_block": 200},
+                {"start_block": 150, "end_block": 250},
+                {"start_block": 9000, "end_block": 9100},
+            ],
+        }
+    }
+    ranges = []
+
+    class Client:
+        def fetch_all(self, action, addr, lo, hi):
+            ranges.append((lo, hi))
+            return []
+
+    withdrawal_senders(Client(), fx.WALLET, [], results, fx.network(), lambda a: False)
+    assert ranges == [(100, 250), (9000, 9100)]
