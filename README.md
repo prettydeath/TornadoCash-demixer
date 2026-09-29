@@ -3,9 +3,10 @@
 Probabilistic demixing of Tornado Cash deposits using only public on-chain data.
 The toolkit links a depositor wallet to likely withdrawal addresses and reports
 each candidate with an evidence band and the evidence behind it. A band needs a
-linked address (a direct counterparty, or a withdrawal sent by the depositor's
-side): on real depositors amount+timing and gas-price matches turn up as often by
-chance as for real exits, so they only corroborate. It also groups exits paid out
+linked address (a direct counterparty, a withdrawal sent by the depositor's
+side, or a shared exchange deposit address): on real depositors amount+timing
+and gas-price matches turn up as often by chance as for real exits, so they only
+corroborate. It also groups exits paid out
 together, links wallets of one operator and follows withdrawn funds forward.
 
 Output is a set of leads for further investigation, not proof. Tornado Cash breaks
@@ -40,6 +41,9 @@ traces users leave around it.
 - Groups exits withdrawn together in repeated bursts, the payout rhythm of an
   operator that pooled several deposits; a group is listed when a corroborated
   candidate or an exit you already know (`--known-exit`) anchors it.
+- Finds the depositor's exchange deposit addresses and flags a recipient that
+  sent funds to the same one (`shared_deposit`, linked-address family; on 999
+  random depositors 27 hits in real windows against 4 in decoy windows).
 - Marks a linked exit that withdrew within 72 hours of the deposit (early exit;
   context, never scored).
 - Optionally runs a placebo check (`--placebo`, or the web UI option): the same
@@ -83,6 +87,7 @@ The method, thresholds and the reasoning behind them are in
 | `tools/ens_labels.py`, `tools/evaluate_labels.py` | an ENS-labelled set of depositor/exit pairs and the evaluation on it ([results](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/EVALUATION.md#a-labelled-set-from-ens)) |
 | `tools/wang_baseline.py` | the ENS set scored under the Wang et al. (2023) protocol, with their H2/H3/H5 re-implemented |
 | `tools/placebo_eval.py`, `tools/placebo_windows.py` | placebo (target-decoy) test on random real depositors, per evidence family and exit window ([results](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/EVALUATION.md#placebo-test-on-real-depositors)) |
+| `tools/placebo_dar.py`, `tools/placebo_dar_universe.py` | placebo test of the shared exchange-deposit-address signal on the cached runs and on 1,000 depositors read from the ENS universe |
 | `tools/review_sample.py` | a blinded manual-review sheet of leads and hidden controls, and its scoring |
 
 ## Requirements
@@ -355,8 +360,9 @@ The method on both public cases, with the numbers behind each claim, is in
 - On real depositors the count match, self-relay and gas-price reuse do not beat
   chance: a placebo test on 152 random Ethereum depositors found as many such
   leads in decoy windows before the first deposit as in the real windows, at every
-  window from 6 hours to 30 days. Only a linked address (a direct counterparty, or
-  a withdrawal sent by the depositor's side) stood above chance (30 against 7 over
+  window from 6 hours to 30 days. Only a linked address (a direct counterparty, a
+  withdrawal sent by the depositor's side, or a shared exchange deposit address)
+  stood above chance (30 against 7 over
   30 days, 19 against 1 within 72 hours), so only it makes a `moderate` or `strong`
   band ([details](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/EVALUATION.md#placebo-test-on-real-depositors)).
 - On 31 depositor/exit pairs labelled through ENS (2019-2026), demix found 16 of

@@ -238,12 +238,25 @@ gas-price gate and the contract check make bounded, memoised RPC calls.
   blocks only. It catches an operator that relays its own withdrawals: in the
   KuCoin case it listed 6 of the 7 exits, and nothing else, for the depositor whose
   counterparty called the withdrawals ([EVALUATION.md](EVALUATION.md)).
+- **Shared exchange deposit address.** An exchange gives each customer their own
+  deposit address and sweeps what arrives there to its hot wallets, so two
+  addresses that sent funds to the same deposit address are, with few exceptions,
+  one customer (the address-reuse idea of Tutela). The tool examines the
+  depositor's outgoing counterparties (at most 25, busiest first, skipping
+  contracts, labelled services and Tornado contracts) and takes one for a deposit
+  address when it has fewer than 1,000 transactions and at most 50 senders, and at
+  least 80 % of its outgoing transfers go to hot wallets: among its three most
+  frequent destinations, those labelled as an exchange or with at least 10,000
+  transactions. A recipient in the window that also sent funds to one of these
+  addresses is flagged `shared_deposit` (linked-address family). The lookup costs
+  up to 50 history queries plus a busy check per new sweep target, and can be
+  turned off (`--no-deposit-addresses`).
 
 **Band, evidence and score.** Each recipient accumulates a signal set
-(`count_match`, `self_relayed`, `gas_price`, `linked`, `linked_sender`, and
-`profile_match` on `multi` runs). The signals fall into evidence families:
-amount+timing (`count_match`, `self_relayed`, `profile_match`), gas price, linked
-address (`linked`, `linked_sender`). The **band** needs a linked address:
+(`count_match`, `self_relayed`, `gas_price`, `linked`, `linked_sender`,
+`shared_deposit`, and `profile_match` on `multi` runs). The signals fall into
+evidence families: amount+timing (`count_match`, `self_relayed`, `profile_match`),
+gas price, linked address (`linked`, `linked_sender`, `shared_deposit`). The **band** needs a linked address:
 `strong` for a linked address plus another family, `moderate` for a linked address
 alone, `weak` for amount+timing and/or gas price without one. The rule follows the
 placebo test on real depositors ([EVALUATION.md](EVALUATION.md)): run on decoy

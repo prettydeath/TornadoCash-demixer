@@ -259,6 +259,31 @@ What this shows:
   the intervals are wide, and the result says nothing about careful users beyond
   the fact that the tool finds no evidence on them.
 
+### Shared exchange deposit addresses
+
+The shared-deposit-address signal (`shared_deposit`, see
+[METHODOLOGY.md](METHODOLOGY.md)) was tested the same way before it was added.
+`tools/placebo_dar.py` applies it to the 152 depositors above: 18 have an exchange
+deposit address, and their recipients hit one 4 times in real windows and never in
+decoy windows. For a larger sample, `tools/placebo_dar_universe.py` reads the
+windows offline from the ENS universe (it reproduces the full-run result for all
+152 depositors) and draws 1,000 new random depositors (seed 2; one failed on the
+explorer):
+
+| Definition | Depositors with a deposit address | Target hits | Decoy hits | Chance share (95 % CI) |
+|---|---|---|---|---|
+| as implemented | 152 of 999 | 27 (19 depositors) | 4 | 0.16 (0.03-0.45) |
+| strict: one exchange, at most 10 senders | | 7 | 1 | 0.15 (0-0.71) |
+
+(2,105,979 withdrawals searched in target windows, 1,978,235 in decoy windows.)
+25 of the 27 target hits are not direct counterparties of the depositor, so the
+signal finds exits that `linked` does not. It is rare — about 2 % of depositors —
+but where it fires it stands above chance at least as clearly as `linked`. The
+strict definition keeps the chance share and loses most hits, so the looser one is
+used. As for the other families, a decoy hit is a false note link, not
+necessarily a false identity link. The other tables in this document were computed
+before the signal was added (version 2.14); it can only add linked-family leads.
+
 The check is also available per case (`demix --placebo`, and the web UI option):
 the decoy window of the wallet under investigation, beside the real one.
 
