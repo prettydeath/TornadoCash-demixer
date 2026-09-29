@@ -364,19 +364,21 @@ class EtherscanClient:
     def has_at_least_txs(self, address: str, n: int) -> bool:
         """True when ``address`` sent or received at least ``n`` normal transactions.
 
-        One query for ``n`` rows, so a busy address costs no more than a quiet one.
+        Asks for the single row at position ``n`` (page ``n`` of one row): explorers
+        cap a page at 1,000 rows, so asking for ``n`` rows at once would answer
+        False for every ``n`` above the cap. One query whatever the history size.
         """
         rows = self.call(
             {
                 "module": "account",
                 "action": "txlist",
                 "address": address.lower(),
-                "page": 1,
-                "offset": n,
+                "page": n,
+                "offset": 1,
                 "sort": "asc",
             }
         )
-        return isinstance(rows, list) and len(rows) >= n
+        return isinstance(rows, list) and len(rows) >= 1
 
     def internal_txs(self, address: str) -> list[dict]:
         """Return internal transactions touching ``address``.

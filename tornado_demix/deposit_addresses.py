@@ -25,6 +25,8 @@ from __future__ import annotations
 from collections import Counter
 from typing import Callable
 
+from .errors import ApiError, ApiKeyError
+
 MAX_CANDIDATES = 25  # depositor counterparties examined, busiest first
 MAX_DEPOSIT_TXS = 1000  # a deposit address is quiet; more rows: not one
 MAX_DEPOSIT_SENDERS = 50  # distinct senders a per-customer address can have
@@ -127,7 +129,16 @@ def depositor_deposit_addresses(
     def busy(target: str) -> bool:
         if target not in busy_cache:
             has = getattr(client, "has_at_least_txs", None)
-            busy_cache[target] = bool(has and has(target, HOT_WALLET_TXS))
+            try:
+                busy_cache[target] = bool(has and has(target, HOT_WALLET_TXS))
+            except ApiKeyError:
+                raise
+            except ApiError:
+                # Some explorers refuse a 10,000-row page for a busy address
+                # (Routescan answers with an HTML error page). An unchecked
+                # target is not taken for a hot wallet: the signal is lost for
+                # this address, the run is not.
+                busy_cache[target] = False
         return busy_cache[target]
 
     found = []
@@ -141,7 +152,12 @@ def depositor_deposit_addresses(
         if labels and addr in labels:
             continue
         examined += 1
-        info = classify_deposit_address(client, addr, is_contract, labels, busy)
+        try:
+            info = classify_deposit_address(client, addr, is_contract, labels, busy)
+        except ApiKeyError:
+            raise
+        except ApiError:
+            continue  # history unreadable: this counterparty is not examined
         if info:
             found.append(info)
     return found

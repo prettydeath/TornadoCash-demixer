@@ -212,6 +212,31 @@ def test_a_busy_counterparty_is_not_read_for_withdrawal_senders():
     assert exchange not in client.read and fx.WALLET in client.read
 
 
+def test_an_explorer_error_on_a_counterparty_skips_it_without_failing_the_run():
+    from tornado_demix.demix import withdrawal_senders
+    from tornado_demix.errors import ApiError
+
+    broken, friend = "0x" + "e" * 40, "0x" + "f" * 40
+    results = {"1 ETH": {"detail": {"0xr": [{"hash": "0xw"}]}, "window_blocks": [10, 20]}}
+    txs = [
+        {"from": fx.WALLET, "to": broken},
+        {"from": fx.WALLET, "to": broken},
+        {"from": friend, "to": fx.WALLET},
+    ]
+
+    class Client:
+        def has_at_least_txs(self, addr, n):
+            if addr == broken:
+                raise ApiError("html error page")  # Routescan on a 5,000-row page
+            return False
+
+        def fetch_all(self, action, addr, lo, hi):
+            return [{"from": friend, "hash": "0xw"}] if addr == friend else []
+
+    found = withdrawal_senders(Client(), fx.WALLET, txs, results, fx.network(), lambda a: False)
+    assert found == {"0xw": friend}
+
+
 def test_withdrawal_senders_stop_checking_counterparties_at_the_cap():
     from tornado_demix.demix import MAX_SENDER_COUNTERPARTIES, withdrawal_senders
 

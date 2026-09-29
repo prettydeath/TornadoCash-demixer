@@ -527,10 +527,11 @@ def test_first_activity_is_none_without_transactions():
     assert _proxy_client([empty, empty]).first_activity(SENDER) is None
 
 
-def test_has_at_least_txs_reads_one_page_of_n_rows():
-    rows = [{"hash": "0x%d" % i} for i in range(3)]
-    client = _proxy_client([{"status": "1", "message": "OK", "result": rows}])
-    assert client.has_at_least_txs(SENDER, 3) is True
-    assert client.session.calls[0]["offset"] == 3
-    client = _proxy_client([{"status": "1", "message": "OK", "result": rows[:1]}])
-    assert client.has_at_least_txs(SENDER, 3) is False
+def test_has_at_least_txs_reads_the_single_row_at_position_n():
+    # Explorers cap a page at 1,000 rows, so the check asks for row n alone.
+    client = _proxy_client([{"status": "1", "message": "OK", "result": [{"hash": "0x1"}]}])
+    assert client.has_at_least_txs(SENDER, 10000) is True
+    assert client.session.calls[0]["page"] == 10000
+    assert client.session.calls[0]["offset"] == 1
+    empty = {"status": "0", "message": "No transactions found", "result": []}
+    assert _proxy_client([empty]).has_at_least_txs(SENDER, 10000) is False

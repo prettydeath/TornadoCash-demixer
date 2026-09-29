@@ -105,3 +105,24 @@ def test_sweeps_split_over_several_hot_wallets_still_count():
     client = FakeClient({("txlist", DEPOSIT): rows}, busy={HOT, hot2})
     info = classify_deposit_address(client, DEPOSIT, busy=client.busy.__contains__)
     assert info["sweep_targets"] == [HOT, hot2]
+
+
+def test_an_explorer_error_on_one_address_skips_it_without_failing_the_run():
+    from tornado_demix.errors import ApiError
+
+    class Flaky(FakeClient):
+        def call(self, params):
+            if params["address"] == OTHER:
+                raise ApiError("html error page")
+            return super().call(params)
+
+        def has_at_least_txs(self, address, n):
+            raise ApiError("page too large")
+
+    lists = deposit_lists()
+    client = Flaky(lists)
+    labels = {HOT: {"category": "exchange", "entity": "binance"}}
+    txs = [tx(WALLET, OTHER), tx(WALLET, DEPOSIT)]
+    found = depositor_deposit_addresses(client, WALLET, txs, labels={**labels})
+    # OTHER is skipped, DEPOSIT still qualifies through the exchange label
+    assert [f["address"] for f in found] == [DEPOSIT]

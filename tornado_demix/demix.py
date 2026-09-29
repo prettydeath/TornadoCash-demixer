@@ -253,7 +253,16 @@ def withdrawal_senders(client, wallet, txs, results, network, is_contract, label
                 continue  # a labelled exchange, bridge or protocol: no history read
             if is_contract(addr):
                 continue
-            if busy is not None and busy(addr, BUSY_COUNTERPARTY_TXS):
+            try:
+                too_busy = busy is not None and busy(addr, BUSY_COUNTERPARTY_TXS)
+            except ApiKeyError:
+                raise
+            except ApiError:
+                # Some explorers refuse a page this large for a busy address;
+                # an unchecked counterparty is skipped, not fatal to the run.
+                _log("  [linked_sender] could not check counterparty {}, skipped".format(addr))
+                continue
+            if too_busy:
                 _log("  [linked_sender] skipped busy counterparty {}".format(addr))
                 continue
             taken += 1
@@ -262,10 +271,18 @@ def withdrawal_senders(client, wallet, txs, results, network, is_contract, label
     found = {}
     for addr in senders():
         fetch = getattr(client, "fetch_all", None)
-        if fetch:
-            rows = [tx for lo, hi in merged for tx in fetch("txlist", addr, lo, hi)]
-        else:
-            rows = client.outgoing_txs(addr)
+        try:
+            if fetch:
+                rows = [tx for lo, hi in merged for tx in fetch("txlist", addr, lo, hi)]
+            else:
+                rows = client.outgoing_txs(addr)
+        except ApiKeyError:
+            raise
+        except ApiError:
+            if addr == wallet:
+                raise  # the depositor's own history is required
+            _log("  [linked_sender] could not read counterparty {}, skipped".format(addr))
+            continue
         for tx in rows:
             h = (tx.get("hash") or "").lower()
             if (tx.get("from") or "").lower() == addr and h in hashes:
