@@ -177,7 +177,7 @@ Given several wallets we compute:
 
 | Result | Definition | How much it says |
 |--------|-----------|----------|
-| **Profile match (exact, multi-pool)** | one address received a wallet's *entire* fingerprint, e.g. `6×0.1 + 4×1.0` | single-wallet signal (`profile_match`); it admits a candidate and belongs to the amount+timing family, so on its own it is `weak` and it needs gas price or linked for `strong` |
+| **Profile match (exact, multi-pool)** | one address received a wallet's *entire* fingerprint, e.g. `6×0.1 + 4×1.0` | single-wallet signal (`profile_match`); it admits a candidate and belongs to the amount+timing family, so on its own it is `weak`, and with a linked address it makes `strong` |
 | **Cross consolidator** | one address is a full-fingerprint match for 2+ wallets | graded: `strong` with an independent gas-price/linked signal, `moderate` for distinct fingerprints of wallets that did not deposit together, `weak` (window-overlap artefact) otherwise |
 | **Synchronous deposits** | wallets whose deposits chain within `SYNC_GAP_HOURS` (6 h) | behavioural link in its own right |
 | **Shared funder** | wallets funded, before their first deposit, by the same plain native transfer sender that is neither labelled nor busy (`BUSY_FUNDER_TXS` = 200 transactions or more) | edge `shared funder` in the operator graph; in the 27 MixLaunder cases 90.1 % of laundering deposit addresses shared an immediate funder with another deposit address of the case |
@@ -243,10 +243,18 @@ gas-price gate and the contract check make bounded, memoised RPC calls.
 (`count_match`, `self_relayed`, `gas_price`, `linked`, `linked_sender`, and
 `profile_match` on `multi` runs). The signals fall into evidence families:
 amount+timing (`count_match`, `self_relayed`, `profile_match`), gas price, linked
-address (`linked`, `linked_sender`). The **band** is read from the families that
-hold: `strong` for two or more, `moderate` for one family with a structural tie
-(`self_relayed`, `gas_price`, `linked` or `linked_sender`), `weak` for a bare
-count match. Every candidate carries its **evidence**: each family, whether it
+address (`linked`, `linked_sender`). The **band** needs a linked address:
+`strong` for a linked address plus another family, `moderate` for a linked address
+alone, `weak` for amount+timing and/or gas price without one. The rule follows the
+placebo test on real depositors ([EVALUATION.md](EVALUATION.md)): run on decoy
+windows that end before the wallet's first deposit, the pipeline found
+amount+timing and gas-price leads as often as in the real windows, and only
+linked-address leads clearly more often (30 against 7 over 30 days; 19 against 1
+within 72 hours). Before version 2.13 a gas-price match or a self-relayed count
+match alone reached `moderate`, and two non-linked families reached `strong`. A
+linked exit whose first withdrawal came within 72 hours of the deposit is marked
+as an **early exit**; like the fresh-address mark it is context and does not
+change the band or the score. Every candidate carries its **evidence**: each family, whether it
 holds, and the numbers behind it (share of the field with the same count, `disc`,
 gas price, number of relayer-free withdrawals).
 
@@ -261,8 +269,9 @@ calibrated against known outcomes. The band does not depend on the weights at al
 re-scoring the thesis cases with every weight scaled by a random factor in
 [0.5, 1.5] (and [0.1, 1.9]) never changed a band, and changed the order only
 between same-band candidates with different signals (`tools/sensitivity.py`).
-On generated data with a known exit, each family adds ranking power, `moderate`
-is common on unrelated addresses, and false `strong` comes from chance gas-price
+On generated data with a known exit, each family adds ranking power; on real
+depositors only the linked-address family stands above chance. Under the previous
+band rule `moderate` was common on unrelated addresses and false `strong` came from chance gas-price
 reuse ([EVALUATION.md](EVALUATION.md)).
 
 The report and the web UI also state the analysis parameters (voucher gap, window,

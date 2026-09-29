@@ -26,9 +26,10 @@ traces users leave around it.
   least 5 recipients), self-relayed withdrawals, reuse of a deposit gas price
   (only in blocks without an EIP-1559 base fee), and direct transactions with the
   depositor (not counted when the counterparty is a contract).
-- Reports a band per candidate: `strong` (two or more independent evidence
-  families), `moderate` (one family plus a structural tie), `weak` (amount and
-  timing only), with the evidence behind it: every family, whether it holds,
+- Reports a band per candidate: `strong` (a linked address plus another evidence
+  family), `moderate` (a linked address alone), `weak` (amount+timing and/or gas
+  price without a linked address — chance-level on real depositors, see the
+  placebo test in [EVALUATION.md](docs/EVALUATION.md)), with the evidence behind it: every family, whether it holds,
   and the numbers (share of the recipient field with the same count, `disc`,
   gas price). Candidates are ordered by band, then by an uncalibrated noisy-OR
   score taken across evidence families (within a family only the strongest
@@ -38,6 +39,11 @@ traces users leave around it.
 - Groups exits withdrawn together in repeated bursts, the payout rhythm of an
   operator that pooled several deposits; a group is listed when a corroborated
   candidate or an exit you already know (`--known-exit`) anchors it.
+- Marks a linked exit that withdrew within 72 hours of the deposit (early exit;
+  context, never scored).
+- Optionally runs a placebo check (`--placebo`, or the web UI option): the same
+  analysis on a decoy window that ends before the wallet's first deposit, so the
+  report shows how many leads chance alone produces for this wallet.
 - Opens the HTML report with a case overview and a flow diagram: depositor, pools,
   candidate exits coloured by band.
 - For several wallets: shared candidates, denomination-profile matches,
@@ -74,6 +80,9 @@ The method, thresholds and the reasoning behind them are in
 | `tools/simulate.py` | synthetic benchmark: ablation, negative controls, counter-measures ([results](docs/EVALUATION.md)) |
 | `tools/real_cases.py` | the method on two public laundering cases (KuCoin, Harmony) |
 | `tools/ens_labels.py`, `tools/evaluate_labels.py` | an ENS-labelled set of depositor/exit pairs and the evaluation on it ([results](docs/EVALUATION.md#a-labelled-set-from-ens)) |
+| `tools/wang_baseline.py` | the ENS set scored under the Wang et al. (2023) protocol, with their H2/H3/H5 re-implemented |
+| `tools/placebo_eval.py`, `tools/placebo_windows.py` | placebo (target-decoy) test on random real depositors, per evidence family and exit window ([results](docs/EVALUATION.md#placebo-test-on-real-depositors)) |
+| `tools/review_sample.py` | a blinded manual-review sheet of leads and hidden controls, and its scoring |
 
 ## Requirements
 
@@ -150,6 +159,9 @@ python -m tornado_demix demix <wallet> --exit-window 6
 
 # list the exit group of an exit already known from the investigation
 python -m tornado_demix demix <wallet> --known-exit <exit address>
+
+# also run the same analysis on a decoy window before the first deposit
+python -m tornado_demix demix <wallet> --placebo
 
 # a 7-day exit window, as seen in public laundering cases
 python -m tornado_demix demix <wallet> --rapid
@@ -327,6 +339,13 @@ The method on both public cases, with the numbers behind each claim, is in
   within a band (check a saved result with `tools/sensitivity.py`). How each
   component behaves on generated data with a known answer is in
   [docs/EVALUATION.md](docs/EVALUATION.md).
+- On real depositors the count match, self-relay and gas-price reuse do not beat
+  chance: a placebo test on 152 random Ethereum depositors found as many such
+  leads in decoy windows before the first deposit as in the real windows, at every
+  window from 6 hours to 30 days. Only a linked address (a direct counterparty, or
+  a withdrawal sent by the depositor's side) stood above chance (30 against 7 over
+  30 days, 19 against 1 within 72 hours), so only it makes a `moderate` or `strong`
+  band ([details](docs/EVALUATION.md#placebo-test-on-real-depositors)).
 - On 31 depositor/exit pairs labelled through ENS (2019-2026), demix found 16 of
   the 21 pairs inside its window, all through a direct transaction between the
   two addresses, which the label sees as well; without that signal it found one.
@@ -338,7 +357,7 @@ The method on both public cases, with the numbers behind each claim, is in
   recall for discrimination.
 - A careful user defeats the method: relayers, long delays, split withdrawals
   to fresh addresses. The result is then "no lead", or weak leads on unrelated
-  addresses that happen to share the voucher count, never a corroborated one.
+  addresses that happen to share the voucher count, never a `moderate` or `strong` one.
   On the public KuCoin and Harmony laundering cases the count match found no exit
   (every exit collected notes of several deposits); in KuCoin the linked withdrawal
   sender found 6 of 7 exits for one depositor ([docs/EVALUATION.md](docs/EVALUATION.md)).

@@ -1,13 +1,25 @@
-# Evaluation on a synthetic benchmark
+# Evaluation
 
-Deposit → withdrawal pairs with a known answer are not publicly available, so the
-method's accuracy on real cases cannot be measured here. This document measures how
-the method behaves on generated data where the answer is known, with
-`tools/simulate.py`. The data are synthetic and the numbers depend on the assumptions
-below; they show what each component contributes and how the method fails, not how
-often it is right on real Tornado Cash withdrawals.
+Deposit → withdrawal pairs with a known answer are not publicly available. This
+document combines four checks, each with its own limits:
 
-## Setup
+1. a **synthetic benchmark** (`tools/simulate.py`): generated data with a known
+   exit, to see what each component contributes and how the method fails;
+2. a **placebo test on real depositors** (`tools/placebo_eval.py`,
+   `tools/placebo_windows.py`): the real pipeline run on decoy windows that cannot
+   hold the wallet's notes, which estimates the share of chance leads per evidence
+   family without any labels;
+3. **two public laundering cases** (KuCoin, Harmony);
+4. an **ENS-labelled set**, also scored under the protocol of Wang et al. (2023).
+
+The placebo test is the only one that measures the signals on real withdrawals at
+scale. It found amount+timing and gas-price leads as frequent in decoy windows as
+in real ones, and only the linked-address family above chance. Since version
+2.13 a band therefore needs a linked address; the tables below use that rule.
+
+## Synthetic benchmark
+
+### Setup
 
 A fake explorer replays a depositor's deposits and the pools' `Withdrawal` logs
 through the real pipeline (`multi.correlate`, `run_demix`, `ranked_candidates`). Each
@@ -30,7 +42,7 @@ counterparty is a contract. 200 trials per setting, seed 1:
 python tools/simulate.py --experiment all --trials 200 --seed 1
 ```
 
-## Metrics
+### Metrics
 
 Every recipient of a searched pool window is one instance; the depositor's exits are
 the positives. A listed candidate is a positive prediction.
@@ -49,40 +61,40 @@ no order; **B** the discrimination gate and a `disc`-scaled score; **C** self-re
 is the window-overlap suppression in the operator graph, measured separately on pairs
 of wallets.
 
-## Results
+### Results
 
 #### Ablation, 10 unrelated recipients per pool window
 
 | Config | Components | P | R | F1 | FPR | P >=mod | R >=mod | Top-1 | Top-5 | PR-AUC |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | A | amount+timing, no gate | 0.430 | 0.969 | 0.596 | 0.129 | 0.000 | 0.000 | 0.555 | 0.985 | 0.417 |
-| B | + discrimination gate | 0.433 | 0.966 | 0.598 | 0.127 | 0.000 | 0.000 | 0.670 | 0.995 | 0.722 |
-| C | + self-relay | 0.433 | 0.966 | 0.598 | 0.127 | 0.515 | 0.483 | 0.670 | 0.995 | 0.633 |
-| D | + gas price | 0.430 | 0.973 | 0.597 | 0.130 | 0.555 | 0.603 | 0.780 | 1.000 | 0.719 |
-| E | + linked address | 0.432 | 0.979 | 0.600 | 0.130 | 0.580 | 0.668 | 0.835 | 1.000 | 0.781 |
-| F | + denomination profile | 0.433 | 0.983 | 0.601 | 0.130 | 0.582 | 0.671 | 0.850 | 1.000 | 0.843 |
+| B | + discrimination gate | 0.433 | 0.966 | 0.598 | 0.127 | 0.000 | 0.000 | 0.685 | 0.995 | 0.722 |
+| C | + self-relay | 0.433 | 0.966 | 0.598 | 0.127 | 0.000 | 0.000 | 0.680 | 0.995 | 0.724 |
+| D | + gas price | 0.430 | 0.973 | 0.597 | 0.130 | 0.000 | 0.000 | 0.775 | 1.000 | 0.780 |
+| E | + linked address | 0.432 | 0.979 | 0.600 | 0.130 | 1.000 | 0.185 | 0.835 | 1.000 | 0.827 |
+| F | + denomination profile | 0.433 | 0.983 | 0.601 | 0.130 | 1.000 | 0.185 | 0.895 | 1.000 | 0.934 |
 
 #### Ablation, 50 unrelated recipients per pool window
 
 | Config | Components | P | R | F1 | FPR | P >=mod | R >=mod | Top-1 | Top-5 | PR-AUC |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | A | amount+timing, no gate | 0.130 | 0.976 | 0.230 | 0.131 | 0.000 | 0.000 | 0.250 | 0.705 | 0.127 |
-| B | + discrimination gate | 0.130 | 0.976 | 0.230 | 0.131 | 0.000 | 0.000 | 0.370 | 0.810 | 0.392 |
-| C | + self-relay | 0.130 | 0.976 | 0.230 | 0.131 | 0.208 | 0.517 | 0.350 | 0.775 | 0.307 |
-| D | + gas price | 0.128 | 0.983 | 0.227 | 0.134 | 0.229 | 0.644 | 0.515 | 0.875 | 0.444 |
-| E | + linked address | 0.129 | 0.986 | 0.227 | 0.134 | 0.246 | 0.709 | 0.615 | 0.910 | 0.581 |
-| F | + denomination profile | 0.129 | 0.986 | 0.227 | 0.134 | 0.246 | 0.709 | 0.665 | 0.920 | 0.682 |
+| B | + discrimination gate | 0.130 | 0.976 | 0.230 | 0.131 | 0.000 | 0.000 | 0.415 | 0.785 | 0.392 |
+| C | + self-relay | 0.130 | 0.976 | 0.230 | 0.131 | 0.000 | 0.000 | 0.410 | 0.830 | 0.395 |
+| D | + gas price | 0.128 | 0.983 | 0.227 | 0.134 | 0.000 | 0.000 | 0.550 | 0.900 | 0.496 |
+| E | + linked address | 0.129 | 0.986 | 0.227 | 0.134 | 1.000 | 0.182 | 0.660 | 0.920 | 0.627 |
+| F | + denomination profile | 0.129 | 0.986 | 0.227 | 0.134 | 1.000 | 0.182 | 0.750 | 0.945 | 0.790 |
 
 #### Ablation, 200 unrelated recipients per pool window
 
 | Config | Components | P | R | F1 | FPR | P >=mod | R >=mod | Top-1 | Top-5 | PR-AUC |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | A | amount+timing, no gate | 0.040 | 0.967 | 0.076 | 0.118 | 0.000 | 0.000 | 0.100 | 0.350 | 0.038 |
-| B | + discrimination gate | 0.040 | 0.967 | 0.076 | 0.118 | 0.000 | 0.000 | 0.080 | 0.455 | 0.156 |
-| C | + self-relay | 0.040 | 0.967 | 0.076 | 0.118 | 0.059 | 0.470 | 0.120 | 0.430 | 0.107 |
-| D | + gas price | 0.039 | 0.970 | 0.075 | 0.120 | 0.065 | 0.563 | 0.285 | 0.545 | 0.233 |
-| E | + linked address | 0.039 | 0.977 | 0.075 | 0.120 | 0.074 | 0.647 | 0.415 | 0.620 | 0.425 |
-| F | + denomination profile | 0.039 | 0.977 | 0.075 | 0.120 | 0.074 | 0.647 | 0.490 | 0.670 | 0.515 |
+| B | + discrimination gate | 0.040 | 0.967 | 0.076 | 0.118 | 0.000 | 0.000 | 0.130 | 0.490 | 0.156 |
+| C | + self-relay | 0.040 | 0.967 | 0.076 | 0.118 | 0.000 | 0.000 | 0.145 | 0.510 | 0.156 |
+| D | + gas price | 0.039 | 0.970 | 0.075 | 0.120 | 0.000 | 0.000 | 0.340 | 0.675 | 0.263 |
+| E | + linked address | 0.039 | 0.977 | 0.075 | 0.120 | 1.000 | 0.200 | 0.475 | 0.740 | 0.459 |
+| F | + denomination profile | 0.039 | 0.977 | 0.075 | 0.120 | 1.000 | 0.200 | 0.595 | 0.850 | 0.657 |
 
 #### Negative controls, 50 unrelated recipients per pool window
 
@@ -90,28 +102,28 @@ of wallets.
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | exit after the window | config A | 0.00 | 0.00 | 0.06 | 0.00 | 0.00 | 0.94 |
 | exit after the window | config B | 0.00 | 0.00 | 0.06 | 0.00 | 0.00 | 0.94 |
-| exit after the window | config F | 0.00 | 0.00 | 0.06 | 0.11 | 0.78 | 0.06 |
+| exit after the window | config F | 0.00 | 0.00 | 0.06 | 0.00 | 0.00 | 0.94 |
 | one note per fresh address | config A | 0.00 | 0.00 | 0.10 | 0.00 | 0.00 | 0.90 |
 | one note per fresh address | config B | 0.00 | 0.00 | 0.10 | 0.00 | 0.00 | 0.90 |
-| one note per fresh address | config F | 0.00 | 0.00 | 0.07 | 0.10 | 0.78 | 0.05 |
+| one note per fresh address | config F | 0.00 | 0.00 | 0.07 | 0.00 | 0.00 | 0.93 |
 
 #### Counter-measures against the full model, 50 unrelated recipients
 
 | counter-measure | setting | found | top-1 | no lead | bystander strong | bystander moderate | bystander weak |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| delay | 0 of 3 notes after the window | 1.00 | 0.01 | 0.00 | 0.04 | 0.85 | 0.10 |
-| delay | 1 of 3 notes after the window | 0.00 | 0.00 | 0.01 | 0.04 | 0.86 | 0.10 |
-| delay | 2 of 3 notes after the window | 0.00 | 0.00 | 0.01 | 0.06 | 0.82 | 0.12 |
-| delay | 3 of 3 notes after the window | 0.00 | 0.00 | 0.01 | 0.07 | 0.82 | 0.10 |
-| fresh addresses | 1 exit address(es) | 1.00 | 0.01 | 0.00 | 0.04 | 0.85 | 0.10 |
-| fresh addresses | 2 exit address(es) | 0.00 | 0.00 | 0.01 | 0.06 | 0.84 | 0.10 |
-| fresh addresses | 3 exit address(es) | 0.00 | 0.00 | 0.00 | 0.06 | 0.83 | 0.11 |
-| relayer | self-relayed | 1.00 | 0.39 | 0.00 | 0.04 | 0.85 | 0.10 |
-| relayer | through a relayer | 1.00 | 0.01 | 0.00 | 0.04 | 0.85 | 0.10 |
-| gas strategy | deposit gas price reused | 1.00 | 0.99 | 0.00 | 0.04 | 0.85 | 0.10 |
-| gas strategy | wallet default gas | 1.00 | 0.01 | 0.00 | 0.04 | 0.85 | 0.10 |
-| denominations | both pools to one exit | 1.00 | 0.01 | 0.00 | 0.12 | 0.88 | 0.01 |
-| denominations | each pool to its own exit | 1.00 | 0.01 | 0.00 | 0.14 | 0.86 | 0.01 |
+| delay | 0 of 3 notes after the window | 1.00 | 0.17 | 0.00 | 0.00 | 0.00 | 0.99 |
+| delay | 1 of 3 notes after the window | 0.00 | 0.00 | 0.01 | 0.00 | 0.00 | 0.99 |
+| delay | 2 of 3 notes after the window | 0.00 | 0.00 | 0.01 | 0.00 | 0.00 | 0.99 |
+| delay | 3 of 3 notes after the window | 0.00 | 0.00 | 0.01 | 0.00 | 0.00 | 0.99 |
+| fresh addresses | 1 exit address(es) | 1.00 | 0.17 | 0.00 | 0.00 | 0.00 | 0.99 |
+| fresh addresses | 2 exit address(es) | 0.00 | 0.00 | 0.01 | 0.00 | 0.00 | 0.99 |
+| fresh addresses | 3 exit address(es) | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 1.00 |
+| relayer | self-relayed | 1.00 | 0.17 | 0.00 | 0.00 | 0.00 | 0.99 |
+| relayer | through a relayer | 1.00 | 0.17 | 0.00 | 0.00 | 0.00 | 0.99 |
+| gas strategy | deposit gas price reused | 1.00 | 0.99 | 0.00 | 0.00 | 0.00 | 0.99 |
+| gas strategy | wallet default gas | 1.00 | 0.17 | 0.00 | 0.00 | 0.00 | 0.99 |
+| denominations | both pools to one exit | 1.00 | 0.79 | 0.00 | 0.00 | 0.00 | 1.00 |
+| denominations | each pool to its own exit | 1.00 | 0.17 | 0.00 | 0.00 | 0.00 | 1.00 |
 
 #### Counter-measure intensity, six-note voucher (full model)
 
@@ -137,9 +149,9 @@ Exit addresses the six notes are spread over:
 One delayed note or a second exit address is enough to remove an exit that
 left only amount and timing. An exit that also transacted with the depositor is
 found as long as one note lands in the window; with k exit addresses only that
-one is found, so the share of exits found falls as 1/k. A
-bystander reaches `strong` in 3-7 % of trials at every intensity, through a
-chance gas-price match.
+one is found, so the share of exits found falls as 1/k. No
+bystander reaches `strong` or `moderate` at any intensity: without a linked
+address a chance count or gas-price match stays `weak`.
 
 #### Operator links between two wallets (configuration G)
 
@@ -153,40 +165,102 @@ chance gas-price match.
 
 | Field | Top-1 | PR-AUC | control: strong | control: moderate | control: no lead |
 | --- | --- | --- | --- | --- | --- |
-| baseline | 0.67 | 0.68 | 0.11 | 0.78 | 0.06 |
-| no chance gas reuse | 0.65 | 0.73 | 0.00 | 0.84 | 0.07 |
-| chance gas reuse x5 (p=0.01) | 0.59 | 0.61 | 0.36 | 0.57 | 0.04 |
-| self-relay 5 % | 0.77 | 0.77 | 0.09 | 0.61 | 0.06 |
-| self-relay 30 % | 0.64 | 0.63 | 0.15 | 0.79 | 0.06 |
-| busier recipients (p_more=0.6) | 0.62 | 0.67 | 0.14 | 0.82 | 0.01 |
+| baseline | 0.75 | 0.79 | 0.00 | 0.00 | 0.06 |
+| no chance gas reuse | 0.81 | 0.89 | 0.00 | 0.00 | 0.07 |
+| chance gas reuse x5 (p=0.01) | 0.62 | 0.73 | 0.00 | 0.00 | 0.04 |
+| self-relay 5 % | 0.78 | 0.81 | 0.00 | 0.00 | 0.06 |
+| self-relay 30 % | 0.73 | 0.77 | 0.00 | 0.00 | 0.06 |
+| busier recipients (p_more=0.6) | 0.67 | 0.76 | 0.00 | 0.00 | 0.01 |
 
-## Reading the results
+### Reading the results
 
 - **The gate and the score order the field; they do not shrink it.** A and B list the
   same addresses at these field sizes (every voucher-sized count in a field of 10+ passes
   `disc ≥ 0.5`), but B's `disc`-scaled score lifts PR-AUC about threefold (0.13 → 0.39 at
   N = 50).
-- **Each independent family adds ranking power.** Through B, D, E and F, PR-AUC rises
-  0.39 → 0.44 → 0.58 → 0.68 and top-1 0.37 → 0.67 at N = 50; at N = 200 top-1 rises from
-  0.08 to 0.49. Recall of "listed" stays near 0.98: the exit is almost always among the
-  candidates, and the question is how high it ranks.
-- **Self-relay alone lowers PR-AUC** (0.39 → 0.31 at N = 50) because 15 % of unrelated
-  withdrawals are self-relayed too and move bystanders to `moderate`. With 5 % it helps
-  (sensitivity table). Self-relay is a structural tie, not evidence on its own, which is
-  why it shares a family with the count match.
-- **`moderate` is a lead, not a finding.** In the negative controls, where no exit is
-  findable, an unrelated address reaches `moderate` in about 80 % of trials.
-- **False `strong` comes from chance gas-price reuse.** It occurs in 11 % of negative
-  controls at the baseline, 0 % when no withdrawal reuses the deposit gas price by chance
-  and 36 % at five times the baseline rate. The gas-price signal is only as good as the
-  deposit gas price is unique.
-- **Counter-measures remove the exit, not the leads.** Delaying one note past the window
-  or splitting the notes over fresh addresses drops "found" from 1.00 to 0.00, but the
-  tool still lists unrelated addresses (mostly `moderate`); "no lead" stays near 0.
+- **On generated data each family adds ranking power.** Through B, D, E and F, PR-AUC
+  rises 0.39 → 0.50 → 0.63 → 0.79 and top-1 0.42 → 0.75 at N = 50; at N = 200 top-1
+  rises from 0.13 to 0.60. Recall of "listed" stays near 0.98: the exit is almost always
+  among the candidates, and the question is how high it ranks. The placebo test below
+  shows that the amount+timing and gas-price part of this does not carry over to real
+  pools.
+- **A band now means a linked address.** `moderate` and `strong` are reached only by
+  exits that transacted with the depositor (20 % of generated exits), so P ≥mod is 1.00
+  and R ≥mod about 0.18-0.20. In the negative controls, where no exit is findable, no
+  unrelated address reaches `moderate` or `strong` (before version 2.13: `moderate` in
+  about 80 % and `strong` in 11 % of trials, through self-relay and chance gas-price
+  reuse).
+- **Self-relay no longer lowers PR-AUC** (0.392 → 0.395 at N = 50): it used to lift
+  self-relayed bystanders to `moderate`; it is now context inside the amount+timing
+  family.
+- **Counter-measures remove the exit, not the candidates.** Delaying one note past the
+  window or splitting the notes over fresh addresses drops "found" from 1.00 to 0.00; the
+  tool still lists unrelated addresses, now all `weak`, and "no lead" stays near 0.
 - **Suppression removes false operator links.** Unrelated wallets that deposit in the
   same hour are merged in every trial by a naive shared-candidate rule and in none with
   the window-overlap suppression, while two wallets of one operator that share a
   consolidator are still merged in 91 % of trials (94 % naive).
+
+## Placebo test on real depositors
+
+`tools/placebo_eval.py` draws random Ethereum depositors from the ENS universe
+(deposits spanning at most 60 days, windows complete before August 2026; seed 1)
+and runs the real pipeline twice per depositor: on the usual windows after its
+deposits (target), and on the same deposits shifted back so that every window
+ends a day before its first real deposit (decoy). A withdrawal in a decoy window
+cannot spend one of the wallet's notes, so every decoy lead is a false note link;
+everything else — history, counterparties, deposit gas prices — is the wallet's
+own. The share of target leads that chance explains (a false-discovery rate) is
+estimated as decoy leads per withdrawal searched over target leads per
+withdrawal searched; 95 % intervals come from a bootstrap over depositors.
+`tools/placebo_windows.py` re-scores the cached runs offline for narrower exit
+windows (it reproduces the 30-day bands exactly in all 304 runs).
+
+152 depositors, 30-day window, leads that reached `strong` or `moderate` under
+the previous band rule (so that every family is visible), by family:
+
+| Family | Target leads | Decoy leads | Chance share (95 % CI) |
+|---|---|---|---|
+| linked address (`linked`, `linked_sender`) | 30 | 7 | 0.25 (0.07-0.54) |
+| amount+timing (count match, self-relay) | 160 | 188 | 1.25 (0.79-1.81) |
+| gas price | 45 | 64 | 1.51 (0.92-2.31) |
+| all, previous rule | 228 | 252 | 1.17 (0.82-1.60) |
+
+(262,387 withdrawals searched in target windows, 248,035 in decoy windows.)
+
+The same families by exit window (target / decoy leads):
+
+| Window | linked address | amount+timing | gas price |
+|---|---|---|---|
+| 6 h | 14 / 0 | 3 / 2 | 1 / 1 |
+| 24 h | 16 / 0 | 11 / 12 | 8 / 2 |
+| 72 h | 19 / 1 (0.06, 0-0.24) | 20 / 20 | 12 / 7 |
+| 30 days | 30 / 7 (0.25, 0.07-0.54) | 160 / 188 | 45 / 64 |
+
+Of the 152 depositors, 115 deposited after EIP-1559: for them the gas-price signal
+never fires (the base-fee gate) and amount+timing has a chance share of 1.2-1.9 at
+every window. The 37 earlier depositors give too few narrow-window leads to decide
+either family.
+
+What this shows:
+
+- **Amount+timing and gas price do not separate real exits from chance on real
+  depositors**, at any window from 6 hours to 30 days. The synthetic benchmark
+  says they rank a planted exit well; on real pools the same count or gas price
+  turns up as often where no note of the wallet can be.
+- **The linked-address family does.** Its leads are four times as frequent in real
+  windows as in decoy ones over 30 days, and within 72 hours of the deposit 19
+  against 1. That is why a band now needs a linked address, and why a linked exit
+  within 72 hours is marked as an early exit (context, not scored).
+- A decoy lead is a false *note* link, not necessarily a false *identity* link: a
+  linked address in a decoy window may still belong to the depositor. For the
+  linked family the chance share is therefore an upper bound.
+- The sample is 152 random depositors, most of whom leave no linked exit at all;
+  the intervals are wide, and the result says nothing about careful users beyond
+  the fact that the tool finds no evidence on them.
+
+The check is also available per case (`demix --placebo`, and the web UI option):
+the decoy window of the wallet under investigation, beside the real one.
 
 ## Two public laundering cases
 
@@ -196,7 +270,7 @@ github.com/tayvano/lazarus-bluenoroff-research. Default settings, 30-day window.
 
 | Case | Depositors (deposits) | Exits known | Exits in a window | Candidates | True | Other |
 |---|---|---|---|---|---|---|
-| KuCoin 2020 | 2 (55) | 7 | 6 per depositor | 7 | 6 | 1 `moderate` (chance gas-price reuse) |
+| KuCoin 2020 | 2 (55) | 7 | 6 per depositor | 7 | 6 | 1 `weak` (chance gas-price reuse) |
 | Harmony 2022 | 14 (857) | 30 of 55 listed | 0-30 per depositor | 0 | 0 | 0 |
 
 Run with `python tools/real_cases.py`; it also prints the context marks below.
@@ -207,9 +281,10 @@ transaction sender, except `linked_sender` when the sender is a counterparty of 
 depositor. Before `linked_sender` the tool listed nothing: each exit received 11-29
 withdrawals, none equal to a voucher (24 or 30 notes), because the exits collected
 notes of several deposits. With it, the depositor `0x820a...`, which had transacted
-with the caller, gets 6 candidates, all 6 true exits (the seventh exit received its
-withdrawals months later, outside the window). The other depositor gets one
-unrelated `moderate` candidate from a chance gas-price match.
+with the caller, gets 6 candidates, all 6 true exits, all `moderate` (the seventh exit
+received its withdrawals months later, outside the window). The other depositor gets
+one unrelated candidate from a chance gas-price match; it was `moderate` before
+version 2.13 and is `weak` now.
 
 **Harmony.** Investigators listed 55 withdrawal addresses; 30 of them received 180
 withdrawals from the 100 ETH pool within 30 days of the deposits, 6 per address in
@@ -232,8 +307,8 @@ windows sit in an exit group. With one true exit as the only anchor, the group
 holds 23.0 addresses on average, 16.8 of them (73 %) on the investigators' list;
 the other members were paid out in the same bursts and are leads, not errors, as
 the list itself is partial. In KuCoin the exits, sent by the attacker's own
-caller at different times, form no group, and the chance `moderate` candidate of
-the second depositor is in none either, so it anchors nothing.
+caller at different times, form no group, and the chance candidate of the second
+depositor is `weak`, so it anchors nothing.
 
 Both cases show the same limit as the synthetic counter-measures: when notes are
 pooled and redistributed, a count match finds nothing, and the tool reports no
@@ -247,8 +322,9 @@ The field model is simple: recipients are independent, gas prices are drawn from
 short list of defaults, exits never reuse addresses across cases, and every exit lands
 inside the window unless a counter-measure says otherwise. Real pools have bursts,
 relayer-specific patterns and post-EIP-1559 fee markets. The benchmark is a controlled
-test of the method's components and failure modes; a labelled set of real deposit →
-withdrawal pairs remains the only way to measure its accuracy.
+test of the method's components and failure modes; on real depositors the
+placebo test below shows that its amount+timing and gas-price results do not carry
+over.
 
 ## A labelled set from ENS
 
@@ -269,8 +345,11 @@ attribution labels loaded) on every labelled depositor:
 | | strong | up to moderate | all bands |
 |---|---|---|---|
 | Pairs found (of 31; 21 inside the window) | 1 | 16 (76 % of those in the window) | 16 |
-| Precision, lower bound | 1 of 7 | 16 of 85 (19 %) | 16 of 2,849 |
+| Precision, lower bound | 1 of 4 | 16 of 40 (40 %) | 16 of 2,849 |
 | Pairs found without the `linked` signal | 0 | 0 | 1 |
+
+(Under the previous band rule, where a gas-price match or a self-relayed count
+match alone reached `moderate`, the lower bound was 16 of 85, 19 %.)
 
 All 16 pairs are found through a direct transaction between the depositor and
 the recipient (`linked`). The ENS link and `linked` see the same relationship,
@@ -283,12 +362,37 @@ match is rarely checkable after EIP-1559. The count match fires for one pair onl
 (a two-note voucher), and that pair is found as `strong`. Ten pairs fall outside
 the window (withdrawals 50-1,794 days after the deposit).
 
-The precision is a lower bound. The labels say nothing about the 69 other
-`strong` and `moderate` candidates: 24 are direct counterparties of the
-depositor, 41 match a deposit gas price, 4 received self-relayed withdrawals. The set covers only users careless enough to put an ENS
+The precision is a lower bound. The labels say nothing about the 24 other
+`strong` and `moderate` candidates, all direct counterparties of the depositor
+(3 are the depositor itself; 16 withdrew within 72 hours of the deposit). The set covers only users careless enough to put an ENS
 name on both sides, names are read as they are today, and a pair links two
 addresses, not a deposit to a withdrawal. The pairs link named people to
 Tornado Cash use, so they stay local; only these aggregates are published.
+
+### The same set under the protocol of Wang et al.
+
+Wang et al. (2023) validate their heuristics at the address level: test pairs are
+every labelled depositor times every labelled withdrawer, and a predicted pair
+that is not labelled counts as a false positive. Their average F1 of 0.55 comes
+almost entirely from H3, a direct transfer between the two addresses.
+`tools/wang_baseline.py` re-implements H2 (the depositor sent the withdrawal), H3
+and H5 (cross-pool deposit profile) from the paper and applies the protocol to the
+27 × 29 labelled addresses here:
+
+| Method | Precision | Recall | F1 |
+|---|---|---|---|
+| Wang H2 | 1.00 | 0.03 | 0.07 |
+| Wang H3 (direct transfer, whole history) | 1.00 | 0.93 | 0.96 |
+| Wang H5 | 0.00 | 0.00 | 0.00 |
+| demix, up to `moderate` | 1.00 | 0.55 | 0.71 |
+| demix without `linked` | 0.00 | 0.00 | 0.00 |
+
+A direct-transfer check alone, with no mixer analysis at all, scores 0.96,
+because 27 of the 29 pairs transacted directly. Labels built from address links
+(ENS, airdrop aggregation) measure whether two addresses ever met, not whether a
+withdrawal spends a deposit; this holds for the F1 of 0.55 in Wang et al. as much
+as for the numbers here. demix recalls less than H3 because it only looks at
+withdrawals in the 30-day window after the deposit.
 
 ## Do the signals move together?
 
