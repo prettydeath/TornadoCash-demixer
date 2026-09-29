@@ -185,16 +185,15 @@ def test_band_counts_independent_families(signals, band):
     assert confidence_band(signals) == band
 
 
-def test_band_count_plus_self_relayed_is_moderate():
-    """The pin: count_match and self_relayed are the SAME family
-    ('amount+timing'), so there is ONE family, not two - so this is NOT
-    strong. self_relayed is a tie beyond the bare count, so it is moderate."""
+def test_band_count_plus_self_relayed_is_weak():
+    """count_match and self_relayed are the SAME family ('amount+timing'), and
+    without a linked address the family is chance-level on real data, so weak."""
     from tornado_demix.heuristics import METHOD_FAMILY
 
     assert METHOD_FAMILY["count_match"] == METHOD_FAMILY["self_relayed"]
     families = {METHOD_FAMILY[s] for s in {"count_match", "self_relayed"}}
     assert len(families) == 1
-    assert confidence_band({"count_match", "self_relayed"}) == "moderate"
+    assert confidence_band({"count_match", "self_relayed"}) == "weak"
 
 
 def test_band_rationale_is_defined_for_every_band():
@@ -212,8 +211,8 @@ def test_band_rationale_does_not_claim_a_count_match_a_candidate_lacks():
     # linked-only: moderate, but NO count match - must not mention one
     r = band_rationale("moderate", {"linked"})
     assert "amount+timing match" not in r and "count" not in r.lower()
-    # count_match + self_relayed: moderate WITH a count - may mention it
-    r2 = band_rationale("moderate", {"count_match", "self_relayed"})
+    # count_match + self_relayed: weak WITH a count - may mention it
+    r2 = band_rationale("weak", {"count_match", "self_relayed"})
     assert "amount+timing" in r2 or "count" in r2.lower()
     assert r != r2
 
@@ -298,10 +297,10 @@ def test_a_corroborated_lead_ranks_above_a_higher_scoring_single_family_lead():
     res["signals"] = {a: [] for a in res["detail"]}
     res["confidence"] = {a: 0.0 for a in res["detail"]}
     res["discrimination"] = {a: 0.0 for a in res["detail"]}
-    res["signals"][strong] = ["count_match", "gas_price"]
+    res["signals"][strong] = ["count_match", "linked"]
     res["confidence"][strong] = 0.3625
     res["discrimination"][strong] = 0.5
-    res["signals"][moderate] = ["count_match", "self_relayed"]
+    res["signals"][moderate] = ["linked"]
     res["confidence"][moderate] = 0.475
     res["discrimination"][moderate] = 1.0
     data = _data(res, voucher_count=3)
@@ -366,7 +365,7 @@ def test_the_summary_lists_facts_and_counts_one_family_for_count_and_self_relay(
     data["heuristics"] = {"gas_price_matches": [], "linked_addresses": []}
     lines = conclusion(data).splitlines()
     assert lines[0].startswith(f"Top candidate: {lead}")
-    assert "band moderate" in lines[0]
+    assert "band weak" in lines[0]
     assert lines[1] == "Evidence families: amount+timing (1 independent)."
     assert lines[-1].startswith("Limitations:")
     assert "strongest" not in conclusion(data).lower()

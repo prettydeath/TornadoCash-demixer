@@ -101,7 +101,10 @@ def test_evaluation_counts_recall_precision_and_the_linked_share():
     pairs = [{"pool_key": "1 ETH", "depositor": DEP, "recipient": REC}]
     full = evaluate_labels.evaluate(results, pairs, drop_linked=False)
     assert full["reachable"] == 1 and full["found_with_linked"] == 1
-    assert full["moderate"]["found"] == 1 and full["moderate"]["candidates"] == 2
-    assert full["moderate"]["precision_lower_bound"] == 0.5
+    # gas_price alone is weak: moderate holds only the linked lead
+    assert full["moderate"]["found"] == 1 and full["moderate"]["candidates"] == 1
+    assert full["moderate"]["precision_lower_bound"] == 1.0
+    assert full["weak"]["candidates"] == 2 and full["weak"]["precision_lower_bound"] == 0.5
     bare = evaluate_labels.evaluate(results, pairs, drop_linked=True)
-    assert bare["weak"]["found"] == 0 and bare["moderate"]["candidates"] == 1
+    assert bare["weak"]["found"] == 0 and bare["moderate"]["candidates"] == 0
+    assert bare["weak"]["candidates"] == 1

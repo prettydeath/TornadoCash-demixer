@@ -26,6 +26,7 @@ from .errors import ConfigError, TornadoDemixError
 from .etherscan import EtherscanClient
 from .multi import correlate
 from .networks import get_network
+from .placebo import BANDS, run_placebo
 from .relayer import (
     analyze_relayers,
     collect_withdrawals,
@@ -178,6 +179,21 @@ def _wallets_from_args(args):
     raise ConfigError("Provide wallet address(es) or --wallets-csv")
 
 
+def _print_placebo(pb: dict) -> None:
+    print(f"\n[placebo] decoy window {pb['offset_days']:g} days before the real one")
+    print(
+        f"  withdrawals searched: {pb['target_withdrawals']} real, {pb['decoy_withdrawals']} decoy"
+    )
+    for band in BANDS:
+        print(
+            f"  {band:9} real {pb['target'][band]} | decoy {pb['decoy'][band]}"
+            f"  - {pb['verdicts'][band]}"
+        )
+    for caveat in pb["caveats"]:
+        print(f"  [!] {caveat}")
+    print(f"  {pb['note']}")
+
+
 def cmd_demix(args: argparse.Namespace) -> None:
     wallet = _valid_address(args.wallet)
     key = config.load_api_key(args.api_csv)
@@ -243,6 +259,23 @@ def cmd_demix(args: argparse.Namespace) -> None:
             f"  [!] {unresolved['pool_key']} pool NOT searched "
             f"(block lookup failed): {unresolved['reason']}"
         )
+
+    if getattr(args, "placebo", False) and data["deposits"]:
+        data["placebo"] = run_placebo(
+            client,
+            wallet,
+            data,
+            args.window_days,
+            network=net,
+            labels=labels,
+            exit_window_hours=args.exit_window,
+            fee_lo=args.fee_lo,
+            fee_hi=args.fee_hi,
+            gap_hours=args.gap_hours,
+            mode=args.mode,
+            max_voucher_span_hours=getattr(args, "max_voucher_span", None),
+        )
+        _print_placebo(data["placebo"])
 
     # Relayer intelligence is only available in event mode.
     relayer_stats, leads = None, []
@@ -532,6 +565,12 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="ADDRESS",
         help="an exit already known from the investigation (repeatable); its exit "
         "group, the recipients withdrawn with it in joint bursts, is listed",
+    )
+    p_demix.add_argument(
+        "--placebo",
+        action="store_true",
+        help="also run a decoy window that ends before the first deposit and compare the "
+        "leads found there with the real ones (doubles explorer calls)",
     )
     p_demix.add_argument(
         "--attribution-dir",

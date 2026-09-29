@@ -625,6 +625,7 @@ def run_demix(
     max_voucher_span_hours: float | None = None,
     known_exits=(),
     labels: dict[str, dict] | None = None,
+    deposit_shift_seconds: int = 0,
 ) -> dict:
     """Full single-wallet demix. Returns a structured result dict.
 
@@ -632,6 +633,10 @@ def run_demix(
     ``exit_window_hours`` narrows the withdrawal search to that many hours after
     each deposit instead of ``window_days`` days (see :func:`voucher_windows`);
     ``None`` keeps the full window.
+    ``deposit_shift_seconds`` moves every detected deposit that many seconds back
+    in time before anything else runs: the search windows then end earlier, which
+    is how a decoy window is built (see :mod:`tornado_demix.placebo`). ``0`` is a
+    normal run.
     """
     network = network or _default_network()
     wallet = wallet.lower()
@@ -656,6 +661,8 @@ def run_demix(
         internal_txs=internal_txs,
         token_txs=token_txs,
     )
+    if deposit_shift_seconds > 0:
+        deposits = [dict(d, ts=d["ts"] - deposit_shift_seconds) for d in deposits]
     _log("[*] Tornado deposits detected: {}".format(len(deposits)))
     if not deposits:
         return {
@@ -672,6 +679,7 @@ def run_demix(
                 "window_days": window_days,
                 "gap_hours": gap_hours,
                 "exit_window_hours": exit_window_hours,
+                "deposit_shift_seconds": deposit_shift_seconds,
             },
         }
 
@@ -737,6 +745,7 @@ def run_demix(
             "network": network.name,
             "currency": network.currency,
             "exit_window_hours": exit_window_hours,
+            "deposit_shift_seconds": deposit_shift_seconds,
         },
         "deposits": deposits,
         "vouchers": vouchers,

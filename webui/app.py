@@ -39,6 +39,7 @@ from tornado_demix.heuristics import (  # noqa: E402
 )
 from tornado_demix.multi import correlate  # noqa: E402
 from tornado_demix.networks import DEFAULT_NETWORKS_CSV, load_networks  # noqa: E402
+from tornado_demix.placebo import BANDS, run_placebo  # noqa: E402
 from tornado_demix.relayer import (  # noqa: E402
     analyze_relayers,
     collect_withdrawals,
@@ -168,10 +169,44 @@ def _base_context():
         "trace_token": "",
         "trace_max_hops": "",
         "known_exits": "",
+        "placebo": False,
     }
 
 
-def _run_demix(client, wallets, net, window_days, mode, exit_window_hours=None, known_exits=()):
+def _placebo_view(pb, net):
+    """Placebo check as the template needs it: one row per band, decoy leads with links."""
+    if not pb:
+        return None
+    window = pb["decoy_window"]
+    return {
+        "offset_days": "{:g}".format(pb["offset_days"]),
+        "window": "{} .. {}".format(_fmt_ts(window[0]), _fmt_ts(window[1])) if window else "",
+        "target_withdrawals": pb["target_withdrawals"],
+        "decoy_withdrawals": pb["decoy_withdrawals"],
+        "rows": [
+            {
+                "band": b,
+                "target": pb["target"][b],
+                "decoy": pb["decoy"][b],
+                "target_rate": _rate(pb["target_per_1000"][b]),
+                "decoy_rate": _rate(pb["decoy_per_1000"][b]),
+                "verdict": pb["verdicts"][b],
+            }
+            for b in BANDS
+        ],
+        "leads": [dict(lead, url=net.addr_url(lead["address"])) for lead in pb["decoy_leads"]],
+        "caveats": pb["caveats"],
+        "note": pb["note"],
+    }
+
+
+def _rate(value):
+    return "n/a" if value is None else "{:g}".format(value)
+
+
+def _run_demix(
+    client, wallets, net, window_days, mode, exit_window_hours=None, known_exits=(), placebo=False
+):
     """Per-wallet demix. Returns (blocks, csv_rows, reports)."""
     blocks, rows, reports = [], [], {}
     labels = load_attribution(net.name)
@@ -186,6 +221,17 @@ def _run_demix(client, wallets, net, window_days, mode, exit_window_hours=None, 
             known_exits=known_exits,
             labels=labels,
         )
+        if placebo and data["deposits"]:
+            data["placebo"] = run_placebo(
+                client,
+                wallet,
+                data,
+                window_days,
+                network=net,
+                labels=labels,
+                exit_window_hours=exit_window_hours,
+                mode=mode,
+            )
         reports[wallet] = build_html_report(data, net, attribution=labels)
         reports[wallet + ".json"] = demix_json(data, attribution=labels)
         denoms = []
@@ -264,6 +310,7 @@ def _run_demix(client, wallets, net, window_days, mode, exit_window_hours=None, 
                 "disc": "{:.2f}".format(r["discrimination"]),
                 "field": r["field_size"],
                 "evidence": r["evidence"],
+                "early": r.get("early_exit", False),
             }
             for r in ranked_candidates(data, attribution=labels)
         ]
@@ -328,6 +375,7 @@ def _run_demix(client, wallets, net, window_days, mode, exit_window_hours=None, 
                 "n_candidates": len(ranked),
                 "top_band": top_band,
                 "assumptions": analysis_assumptions(data),
+                "placebo": _placebo_view(data.get("placebo"), net),
             }
         )
     header = [
@@ -586,6 +634,7 @@ def index():
     # Parse the numeric fields before the try block so bad input becomes a message,
     # not a 500, and echo them back so one error does not blank the other field.
     ctx["exit_window"] = request.form.get("exit_window") or ""
+    ctx["placebo"] = bool(request.form.get("placebo"))
     for field in (
         "trace_amount",
         "trace_start_block",
@@ -656,7 +705,14 @@ def index():
         client = EtherscanClient(api_key, **net.client_kwargs())
         if analysis == "demix":
             blocks, table, reports = _run_demix(
-                client, wallets, net, window_days, mode, exit_window, known_exits
+                client,
+                wallets,
+                net,
+                window_days,
+                mode,
+                exit_window,
+                known_exits,
+                placebo=bool(request.form.get("placebo")),
             )
             payload = {"kind": "demix", "blocks": blocks}
         elif analysis == "multi":

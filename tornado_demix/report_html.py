@@ -18,6 +18,7 @@ from .heuristics import (
 )
 from .multi import SYNC_MAX_SPAN_HOURS
 from .networks import Network
+from .placebo import BANDS
 from .relayer import analyze_relayers, collect_withdrawals, self_relayed_candidates
 from .report_csv import (
     _fmt_hours,
@@ -174,6 +175,16 @@ def _evidence_html(evidence: list[dict]) -> str:
     return f'<ul class="evidence">{items}</ul>'
 
 
+def _early_html(early: bool | None) -> str:
+    """A linked exit withdrawn soon after the deposit; context, not a signal."""
+    if not early:
+        return ""
+    return (
+        '<div class="rat">Early exit: the linked address withdrew within 72 h of the deposit; '
+        "in the placebo test such leads almost never appeared in decoy windows (not scored).</div>"
+    )
+
+
 def _fresh_html(fresh: dict | None) -> str:
     """The history an exit had before its first withdrawal; context, not a signal."""
     if not fresh:
@@ -284,6 +295,50 @@ def _groups_html(groups: list[dict], network: Network) -> str:
             f'<span class="conf pct">{_e(_ts(g["first_ts"]))} – {_e(_ts(g["last_ts"]))}</span></div>'
             f'<div class="why">Anchor: {_e(anchors)}</div>'
             f'<ul class="evidence">{members}</ul></div>'
+        )
+    return "".join(parts)
+
+
+def _placebo_html(pb: dict | None, network: Network) -> str:
+    """Placebo check (see placebo.py): leads per band in the real and the decoy window."""
+    if not pb:
+        return ""
+
+    def rate(v):
+        return "n/a" if v is None else f"{v:g}"
+
+    window = pb.get("decoy_window")
+    span = f" ({_e(_ts(window[0]))} – {_e(_ts(window[1]))})" if window else ""
+    rows = "".join(
+        "<tr><td>{}</td>".format(_band_badge(b))
+        + f'<td class="num">{pb["target"][b]}</td><td class="num">{pb["decoy"][b]}</td>'
+        + f'<td class="num">{rate(pb["target_per_1000"][b])} / {rate(pb["decoy_per_1000"][b])}</td>'
+        + f"<td>{_e(pb['verdicts'][b])}</td></tr>"
+        for b in BANDS
+    )
+    parts = [
+        '<h2>Placebo check<span class="rule"></span></h2>',
+        '<div class="meta">A decoy window is a search window that ends a day before the '
+        "first real deposit, so it cannot contain this wallet's notes: any lead found there "
+        "is chance. The same pipeline ran on it, "
+        f"{pb['offset_days']:g} days earlier{span}. "
+        f"Withdrawals searched: {pb['target_withdrawals']} real, {pb['decoy_withdrawals']} decoy.</div>",
+        '<table><colgroup><col style="width:12%"><col style="width:11%"><col style="width:11%">'
+        '<col style="width:18%"><col></colgroup>'
+        "<tr><th>Band</th><th>Real window</th><th>Decoy window</th>"
+        "<th>Per 1000 withdrawals (real / decoy)</th><th>Verdict</th></tr>" + rows + "</table>",
+        f'<div class="callout">{_e(pb["note"])}</div>',
+    ]
+    for caveat in pb.get("caveats", []):
+        parts.append(f'<div class="callout">{_e(caveat)}</div>')
+    for lead in pb.get("decoy_leads", []):
+        parts.append(
+            '<div class="lead-card">'
+            f'<div class="top">{_band_badge(lead["band"])}'
+            f'<span class="addr wrap">{_addr_link(network, lead["address"])}</span>'
+            f'<span class="pill">{_e(lead["pool_key"])}</span></div>'
+            f'<div class="why">Decoy lead, chance by construction. Signals: '
+            f"{_e(', '.join(lead['signals']))}</div></div>"
         )
     return "".join(parts)
 
@@ -413,9 +468,10 @@ def build_html_report(
     )
     p.append(
         '<div class="meta">These are <b>probabilistic leads for '
-        "corroboration, not proof</b>. The band reflects how many "
-        "independent families of evidence agree on an address; each card lists "
-        "what was checked. The score only orders leads within a band.</div>"
+        "corroboration, not proof</b>. A lead needs a linked address; the band "
+        "rises to strong when another family corroborates it. Amount+timing and gas "
+        "price alone are chance-level on real depositors and stay weak. Each card "
+        "lists what was checked. The score only orders leads within a band.</div>"
     )
     if likely:
         for r in likely[:8]:
@@ -433,6 +489,7 @@ def build_html_report(
                 f'<div class="why">{_e(candidate_reason(r))}</div>'
                 f"{_evidence_html(r['evidence'])}"
                 f"{_fresh_html(r.get('fresh'))}"
+                f"{_early_html(r.get('early_exit'))}"
                 f'<div class="rat">Band: {_e(r["band"])} — '
                 f"{_e(band_rationale(r['band'], set(r['signals'])))}.</div>"
                 "</div>"
@@ -444,6 +501,7 @@ def build_html_report(
             "points and trace the funding source.</div>"
         )
     p.append(_groups_html(data.get("exit_groups", []), network))
+    p.append(_placebo_html(data.get("placebo"), network))
 
     # A pool whose block lookup failed was never searched; that must not read
     # as "no exits found".
@@ -517,8 +575,9 @@ def build_html_report(
             )
         p.append("</table>")
         p.append(
-            '<div class="meta">The <b>band</b> is the headline: it reflects how many '
-            "independent families of evidence corroborate the address. The score is a "
+            '<div class="meta">The <b>band</b> is the headline: strong is a linked address '
+            "plus another family, moderate a linked address alone, weak amount+timing or "
+            "gas price without one (chance-level on real depositors). The score is a "
             "noisy-OR over expert signal weights that orders leads within a band; it is "
             "uncalibrated and is not a probability.</div>"
         )

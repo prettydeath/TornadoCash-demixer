@@ -148,6 +148,10 @@
         <input id="known_exits" name="known_exits" class="mono" style="width:100%"
                placeholder="0x…, 0x…" value="{{ known_exits }}">
       </div>
+      <div>
+        <label for="placebo" title="Also run the same search on a decoy window that ends a day before the first deposit, where no withdrawal can belong to this wallet, and compare the leads found there with the real ones. Doubles the explorer calls.">
+          <input id="placebo" name="placebo" type="checkbox" value="1" {% if placebo %}checked{% endif %} style="width:auto;margin-right:.3rem">Placebo check (doubles explorer calls)</label>
+      </div>
     </div>
     <div class="row" id="traceFields" {% if analysis!='trace' %}hidden{% endif %}>
       <div>
@@ -238,19 +242,19 @@
               {% endif %}
               {% for c in b.ranked %}
               <tr>
-                <td><span class="badge {{ c.band }}">{{ c.band }}</span></td>
+                <td><span class="badge {{ c.band }}">{{ c.band }}</span>{% if c.early %}<div class="note">early exit</div>{% endif %}</td>
                 <td class="mono"><a href="{{ c.url }}" target="_blank" rel="noopener">{{ c.address }}</a></td>
                 <td class="num">{{ c.pool_key }}</td>
                 <td><div class="conf"><span class="pct">{{ c.score }}</span><span class="cbar" style="--w:{{ c.bar }}%"></span></div></td>
                 {% if b.show_attr %}<td class="flag">{{ c.attribution }}</td>{% endif %}
-                <td>{{ c.reason }}
+                <td>{{ c.reason }}{% if c.early %}<div class="note">Linked exit withdrawn within 72 h of the deposit: such leads almost never appear in decoy windows (context, not scored).</div>{% endif %}
                   <details class="ev"><summary>Evidence · disc {{ c.disc }} of {{ c.field }} recipients</summary>
                     <ul>{% for e in c.evidence %}<li class="{{ 'ev-yes' if e.holds else 'ev-no' }}"><b>{{ '&#10003;'|safe if e.holds else '&#8211;'|safe }} {{ e.label }}</b> {{ e.detail }}</li>{% endfor %}</ul>
                   </details></td>
               </tr>
               {% endfor %}
             </table>
-            <div class="note">The <b>band</b> is the headline — how many independent families of evidence corroborate the address. The score only orders leads within a band; it is uncalibrated and not a probability. Open <b>Evidence</b> to see what was checked for each address.</div>
+            <div class="note">The <b>band</b> is the headline. <b>strong</b>: a linked address (direct counterparty or withdrawal sent by the depositor's side) plus another family; <b>moderate</b>: a linked address alone; <b>weak</b>: amount+timing or gas price without a linked address — on real depositors these fire as often in decoy windows as in real ones, so they are context, not leads. The score only orders leads within a band; it is uncalibrated and not a probability. Open <b>Evidence</b> to see what was checked for each address.</div>
             {% else %}<div class="note">No discriminating candidates (usually single-note vouchers).</div>{% endif %}
 
             <h4 style="margin:1.1rem 0 .3rem;font-size:.9rem;">Cross-method matches</h4>
@@ -319,6 +323,21 @@
             {% for g in b.groups %}
               <div style="font-size:.82rem;margin:.5rem 0 .2rem;"><span class="pill">{{ g.pool_key }}</span> {{ g.members|length }} addresses · {{ g.notes }} notes · anchor <span class="mono">{{ g.anchors }}</span></div>
               <div class="mono" style="font-size:.76rem;">{% for m in g.members %}<a href="{{ m.url }}" target="_blank" rel="noopener">{{ m.address }}</a>{% if not loop.last %}<br>{% endif %}{% endfor %}</div>
+            {% endfor %}
+            {% endif %}
+            {% if b.placebo %}
+            <h4 style="margin:1.1rem 0 .3rem;font-size:.9rem;">Placebo check</h4>
+            <div class="note" style="margin-bottom:.3rem;">A decoy window is a search window that ends a day before the first real deposit, so it cannot contain this wallet's notes: any lead found there is chance. The same pipeline ran on a window {{ b.placebo.offset_days }} days earlier{% if b.placebo.window %} ({{ b.placebo.window }}){% endif %}. Withdrawals searched: {{ b.placebo.target_withdrawals }} real, {{ b.placebo.decoy_withdrawals }} decoy.</div>
+            <table>
+              <tr><th>Band</th><th>Real window</th><th>Decoy window</th><th>Per 1000 withdrawals (real / decoy)</th><th>Verdict</th></tr>
+              {% for r in b.placebo.rows %}
+              <tr><td><span class="badge {{ r.band }}">{{ r.band }}</span></td><td class="num">{{ r.target }}</td><td class="num">{{ r.decoy }}</td><td class="num">{{ r.target_rate }} / {{ r.decoy_rate }}</td><td>{{ r.verdict }}</td></tr>
+              {% endfor %}
+            </table>
+            <div class="note">{{ b.placebo.note }}</div>
+            {% for c in b.placebo.caveats %}<div class="note flag">{{ c }}</div>{% endfor %}
+            {% for l in b.placebo.leads %}
+              <div style="font-size:.82rem;margin:.5rem 0 .2rem;"><span class="badge {{ l.band }}">{{ l.band }}</span> <span class="pill">{{ l.pool_key }}</span> <a class="mono" href="{{ l.url }}" target="_blank" rel="noopener">{{ l.address }}</a> · decoy lead, chance by construction · {{ l.signals|join(', ') }}</div>
             {% endfor %}
             {% endif %}
             <h4 style="margin:1.1rem 0 .3rem;font-size:.9rem;">Summary</h4>

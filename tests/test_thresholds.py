@@ -73,8 +73,10 @@ def test_a_gas_price_shared_by_three_withdrawals_still_counts_but_not_by_four():
     assert "gas_price" not in common["denoms"]["0.1 ETH"]["signals"][first]
 
 
-def test_a_gas_price_match_alone_is_moderate():
-    assert confidence_band({"gas_price"}) == "moderate"
+def test_a_gas_price_match_alone_is_weak():
+    # chance-level on real data (placebo test): no lead without a linked address
+    assert confidence_band({"gas_price"}) == "weak"
+    assert confidence_band({"gas_price", "count_match"}) == "weak"
 
 
 def _tx(value_eth, ts, tx_hash):

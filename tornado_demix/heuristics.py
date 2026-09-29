@@ -395,8 +395,7 @@ def method_breakdown(data: dict) -> list[dict]:
 
 
 # Evidence families. count_match, self_relayed and profile_match read the same
-# withdrawals, so they are one family: two families need a gas-price reuse or a
-# linked address.
+# withdrawals, so they are one family.
 METHOD_FAMILY = {
     "count_match": "amount+timing",
     "self_relayed": "amount+timing",
@@ -408,33 +407,51 @@ METHOD_FAMILY = {
 
 
 # The score is uncalibrated and a percentage reads as a probability, so results
-# are presented by band: how many independent families support the address.
+# are presented by band. A placebo test on real depositors (docs/EVALUATION.md:
+# the same pipeline run on decoy windows that cannot hold the wallet's notes)
+# found amount+timing and gas-price leads as frequent in decoy windows as in real
+# ones; only the linked-address family stood above chance. A band therefore
+# needs a linked address; other families corroborate it but never make a lead.
 BAND_ORDER = {"strong": 3, "moderate": 2, "weak": 1}
+
+LINKED_SIGNALS = frozenset({"linked", "linked_sender"})
+
+# A linked exit this soon after the voucher's last deposit: in the placebo test
+# 19 such leads in real windows against 1 in decoy windows. Shown, not scored.
+EARLY_EXIT_HOURS = 72
 
 
 def confidence_band(signals):
     """Return "strong", "moderate" or "weak" from the candidate's signal set.
 
-    strong: two or more families; moderate: one family with a structural tie
-    (count_match + self_relayed is one family, so moderate); weak: count only.
+    strong: a linked address plus another family; moderate: a linked address;
+    weak: amount+timing and/or gas price without a linked address.
     """
     families = {METHOD_FAMILY[s] for s in signals if s in METHOD_FAMILY}
-    if len(families) >= 2:
-        return "strong"
-    if signals & {"linked", "linked_sender", "gas_price", "self_relayed"}:
-        return "moderate"
+    if signals & LINKED_SIGNALS:
+        return "strong" if len(families) >= 2 else "moderate"
     return "weak"
 
 
 def band_rationale(band: str, signals: set[str]) -> str:
     """Plain-language reason for the band; never claims a signal the candidate lacks."""
     if band == "strong":
-        return "corroborated by two or more independent families of evidence"
-    if band == "weak":
-        return "amount and timing only - no independent corroboration"
-    if "count_match" in signals:
-        return "an amount+timing match plus a corroborating tie"
-    return "a structural signal (linked address or gas price) on its own"
+        return "a linked address corroborated by another family of evidence"
+    if band == "moderate":
+        return "a linked address on its own"
+    if "gas_price" in signals:
+        return "gas price or amount+timing without a linked address - chance-level on real data"
+    return "amount+timing only - chance-level on real data"
+
+
+def early_exit(data: dict, pool_key: str, first_ts: int) -> bool:
+    """True when the exit's first withdrawal is within EARLY_EXIT_HOURS after a
+    voucher's last deposit into the same pool."""
+    return any(
+        v.get("pool_key") == pool_key
+        and 0 <= first_ts - v.get("last_ts", v.get("first_ts", first_ts + 1)) <= EARLY_EXIT_HOURS * 3600
+        for v in data.get("vouchers", [])
+    )
 
 
 def cross_method(data: dict, min_methods: int = 2) -> list[dict]:
@@ -575,6 +592,8 @@ def ranked_candidates(
                     "evidence": candidate_evidence(data, pool_key, addr),
                     "attribution": format_label(label_of(attribution, addr)) if attribution else "",
                     "fresh": data.get("fresh_addresses", {}).get(addr),
+                    "early_exit": bool(set(sig) & LINKED_SIGNALS)
+                    and early_exit(data, pool_key, min(r["ts"] for r in recs)),
                 }
             )
     # Band first: the score orders leads within a band but cannot lift a

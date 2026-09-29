@@ -56,8 +56,8 @@ def test_a_strong_lead_keeps_its_place_above_weaker_bands():
 def test_order_within_a_band_can_move():
     data = _data(
         {
-            "0xa": (["count_match", "gas_price"], 0.7),
-            "0xb": (["count_match", "linked"], 0.7),
+            "0xa": (["count_match", "linked"], 0.7),
+            "0xb": (["gas_price", "linked"], 0.7),
         }
     )
     s = sensitivity.analyse(data, samples=300, spread=0.9)
