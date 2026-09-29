@@ -1,0 +1,28 @@
+# TornadoCash Demixer
+
+> Open-source Python toolkit (MIT) for Tornado Cash forensics on public on-chain data. Given a depositor wallet it lists likely withdrawal addresses with an evidence band and the evidence behind each; it also groups exits paid out together, links wallets of one operator, follows withdrawn funds forward, and can run a placebo check that shows how many leads chance alone produces for the wallet. 55 verified pools on 8 EVM chains (Ethereum, BSC, Polygon, Arbitrum, Optimism, Avalanche, Gnosis, Base). Leads, not proof.
+
+What the evidence supports, measured on real depositors with a placebo (target-decoy) test: a linked address (a direct counterparty of the depositor, or a withdrawal sent by the depositor's side) stands clearly above chance; amount+timing (count match, self-relay) and gas-price matches do not, so they never make a lead on their own. Bands: `strong` = linked address plus another evidence family; `moderate` = linked address alone; `weak` = no linked address.
+
+Install from a checkout: `python -m pip install .` (core CLI), `python -m pip install ".[web]"` (local Flask UI). Needs an Etherscan-family API key (config/api.csv or the ETHERSCAN_API_KEY environment variable).
+
+## Commands
+
+- `python -m tornado_demix demix <wallet>`: exit candidates for one depositor. Options: `--network`, `--window-days`, `--exit-window HOURS`, `--known-exit ADDR`, `--placebo`, `--report file.html`, `--json file.json`.
+- `python -m tornado_demix multi <wallet> <wallet> ...`: correlate several depositors (shared candidates, consolidators, shared funders, operator clusters).
+- `python -m tornado_demix cluster <wallet>`: follow split exits one hop to a common collection address.
+- `python -m tornado_demix characterize <address>`: an exit address and its main next hops, labelled when an attribution set is configured.
+- `python -m tornado_demix trace <address> --amount N`: multi-hop FIFO trace of withdrawn funds with DEX-swap resolution.
+- `python webui/app.py`: local web UI (http://127.0.0.1:5000) over the same functions.
+
+## Docs
+
+- [README](https://github.com/prettydeath/TornadoCash-demixer/blob/main/README.md): features, installation, configuration, documented public cases (Ronin, Wintermute, Beanstalk, KuCoin, Harmony), limitations
+- [Methodology](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/METHODOLOGY.md): signals, evidence families, bands, score, exit groups, operator graph, tracing
+- [Evaluation](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/EVALUATION.md): synthetic benchmark, placebo test on 152 real depositors, public cases, ENS-labelled set and the Wang et al. (2023) protocol
+
+## Limits
+
+- A careful user (relayers, delays, fresh split exits) leaves no linked address; the tool then reports no lead or only `weak` candidates.
+- Bridges, other mixers and cross-chain hops are not followed.
+- Results depend on the explorer API and its rate limits.

@@ -1,0 +1,41 @@
+site_name: TornadoCash Demixer
+site_description: >-
+  Tornado Cash forensics on public on-chain data: evidence-banded exit leads,
+  exit groups, operator clusters and FIFO tracing on 8 EVM chains, with a
+  placebo check that measures what chance alone produces.
+site_url: https://prettydeath.github.io/TornadoCash-demixer/
+repo_url: https://github.com/prettydeath/TornadoCash-demixer
+repo_name: prettydeath/TornadoCash-demixer
+edit_uri: ""
+docs_dir: docs
+
+# index.md is the README, copied in by the Pages workflow (see .github/workflows/pages.yml).
+nav:
+  - Overview: index.md
+  - Methodology: METHODOLOGY.md
+  - Evaluation: EVALUATION.md
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - content.code.copy
+  palette:
+    - scheme: default
+      toggle:
+        icon: material/weather-night
+        name: Dark mode
+    - scheme: slate
+      toggle:
+        icon: material/weather-sunny
+        name: Light mode
+
+markdown_extensions:
+  - tables
+  - toc:
+      permalink: true
+  - admonition
+  - pymdownx.superfences
+
+exclude_docs: |
+  cases/

@@ -540,7 +540,9 @@ def cmd_trace(args: argparse.Namespace) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="tornado-demix",
-        description=("Tornado.Cash demixing across 8 EVM chains via amount + timing correlation."),
+        description=(
+            "Tornado Cash forensics on 8 EVM chains: evidence-banded exit leads, exit groups, operator clusters, tracing."
+        ),
     )
     parser.add_argument(
         "--version", action="version", version="tornado-demix {}".format(_version())

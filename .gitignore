@@ -45,3 +45,6 @@ config/attribution/
 .hypothesis/
 .coverage
 htmlcov/
+
+# MkDocs build output
+site/
