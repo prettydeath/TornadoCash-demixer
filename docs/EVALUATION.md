@@ -262,27 +262,35 @@ What this shows:
 ### Shared exchange deposit addresses
 
 The shared-deposit-address signal (`shared_deposit`, see
-[METHODOLOGY.md](METHODOLOGY.md)) was tested the same way before it was added.
-`tools/placebo_dar.py` applies it to the 152 depositors above: 18 have an exchange
-deposit address, and their recipients hit one 4 times in real windows and never in
-decoy windows. For a larger sample, `tools/placebo_dar_universe.py` reads the
+[METHODOLOGY.md](METHODOLOGY.md)) was tested the same way. `tools/placebo_dar.py`
+applies it to the 152 depositors above; `tools/placebo_dar_universe.py` reads the
 windows offline from the ENS universe (it reproduces the full-run result for all
 152 depositors) and draws 1,000 new random depositors (seed 2; one failed on the
-explorer):
+explorer). The attribution set was loaded in both runs.
 
-| Definition | Depositors with a deposit address | Target hits | Decoy hits | Chance share (95 % CI) |
+| Sample and hot-wallet rule | Depositors with a deposit address | Target hits | Decoy hits | Chance share (95 % CI) |
 |---|---|---|---|---|
-| as implemented | 152 of 999 | 27 (19 depositors) | 4 | 0.16 (0.03-0.45) |
-| strict: one exchange, at most 10 senders | | 7 | 1 | 0.15 (0-0.71) |
+| 152 depositors (full runs), label or activity | 52 | 15 (11 depositors) | 1 | 0.07 (0-0.27) |
+| 999 depositors, label or activity (as implemented) | 363 | 57 (45 depositors) | 18 | 0.34 (0.14-0.68) |
+| 999 depositors, exchange label only | 152 | 27 (19 depositors) | 4 | 0.16 (0.03-0.45) |
+| 999 depositors, strict: one exchange, at most 10 senders | | 27 | 13 | 0.51 (0.16-1.24) |
 
-(2,105,979 withdrawals searched in target windows, 1,978,235 in decoy windows.)
-25 of the 27 target hits are not direct counterparties of the depositor, so the
-signal finds exits that `linked` does not. It is rare — about 2 % of depositors —
-but where it fires it stands above chance at least as clearly as `linked`. The
-strict definition keeps the chance share and loses most hits, so the looser one is
-used. As for the other families, a decoy hit is a false note link, not
-necessarily a false identity link. The other tables in this document were computed
-before the signal was added (version 2.14); it can only add linked-family leads.
+(About 2.1 million withdrawals searched in target windows and 2.0 million in decoy
+windows.) A sweep target counts as a hot wallet when it is labelled as an exchange
+or has at least 10,000 transactions. With the label alone the signal is cleaner
+(0.16) but fires half as often; with activity as well it fires for about 4.5 % of
+depositors at a chance share of 0.34, comparable to `linked` over 30 days (0.25).
+The evidence line says which it was ("swept to Binance" or "a hot wallet"), and an
+attribution set makes the signal more precise. 44 of the 57 target hits are not
+direct counterparties of the depositor, so the signal finds exits that `linked`
+does not. The strict rule does not lower the chance share. As for the other
+families, a decoy hit is a false note link, not necessarily a false identity link.
+The other tables in this document were computed before the signal was added
+(version 2.14); it can only add linked-family leads.
+
+(The first run of this test, published with 2.14.0, used a busy check that the
+explorer's 1,000-row page cap silently turned off, so only labelled hot wallets
+counted; that is the "exchange label only" row. Version 2.14.1 fixes the check.)
 
 The check is also available per case (`demix --placebo`, and the web UI option):
 the decoy window of the wallet under investigation, beside the real one.

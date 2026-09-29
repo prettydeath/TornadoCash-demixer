@@ -43,7 +43,8 @@ traces users leave around it.
   candidate or an exit you already know (`--known-exit`) anchors it.
 - Finds the depositor's exchange deposit addresses and flags a recipient that
   sent funds to the same one (`shared_deposit`, linked-address family; on 999
-  random depositors 27 hits in real windows against 4 in decoy windows).
+  random depositors 57 hits in real windows against 18 in decoy windows, 27
+  against 4 when only labelled exchange hot wallets count).
 - Marks a linked exit that withdrew within 72 hours of the deposit (early exit;
   context, never scored).
 - Optionally runs a placebo check (`--placebo`, or the web UI option): the same
