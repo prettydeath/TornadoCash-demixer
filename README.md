@@ -291,6 +291,12 @@ a flow diagram from the depositor through the pool to the candidates.
 ![KuCoin case overview in the HTML report](docs/img/case-kucoin-flow.png)
 *The case overview of the HTML report: depositor, pool and the six candidates, coloured by band.*
 
+With `--placebo` the same analysis also runs on a decoy window that ends a day
+before the first deposit, where no withdrawal can spend this depositor's notes:
+
+![Placebo check on the KuCoin depositor](docs/img/case-kucoin-placebo.png)
+*The placebo check: six `moderate` leads in the real window, none in the decoy window; the one decoy candidate is `weak`.*
+
 ### 5. Harmony Bridge hack (2022)
 
 Investigators listed 14 depositors and 55 withdrawal addresses. The attacker
