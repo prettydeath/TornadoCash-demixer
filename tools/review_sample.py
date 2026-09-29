@@ -60,15 +60,25 @@ def build(n_strong_mod, n_weak, n_control, seed):
             else:
                 kind = "strong_moderate"
             leads[kind].append(
-                {"depositor": dep, "candidate": r["address"], "pool": r["pool_key"],
-                 "band": r["band"], "signals": sorted(r["signals"])}
+                {
+                    "depositor": dep,
+                    "candidate": r["address"],
+                    "pool": r["pool_key"],
+                    "band": r["band"],
+                    "signals": sorted(r["signals"]),
+                }
             )
         for pool, res in data.get("denoms", {}).items():
             pool_rcpts = [a for a in res.get("counts", {}) if a not in flagged and a != dep]
             if pool_rcpts:
                 controls.append(
-                    {"depositor": dep, "candidate": rng.choice(pool_rcpts), "pool": pool,
-                     "band": "control", "signals": []}
+                    {
+                        "depositor": dep,
+                        "candidate": rng.choice(pool_rcpts),
+                        "pool": pool,
+                        "band": "control",
+                        "signals": [],
+                    }
                 )
     # Stratified: every linked-family lead (few), the rest of the budget from other
     # strong/moderate leads; the key keeps the stratum for per-stratum scoring.
@@ -94,15 +104,35 @@ def write_sheet(rows, path):
     wb = Workbook()
     ws = wb.active
     ws.title = "Перевірка"
-    head = ["ID", "Пул", "Депозитор", "Кандидат", "Депозитор (Etherscan)", "Кандидат (Etherscan)",
-            "Висновок", "Джерело доказу", "Коментар"]
+    head = [
+        "ID",
+        "Пул",
+        "Депозитор",
+        "Кандидат",
+        "Депозитор (Etherscan)",
+        "Кандидат (Etherscan)",
+        "Висновок",
+        "Джерело доказу",
+        "Коментар",
+    ]
     ws.append(head)
     for c in ws[1]:
         c.font = Font(bold=True)
         c.fill = PatternFill("solid", fgColor="D9E2F3")
     for r in rows:
-        ws.append([r["id"], r["pool"], r["depositor"], r["candidate"],
-                   EXPLORER + r["depositor"], EXPLORER + r["candidate"], "", "", ""])
+        ws.append(
+            [
+                r["id"],
+                r["pool"],
+                r["depositor"],
+                r["candidate"],
+                EXPLORER + r["depositor"],
+                EXPLORER + r["candidate"],
+                "",
+                "",
+                "",
+            ]
+        )
     dv = DataValidation(type="list", formula1='"%s"' % ",".join(VERDICTS), allow_blank=True)
     ws.add_data_validation(dv)
     dv.add(f"G2:G{len(rows) + 1}")
@@ -158,8 +188,10 @@ def score(path):
             "precision_decided": round(same / decided, 3) if decided else None,
             "precision_decided_95ci": wilson(same, decided),
             # unknown counted as wrong (lower) and as right (upper)
-            "precision_range_all": [round(same / sum(c.values()), 3),
-                                    round((same + c["unknown"]) / sum(c.values()), 3)],
+            "precision_range_all": [
+                round(same / sum(c.values()), 3),
+                round((same + c["unknown"]) / sum(c.values()), 3),
+            ],
         }
     print(json.dumps(out, indent=1))
 

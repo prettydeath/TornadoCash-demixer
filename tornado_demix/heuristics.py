@@ -447,11 +447,12 @@ def band_rationale(band: str, signals: set[str]) -> str:
 def early_exit(data: dict, pool_key: str, first_ts: int) -> bool:
     """True when the exit's first withdrawal is within EARLY_EXIT_HOURS after a
     voucher's last deposit into the same pool."""
-    return any(
-        v.get("pool_key") == pool_key
-        and 0 <= first_ts - v.get("last_ts", v.get("first_ts", first_ts + 1)) <= EARLY_EXIT_HOURS * 3600
-        for v in data.get("vouchers", [])
-    )
+    limit = EARLY_EXIT_HOURS * 3600
+    for v in data.get("vouchers", []):
+        last = v.get("last_ts", v.get("first_ts"))
+        if v.get("pool_key") == pool_key and last is not None and 0 <= first_ts - last <= limit:
+            return True
+    return False
 
 
 def cross_method(data: dict, min_methods: int = 2) -> list[dict]:

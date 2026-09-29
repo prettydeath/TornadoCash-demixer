@@ -66,7 +66,14 @@ def metrics(pred, truth, deps, wds):
     p = tp / (tp + fp) if tp + fp else 0.0
     r = tp / (tp + fn) if tp + fn else 0.0
     f1 = 2 * p * r / (p + r) if p + r else 0.0
-    return {"tp": tp, "fp": fp, "fn": fn, "precision": round(p, 2), "recall": round(r, 2), "f1": round(f1, 2)}
+    return {
+        "tp": tp,
+        "fp": fp,
+        "fn": fn,
+        "precision": round(p, 2),
+        "recall": round(r, 2),
+        "f1": round(f1, 2),
+    }
 
 
 def main():
@@ -85,9 +92,11 @@ def main():
         if d in state["cps"]:
             continue
         rows = client.outgoing_txs(d) + client.internal_txs(d) + client.token_transfers(d)
-        cps = {
-            (t.get(side) or "").lower() for t in rows for side in ("from", "to")
-        } - {d, ""} - tornado
+        cps = (
+            {(t.get(side) or "").lower() for t in rows for side in ("from", "to")}
+            - {d, ""}
+            - tornado
+        )
         state["cps"][d] = sorted(cps & wds)
         _save(state)
     h3 = {(d, w) for d, ws in state["cps"].items() for w in ws}
@@ -118,9 +127,7 @@ def main():
             pd, pw = dep_ts[d], wd_ts[w]
             if len(pd) < 2 or set(pd) != set(pw):
                 continue
-            if all(
-                len(pd[p]) == len(pw[p]) and all(t > min(pd[p]) for t in pw[p]) for p in pd
-            ):
+            if all(len(pd[p]) == len(pw[p]) and all(t > min(pd[p]) for t in pw[p]) for p in pd):
                 h5.add((d, w))
 
     # This tool: cached run_demix results.

@@ -51,12 +51,23 @@ def narrow(data, hours):
     senders = {s[3].lower(): s[2] for s in h.get("linked_senders", [])}
     linked = {a for _p, a in h.get("linked_addresses", [])}
     for pool_key, res in d.get("denoms", {}).items():
-        spans = [(v["first_ts"], v["last_ts"] + hours * 3600)
-                 for v in d["vouchers"] if v["pool_key"] == pool_key]
+        spans = [
+            (v["first_ts"], v["last_ts"] + hours * 3600)
+            for v in d["vouchers"]
+            if v["pool_key"] == pool_key
+        ]
         detail = {}
         for addr, recs in res["detail"].items():
-            keep = [dict(r, gas_price=r.get("gas_price") if (r.get("hash") or "").lower() in gas_ok else None)
-                    for r in recs if any(lo <= r["ts"] <= hi for lo, hi in spans)]
+            keep = [
+                dict(
+                    r,
+                    gas_price=r.get("gas_price")
+                    if (r.get("hash") or "").lower() in gas_ok
+                    else None,
+                )
+                for r in recs
+                if any(lo <= r["ts"] <= hi for lo, hi in spans)
+            ]
             if keep:
                 detail[addr] = keep
         res["detail"] = detail
@@ -98,10 +109,14 @@ def main(argv=None):
     ap.add_argument("--hours", type=float, nargs="+", default=[6, 24, 72, 720])
     ap.add_argument("--boot", type=int, default=2000)
     args = ap.parse_args(argv)
-    names = sorted(set(os.listdir(os.path.join(OUT, "target"))) & set(os.listdir(os.path.join(OUT, "decoy"))))
+    names = sorted(
+        set(os.listdir(os.path.join(OUT, "target"))) & set(os.listdir(os.path.join(OUT, "decoy")))
+    )
     runs = []
     for n in names:
-        pair = [json.load(open(os.path.join(OUT, k, n), encoding="utf-8")) for k in ("target", "decoy")]
+        pair = [
+            json.load(open(os.path.join(OUT, k, n), encoding="utf-8")) for k in ("target", "decoy")
+        ]
         runs.append(pair)
 
     # Sanity: the full window must reproduce the cached bands.
@@ -109,7 +124,10 @@ def main(argv=None):
     for pair in runs:
         for data in pair:
             a = sorted((r["pool_key"], r["address"], r["band"]) for r in ranked_candidates(data))
-            b = sorted((r["pool_key"], r["address"], r["band"]) for r in ranked_candidates(narrow(data, 30 * 24)))
+            b = sorted(
+                (r["pool_key"], r["address"], r["band"])
+                for r in ranked_candidates(narrow(data, 30 * 24))
+            )
             mismatch += a != b
     print(f"full-window reproduction mismatches: {mismatch} of {2 * len(runs)} runs")
 
@@ -121,12 +139,26 @@ def main(argv=None):
         res = {"depositors_with_withdrawals": len(rows)}
         for key in FAMILIES + ("strong+moderate",):
             v, t, d, te, de = fdr(rows, key)
-            bs = sorted(x for x in (fdr([rows[rng.randrange(len(rows))] for _ in rows], key)[0]
-                                    for _ in range(args.boot)) if x is not None)
+            bs = sorted(
+                x
+                for x in (
+                    fdr([rows[rng.randrange(len(rows))] for _ in rows], key)[0]
+                    for _ in range(args.boot)
+                )
+                if x is not None
+            )
             res[key] = {
-                "target": t, "decoy": d, "target_withdrawals": te, "decoy_withdrawals": de,
+                "target": t,
+                "decoy": d,
+                "target_withdrawals": te,
+                "decoy_withdrawals": de,
                 "fdr": round(v, 3) if v is not None else None,
-                "fdr_95ci": [round(bs[int(0.025 * len(bs))], 3), round(bs[int(0.975 * len(bs)) - 1], 3)] if bs else None,
+                "fdr_95ci": [
+                    round(bs[int(0.025 * len(bs))], 3),
+                    round(bs[int(0.975 * len(bs)) - 1], 3),
+                ]
+                if bs
+                else None,
             }
         out["windows"][f"{hours:g}h"] = res
     with open(os.path.join(OUT, "windows.json"), "w", encoding="utf-8") as fh:
@@ -135,7 +167,9 @@ def main(argv=None):
         print(f"\n== {w} (depositors {res['depositors_with_withdrawals']})")
         for k in FAMILIES + ("strong+moderate",):
             r = res[k]
-            print(f"  {k:16s} target {r['target']:4d}  decoy {r['decoy']:4d}  FDR {r['fdr']}  CI {r['fdr_95ci']}")
+            print(
+                f"  {k:16s} target {r['target']:4d}  decoy {r['decoy']:4d}  FDR {r['fdr']}  CI {r['fdr_95ci']}"
+            )
 
 
 if __name__ == "__main__":

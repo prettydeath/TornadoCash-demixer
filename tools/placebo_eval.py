@@ -146,7 +146,10 @@ def report(results, boot=2000, seed=7):
                 samples.append(f)
         samples.sort()
         ci = (
-            [round(samples[int(0.025 * len(samples))], 3), round(samples[int(0.975 * len(samples)) - 1], 3)]
+            [
+                round(samples[int(0.025 * len(samples))], 3),
+                round(samples[int(0.975 * len(samples)) - 1], 3),
+            ]
             if samples
             else None
         )
@@ -184,7 +187,10 @@ def main(argv=None):
         for w in depositors:
             t, d = (os.path.join(OUT, k, w + ".json") for k in ("target", "decoy"))
             if os.path.exists(t) and os.path.exists(d):
-                results[w] = {k: json.load(open(p, encoding="utf-8")) for k, p in (("target", t), ("decoy", d))}
+                results[w] = {
+                    k: json.load(open(p, encoding="utf-8"))
+                    for k, p in (("target", t), ("decoy", d))
+                }
     else:
         clients = [EtherscanClient(k, pause=0.36, **network.client_kwargs()) for k in api_keys()]
         labels = load_attribution("ethereum")
