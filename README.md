@@ -1,11 +1,12 @@
 # TornadoCash Demixer
 
 Probabilistic demixing of Tornado Cash deposits using only public on-chain data.
-The toolkit links a depositor wallet to likely withdrawal addresses by amount and
-timing correlation, adds independent signals where they exist, and reports each
-candidate with an evidence band. It is the practical part of the master's thesis
-"Methods, models and software implementation of probabilistic demixing of
-crypto-asset mixer transactions".
+The toolkit links a depositor wallet to likely withdrawal addresses and reports
+each candidate with an evidence band and the evidence behind it. A band needs a
+linked address (a direct counterparty, or a withdrawal sent by the depositor's
+side): on real depositors amount+timing and gas-price matches turn up as often by
+chance as for real exits, so they only corroborate. It also groups exits paid out
+together, links wallets of one operator and follows withdrawn funds forward.
 
 Output is a set of leads for further investigation, not proof. Tornado Cash breaks
 the deposit-withdrawal link cryptographically; the tool looks for behavioural
