@@ -213,6 +213,7 @@ def cmd_demix(args: argparse.Namespace) -> None:
         max_voucher_span_hours=getattr(args, "max_voucher_span", None),
         known_exits=[_valid_address(a) for a in getattr(args, "known_exit", None) or []],
         labels=labels,
+        deposit_addresses=not getattr(args, "no_deposit_addresses", False),
     )
 
     print("\n=== DEMIX SUMMARY ===")
@@ -241,6 +242,22 @@ def cmd_demix(args: argparse.Namespace) -> None:
         print("  their first withdrawal (disposable exit; context, not scored):")
         for addr in fresh:
             print(f"     {addr}")
+
+    deposits = data.get("deposit_addresses") or []
+    if deposits:
+        print(f"\n[deposit] {len(deposits)} exchange deposit address(es) the depositor sent to:")
+        for d in deposits:
+            print(
+                f"     {d['address']}  swept to {d.get('exchange') or 'a hot wallet'}; "
+                f"{len(d['senders'])} sender(s)"
+            )
+        shared = {}
+        for pool_key, addr, addrs in data.get("heuristics", {}).get("shared_deposits", []):
+            shared.setdefault(addr, (pool_key, addrs))
+        if shared:
+            print("  candidates that sent to one of them too (linked address):")
+            for addr, (pool_key, addrs) in sorted(shared.items()):
+                print(f"     [{pool_key}] {addr} via {', '.join(addrs)}")
 
     anchored = [g for g in data.get("exit_groups", []) if g["anchored"]]
     if anchored:
@@ -331,6 +348,7 @@ def cmd_multi(args: argparse.Namespace) -> None:
         exit_window_hours=args.exit_window,
         max_voucher_span_hours=getattr(args, "max_voucher_span", None),
         labels=load_attribution(net.name, getattr(args, "attribution_dir", None)),
+        deposit_addresses=not getattr(args, "no_deposit_addresses", False),
     )
 
     print("\n=== CROSS-WALLET CORRELATION ===")
@@ -575,6 +593,12 @@ def build_parser() -> argparse.ArgumentParser:
         "leads found there with the real ones (doubles explorer calls)",
     )
     p_demix.add_argument(
+        "--no-deposit-addresses",
+        action="store_true",
+        help="skip the exchange-deposit-address lookup; saves up to ~50 explorer calls "
+        "(more with many unlabelled sweep targets)",
+    )
+    p_demix.add_argument(
         "--attribution-dir",
         default=None,
         help="directory holding <network>.csv attribution tables "
@@ -589,6 +613,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_multi.add_argument("wallets", nargs="*", help="wallet addresses")
     p_multi.add_argument("--wallets-csv", default="", help="CSV file with an 'address' column")
     p_multi.add_argument("--out-dir", default="", help="directory to write CSV report files")
+    p_multi.add_argument(
+        "--no-deposit-addresses",
+        action="store_true",
+        help="skip the exchange-deposit-address lookup of each wallet; saves explorer calls",
+    )
     p_multi.add_argument(
         "--report", default="", help="write a downloadable HTML correlation report to this path"
     )

@@ -14,6 +14,7 @@ from collections import Counter, defaultdict
 from datetime import datetime, timezone
 
 from .constants import WEI
+from .deposit_addresses import depositor_deposit_addresses, shared_deposit_hits
 from .errors import ApiError, ApiKeyError, BlockLookupError
 from .etherscan import EtherscanClient
 from .events import fetch_withdrawals
@@ -626,6 +627,7 @@ def run_demix(
     known_exits=(),
     labels: dict[str, dict] | None = None,
     deposit_shift_seconds: int = 0,
+    deposit_addresses: bool = True,
 ) -> dict:
     """Full single-wallet demix. Returns a structured result dict.
 
@@ -637,6 +639,9 @@ def run_demix(
     in time before anything else runs: the search windows then end earlier, which
     is how a decoy window is built (see :mod:`tornado_demix.placebo`). ``0`` is a
     normal run.
+    ``deposit_addresses`` switches the exchange-deposit-address lookup on or off (it
+    costs up to ~50 explorer calls, see :mod:`tornado_demix.deposit_addresses`);
+    off, ``result['deposit_addresses']`` is empty and the signal never fires.
     """
     network = network or _default_network()
     wallet = wallet.lower()
@@ -754,6 +759,23 @@ def run_demix(
     }
 
     is_contract = make_contract_check(network.rpc_url)
+    deposit_rows: list[dict] = []
+    deposit_hits: dict[str, list[str]] = {}
+    if deposit_addresses:
+        deposit_rows = depositor_deposit_addresses(
+            client,
+            wallet,
+            all_txs + token_txs,
+            is_contract,
+            labels,
+            exclude={p.address for p in network.pools} | set(network.routers),
+        )
+        _log("[*] exchange deposit addresses of the depositor: {}".format(len(deposit_rows)))
+        deposit_hits = shared_deposit_hits(
+            deposit_rows,
+            {addr for res in results.values() for addr in res["detail"]},
+            wallet,
+        )
     apply_heuristics(
         result,
         counterparties,
@@ -762,7 +784,9 @@ def run_demix(
         withdrawal_senders=withdrawal_senders(
             client, wallet, all_txs + internal_txs, results, network, is_contract, labels
         ),
+        shared_deposits=deposit_hits,
     )
+    result["deposit_addresses"] = deposit_rows
     result["fresh_addresses"] = fresh_addresses(client, result)
     # Exits withdrawn in joint bursts; anchored by a corroborated candidate or a
     # known exit. Context only, like the fresh mark.

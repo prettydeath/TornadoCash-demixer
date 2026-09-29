@@ -24,6 +24,7 @@ SIGNAL_WEIGHTS = {
     "gas_price": 0.25,  # exact deposit gas price reused on withdrawal
     "linked": 0.40,  # directly transacts with the depositor
     "linked_sender": 0.40,  # withdrawal sent by the depositor or its direct counterparty
+    "shared_deposit": 0.40,  # sent to the same exchange deposit address as the depositor
     "profile_match": 0.35,  # received the full pool fingerprint
 }
 # Noisy-OR keeps the score in [0, 1] only for weights inside (0, 1).
@@ -72,6 +73,7 @@ def apply_heuristics(
     gas_gate: Callable[[int], bool] | None = None,
     is_contract: Callable[[str], bool | None] | None = None,
     withdrawal_senders: dict[str, str] | None = None,
+    shared_deposits: dict[str, list[str]] | None = None,
 ) -> dict:
     """Add ``signals`` and ``confidence`` to every recipient of a run_demix() result.
 
@@ -81,9 +83,12 @@ def apply_heuristics(
     returns True, False or None; a contract counterparty does not earn ``linked``.
     ``withdrawal_senders`` maps a withdrawal tx hash to its sender when that sender
     is the depositor or one of its direct counterparties (``linked_sender``).
+    ``shared_deposits`` maps a recipient to the exchange deposit addresses it shares
+    with the depositor (``shared_deposit``, see :mod:`tornado_demix.deposit_addresses`).
     """
     wallet = (data.get("wallet") or "").lower()
     withdrawal_senders = withdrawal_senders or {}
+    shared_deposits = shared_deposits or {}
     deposits = data.get("deposits", [])
     deposit_gas = {d["gas_price"] for d in deposits if d.get("gas_price")}
 
@@ -91,6 +96,7 @@ def apply_heuristics(
     linked_hits = []  # (pool_key, recipient)
     linked_contracts = set()  # direct counterparties that are contracts
     sender_hits = []  # (pool_key, recipient, sender, tx_hash)
+    deposit_hits = []  # (pool_key, recipient, [deposit addresses])
     signals = {}  # (pool_key, address) -> set of signal names
     discriminations = {}  # (pool_key, address) -> count discrimination in [0, 1]
 
@@ -132,6 +138,10 @@ def apply_heuristics(
                     sender_hits.append((pool_key, addr, sender, r["hash"]))
                     break
 
+            if addr != wallet and shared_deposits.get(addr):
+                sig.add("shared_deposit")
+                deposit_hits.append((pool_key, addr, list(shared_deposits[addr])))
+
             if addr == wallet:  # a withdrawal back to the depositor itself
                 sig.add("linked")
                 linked_hits.append((pool_key, addr))
@@ -159,6 +169,7 @@ def apply_heuristics(
         "linked_addresses": linked_hits,
         "linked_contracts": sorted(linked_contracts),
         "linked_senders": sender_hits,
+        "shared_deposits": deposit_hits,
     }
     return data
 
@@ -169,6 +180,7 @@ SIGNAL_LABEL = {
     "gas_price": "Unique gas-price reuse",
     "linked": "Linked address (direct counterparty)",
     "linked_sender": "Withdrawal sent by the depositor or its counterparty",
+    "shared_deposit": "Shared exchange deposit address",
     "profile_match": "Denomination-profile match",
 }
 
@@ -229,6 +241,8 @@ def candidate_reason(row: dict) -> str:
         bits.append("transacts directly with the depositor outside Tornado")
     if "linked_sender" in row["signals"]:
         bits.append("a withdrawal to it was sent by the depositor or its direct counterparty")
+    if "shared_deposit" in row["signals"]:
+        bits.append("sent funds to the same exchange deposit address as the depositor")
     text = "; ".join(bits)
     return text[0].upper() + text[1:] + "."
 
@@ -239,6 +253,7 @@ EVIDENCE_LABEL = {
     "gas_price": "gas price",
     "linked": "linked address",
     "linked_sender": "linked withdrawal sender",
+    "shared_deposit": "shared exchange deposit address",
     "profile_match": "denomination profile",
 }
 
@@ -264,6 +279,27 @@ def _sender_detail(data, pool_key, address):
     sender = hits[0][0]
     who = "the depositor" if sender == (data.get("wallet") or "").lower() else sender
     return f"withdrawal {hits[0][1]} was sent by {who}"
+
+
+def _deposit_detail(data, pool_key, address):
+    hits = [
+        addrs
+        for pk, addr, addrs in data.get("heuristics", {}).get("shared_deposits", [])
+        if pk == pool_key and addr == address
+    ]
+    if not hits:
+        return "did not send funds to an exchange deposit address the depositor also used"
+    info = {d["address"]: d for d in data.get("deposit_addresses") or []}
+    parts = []
+    for dep in hits[0]:
+        row = info.get(dep, {})
+        target = row.get("exchange") or "a hot wallet"
+        parts.append(f"{dep[:10]}…, swept to {target}")
+    return (
+        "sent funds to the same exchange deposit address as the depositor ("
+        + "; ".join(parts)
+        + ")"
+    )
 
 
 def _withdrawal_delay_hours(data, pool_key, recs):
@@ -333,6 +369,7 @@ def candidate_evidence(data: dict, pool_key: str, address: str) -> list[dict]:
         ),
         ("linked", _linked_detail(data, signals, address)),
         ("linked_sender", _sender_detail(data, pool_key, address)),
+        ("shared_deposit", _deposit_detail(data, pool_key, address)),
     ]
     if "profile_match" in signals:
         lines.append(("profile_match", "received the wallet's full multi-pool fingerprint"))
@@ -350,7 +387,14 @@ def candidate_evidence(data: dict, pool_key: str, address: str) -> list[dict]:
 
 def method_breakdown(data: dict) -> list[dict]:
     """Group candidate addresses by the signal that flagged them: [{method, label, rows}]."""
-    order = ["count_match", "self_relayed", "gas_price", "linked", "linked_sender"]
+    order = [
+        "count_match",
+        "self_relayed",
+        "gas_price",
+        "linked",
+        "linked_sender",
+        "shared_deposit",
+    ]
     per = {s: [] for s in order}
     for pool_key, res in data.get("denoms", {}).items():
         target = set(res.get("target_counts", []))
@@ -365,6 +409,7 @@ def method_breakdown(data: dict) -> list[dict]:
                 "gas_price": "gas_price" in sig,
                 "linked": "linked" in sig,
                 "linked_sender": "linked_sender" in sig,
+                "shared_deposit": "shared_deposit" in sig,
             }
             for s in order:
                 if not include[s]:
@@ -375,6 +420,7 @@ def method_breakdown(data: dict) -> list[dict]:
                     "gas_price": "gas price equals a deposit's",
                     "linked": "direct counterparty of the depositor",
                     "linked_sender": "withdrawal sent by the depositor or its counterparty",
+                    "shared_deposit": "sent to an exchange deposit address the depositor also used",
                 }[s]
                 per[s].append(
                     {
@@ -403,6 +449,7 @@ METHOD_FAMILY = {
     "gas_price": "gas price",
     "linked": "linked address",
     "linked_sender": "linked address",
+    "shared_deposit": "linked address",
 }
 
 
@@ -414,7 +461,7 @@ METHOD_FAMILY = {
 # needs a linked address; other families corroborate it but never make a lead.
 BAND_ORDER = {"strong": 3, "moderate": 2, "weak": 1}
 
-LINKED_SIGNALS = frozenset({"linked", "linked_sender"})
+LINKED_SIGNALS = frozenset({"linked", "linked_sender", "shared_deposit"})
 
 # A linked exit this soon after the voucher's last deposit: in the placebo test
 # 19 such leads in real windows against 1 in decoy windows. Shown, not scored.
@@ -570,7 +617,7 @@ def ranked_candidates(
             # Self-relaying is a property of the withdrawal, so it never admits alone.
             disc = res.get("discrimination", {}).get(addr, 0.0)
             discriminating = bool(
-                set(sig) & {"linked", "linked_sender", "gas_price", "count_match", "profile_match"}
+                set(sig) & (LINKED_SIGNALS | {"gas_price", "count_match", "profile_match"})
             )
             if not discriminating or conf < min_confidence:
                 continue

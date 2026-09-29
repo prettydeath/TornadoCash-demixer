@@ -47,6 +47,7 @@ def correlate(
     exit_window_hours: float | None = None,
     max_voucher_span_hours: float | None = None,
     labels: dict[str, dict] | None = None,
+    deposit_addresses: bool = True,
 ) -> dict:
     """Run demix on every wallet and compute cross-wallet correlations.
 
@@ -74,6 +75,7 @@ def correlate(
             exit_window_hours=exit_window_hours,
             max_voucher_span_hours=max_voucher_span_hours,
             labels=labels,
+            deposit_addresses=deposit_addresses,
         )
         results[wallet] = data
         for pool_key, res in data["denoms"].items():

@@ -152,6 +152,10 @@
         <label for="placebo" title="Also run the same search on a decoy window that ends a day before the first deposit, where no withdrawal can belong to this wallet, and compare the leads found there with the real ones. Doubles the explorer calls.">
           <input id="placebo" name="placebo" type="checkbox" value="1" {% if placebo %}checked{% endif %} style="width:auto;margin-right:.3rem">Placebo check (doubles explorer calls)</label>
       </div>
+      <div>
+        <label for="deposit_addresses" title="Look for exchange deposit addresses the depositor sent funds to, and for withdrawal recipients that sent to the same one (a linked address). Costs up to about 50 explorer calls per wallet.">
+          <input id="deposit_addresses" name="deposit_addresses" type="checkbox" value="1" {% if deposit_addresses %}checked{% endif %} style="width:auto;margin-right:.3rem">Exchange deposit addresses</label>
+      </div>
     </div>
     <div class="row" id="traceFields" {% if analysis!='trace' %}hidden{% endif %}>
       <div>
@@ -316,6 +320,21 @@
                 </tr>
                 {% endfor %}
               </table>
+            {% endif %}
+            {% if b.deposit_addresses %}
+            <h4 style="margin:1.1rem 0 .3rem;font-size:.9rem;">Exchange deposit addresses</h4>
+            <div class="note" style="margin-bottom:.3rem;">Addresses the depositor sent funds to that behave like a per-customer exchange deposit address (few senders, swept to a hot wallet). A recipient that sent to the same address shares a linked address with the depositor. Leads, not proof.</div>
+            <table>
+              <colgroup><col style="width:34%"><col style="width:22%"><col style="width:8%"><col></colgroup>
+              <tr><th>Deposit address</th><th>Swept to</th><th>Senders</th><th>Also used by a candidate</th></tr>
+              {% for d in b.deposit_addresses %}
+              <tr>
+                <td class="mono"><a href="{{ d.url }}" target="_blank" rel="noopener">{{ d.address }}</a></td>
+                <td>{{ d.target }}</td><td class="num">{{ d.senders }}</td>
+                <td class="mono">{% for s in d.shared_by %}<a href="{{ s.url }}" target="_blank" rel="noopener">{{ s.address }}</a> <span class="pill">{{ s.pool_key }}</span>{% if not loop.last %}<br>{% endif %}{% else %}-{% endfor %}</td>
+              </tr>
+              {% endfor %}
+            </table>
             {% endif %}
             {% if b.groups or b.n_unanchored %}
             <h4 style="margin:1.1rem 0 .3rem;font-size:.9rem;">Exit groups</h4>

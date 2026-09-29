@@ -170,6 +170,7 @@ def _base_context():
         "trace_max_hops": "",
         "known_exits": "",
         "placebo": False,
+        "deposit_addresses": True,
     }
 
 
@@ -205,7 +206,15 @@ def _rate(value):
 
 
 def _run_demix(
-    client, wallets, net, window_days, mode, exit_window_hours=None, known_exits=(), placebo=False
+    client,
+    wallets,
+    net,
+    window_days,
+    mode,
+    exit_window_hours=None,
+    known_exits=(),
+    placebo=False,
+    deposit_addresses=True,
 ):
     """Per-wallet demix. Returns (blocks, csv_rows, reports)."""
     blocks, rows, reports = [], [], {}
@@ -220,6 +229,7 @@ def _run_demix(
             exit_window_hours=exit_window_hours,
             known_exits=known_exits,
             labels=labels,
+            deposit_addresses=deposit_addresses,
         )
         if placebo and data["deposits"]:
             data["placebo"] = run_placebo(
@@ -362,6 +372,22 @@ def _run_demix(
                     }
                     for g in data.get("exit_groups", [])
                     if g["anchored"]
+                ],
+                "deposit_addresses": [
+                    {
+                        "address": d["address"],
+                        "url": net.addr_url(d["address"]),
+                        "target": d.get("exchange") or "a hot wallet",
+                        "senders": len(d.get("senders", [])),
+                        "shared_by": [
+                            {"address": addr, "pool_key": pool_key, "url": net.addr_url(addr)}
+                            for pool_key, addr, addrs in data.get("heuristics", {}).get(
+                                "shared_deposits", []
+                            )
+                            if d["address"] in addrs
+                        ],
+                    }
+                    for d in data.get("deposit_addresses") or []
                 ],
                 "n_unanchored": sum(1 for g in data.get("exit_groups", []) if not g["anchored"]),
                 "no_deposits": not data["vouchers"],
@@ -635,6 +661,7 @@ def index():
     # not a 500, and echo them back so one error does not blank the other field.
     ctx["exit_window"] = request.form.get("exit_window") or ""
     ctx["placebo"] = bool(request.form.get("placebo"))
+    ctx["deposit_addresses"] = bool(request.form.get("deposit_addresses"))
     for field in (
         "trace_amount",
         "trace_start_block",
@@ -713,6 +740,7 @@ def index():
                 exit_window,
                 known_exits,
                 placebo=bool(request.form.get("placebo")),
+                deposit_addresses=ctx["deposit_addresses"],
             )
             payload = {"kind": "demix", "blocks": blocks}
         elif analysis == "multi":

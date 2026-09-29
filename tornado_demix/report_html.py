@@ -299,6 +299,45 @@ def _groups_html(groups: list[dict], network: Network) -> str:
     return "".join(parts)
 
 
+def _deposit_addresses_html(data: dict, network: Network) -> str:
+    """The depositor's exchange deposit addresses (see deposit_addresses.py); only when found."""
+    rows = data.get("deposit_addresses") or []
+    if not rows:
+        return ""
+    hits = {}
+    for pool_key, addr, addrs in data.get("heuristics", {}).get("shared_deposits", []):
+        for dep in addrs:
+            hits.setdefault(dep, []).append((pool_key, addr))
+    parts = [
+        '<h2>Exchange deposit addresses<span class="rule"></span></h2>',
+        '<div class="meta">Addresses the depositor sent funds to that behave like a per-customer '
+        "exchange deposit address: few senders, quiet, and what arrives is swept to a hot "
+        "wallet. A recipient of the searched withdrawals that sent funds to the same address "
+        "shares a linked address with the depositor (the address-reuse idea of Tutela, through "
+        "an intermediary). Leads, not proof: an exchange address can be shared by mistake or "
+        "by a service.</div>",
+        '<table><colgroup><col style="width:34%"><col style="width:26%">'
+        '<col style="width:10%"><col></colgroup>'
+        "<tr><th>Deposit address</th><th>Swept to</th><th>Senders</th>"
+        "<th>Also used by a candidate</th></tr>",
+    ]
+    for d in rows:
+        who = "<br>".join(
+            f'<span class="mono wrap">{_addr_link(network, addr)}</span> '
+            f'<span class="pill">{_e(pool_key)}</span>'
+            for pool_key, addr in hits.get(d["address"], [])
+        )
+        target = d.get("exchange") or "a hot wallet"
+        parts.append(
+            f'<tr><td class="mono wrap">{_addr_link(network, d["address"])}</td>'
+            f"<td>{_e(target)}</td>"
+            f'<td class="num">{len(d.get("senders", []))}</td>'
+            f"<td>{who or '-'}</td></tr>"
+        )
+    parts.append("</table>")
+    return "".join(parts)
+
+
 def _placebo_html(pb: dict | None, network: Network) -> str:
     """Placebo check (see placebo.py): leads per band in the real and the decoy window."""
     if not pb:
@@ -500,6 +539,7 @@ def build_html_report(
             "rests on the amount+timing match alone; treat them as starting "
             "points and trace the funding source.</div>"
         )
+    p.append(_deposit_addresses_html(data, network))
     p.append(_groups_html(data.get("exit_groups", []), network))
     p.append(_placebo_html(data.get("placebo"), network))
 

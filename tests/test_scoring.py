@@ -268,7 +268,14 @@ def test_evidence_lists_every_family_and_marks_what_holds():
     apply_heuristics(data, counterparties={linked})
     row = next(r for r in ranked_candidates(data) if r["address"] == linked)
     by_signal = {e["signal"]: e for e in row["evidence"]}
-    assert set(by_signal) == {"count_match", "self_relayed", "gas_price", "linked", "linked_sender"}
+    assert set(by_signal) == {
+        "count_match",
+        "self_relayed",
+        "gas_price",
+        "linked",
+        "linked_sender",
+        "shared_deposit",
+    }
     assert by_signal["linked"]["holds"] is True
     assert by_signal["count_match"]["holds"] is False
     assert "20 of 21 recipients" in by_signal["count_match"]["detail"]
