@@ -95,7 +95,13 @@ The method, thresholds and the reasoning behind them are in
 
 ## Installation
 
-From a checkout of the repository:
+From PyPI (the `tornado-demix` command and the pool registry):
+
+```bash
+python -m pip install tornado-demix
+```
+
+The web UI and the evaluation tools live in the repository. From a checkout:
 
 ```bash
 python -m pip install .            # core: the tornado-demix command and the pool registry
