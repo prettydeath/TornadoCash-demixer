@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tornado-demix"
-version = "2.13.0"
+version = "2.14.0"
 description = "Tornado Cash forensics: evidence-banded exit leads, exit groups, operator clusters and FIFO tracing on 8 EVM chains, with a placebo check on real data."
 readme = "README.md"
 requires-python = ">=3.9"
