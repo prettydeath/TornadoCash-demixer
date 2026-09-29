@@ -29,7 +29,7 @@ traces users leave around it.
 - Reports a band per candidate: `strong` (a linked address plus another evidence
   family), `moderate` (a linked address alone), `weak` (amount+timing and/or gas
   price without a linked address — chance-level on real depositors, see the
-  placebo test in [EVALUATION.md](docs/EVALUATION.md)), with the evidence behind it: every family, whether it holds,
+  placebo test in [EVALUATION.md](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/EVALUATION.md)), with the evidence behind it: every family, whether it holds,
   and the numbers (share of the recipient field with the same count, `disc`,
   gas price). Candidates are ordered by band, then by an uncalibrated noisy-OR
   score taken across evidence families (within a family only the strongest
@@ -57,7 +57,7 @@ traces users leave around it.
   flag, optional address labels (`characterize`).
 
 The method, thresholds and the reasoning behind them are in
-[docs/METHODOLOGY.md](docs/METHODOLOGY.md).
+[docs/METHODOLOGY.md](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/METHODOLOGY.md).
 
 ## Components
 
@@ -77,11 +77,11 @@ The method, thresholds and the reasoning behind them are in
 | `tools/verify_pools.py` | on-chain verification of registry entries |
 | `tools/calibrate.py` | precision/recall against confirmed cases (needs private data) |
 | `tools/sensitivity.py` | ranking stability of saved results under perturbed weights |
-| `tools/simulate.py` | synthetic benchmark: ablation, negative controls, counter-measures ([results](docs/EVALUATION.md)) |
+| `tools/simulate.py` | synthetic benchmark: ablation, negative controls, counter-measures ([results](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/EVALUATION.md)) |
 | `tools/real_cases.py` | the method on two public laundering cases (KuCoin, Harmony) |
-| `tools/ens_labels.py`, `tools/evaluate_labels.py` | an ENS-labelled set of depositor/exit pairs and the evaluation on it ([results](docs/EVALUATION.md#a-labelled-set-from-ens)) |
+| `tools/ens_labels.py`, `tools/evaluate_labels.py` | an ENS-labelled set of depositor/exit pairs and the evaluation on it ([results](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/EVALUATION.md#a-labelled-set-from-ens)) |
 | `tools/wang_baseline.py` | the ENS set scored under the Wang et al. (2023) protocol, with their H2/H3/H5 re-implemented |
-| `tools/placebo_eval.py`, `tools/placebo_windows.py` | placebo (target-decoy) test on random real depositors, per evidence family and exit window ([results](docs/EVALUATION.md#placebo-test-on-real-depositors)) |
+| `tools/placebo_eval.py`, `tools/placebo_windows.py` | placebo (target-decoy) test on random real depositors, per evidence family and exit window ([results](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/EVALUATION.md#placebo-test-on-real-depositors)) |
 | `tools/review_sample.py` | a blinded manual-review sheet of leads and hidden controls, and its scoring |
 
 ## Requirements
@@ -203,11 +203,11 @@ page lists where the traced funds stop and why (labelled address, hop limit, a
 contract that paid nothing back, not moved on) and every edge with its attributed
 amount, swaps included; the HTML report, CSV and JSON can be downloaded.
 
-![demix in the web UI with the evidence panel open](docs/img/demix-evidence.png)
+![demix in the web UI with the evidence panel open](https://raw.githubusercontent.com/prettydeath/TornadoCash-demixer/main/docs/img/demix-evidence.png)
 *A demix run on Avalanche: two vouchers, a `strong` candidate (count match plus a direct transaction with the depositor) and the evidence panel listing every family that was checked.*
 
 The UI binds to localhost and has no authentication (forms carry a CSRF token); see
-[SECURITY.md](SECURITY.md).
+[SECURITY.md](https://github.com/prettydeath/TornadoCash-demixer/blob/main/SECURITY.md).
 
 ## Documented cases
 
@@ -241,7 +241,7 @@ its funds went next. With the attribution set loaded, the address itself and the
 to Circle: USDC and the Ronin Bridge. Without labels the same hops are shown
 unlabelled.
 
-![Ronin exploiter in characterize](docs/img/case-ronin.png)
+![Ronin exploiter in characterize](https://raw.githubusercontent.com/prettydeath/TornadoCash-demixer/main/docs/img/case-ronin.png)
 *`characterize` on the Ronin exploiter: attribution labels, no pool inflows, and the dominant next hops with the 12,595.3 ETH transfer to a second sanctioned address.*
 
 ### 2. Wintermute attacker
@@ -254,7 +254,7 @@ One inflow of 9.9435 ETH from the 10 ETH pool on the day of the attack
 (2022-09-20), the first activity of the address: it is flagged as disposable, the
 pattern of 98.6 % of laundering exits in the MixLaunder cases.
 
-![Wintermute attacker in characterize](docs/img/case-wintermute.png)
+![Wintermute attacker in characterize](https://raw.githubusercontent.com/prettydeath/TornadoCash-demixer/main/docs/img/case-wintermute.png)
 *`characterize` on the Wintermute attacker: one pool inflow, classified as a possible personal exit and flagged disposable.*
 
 ### 3. Beanstalk attacker
@@ -268,7 +268,7 @@ hours. With a 24-hour exit window the count match leaves one `weak` candidate an
 nothing corroborated: a careful operator leaves no lead, and the tool says so
 rather than naming an unrelated address.
 
-![Beanstalk attacker in demix](docs/img/case-beanstalk.png)
+![Beanstalk attacker in demix](https://raw.githubusercontent.com/prettydeath/TornadoCash-demixer/main/docs/img/case-beanstalk.png)
 *`demix` on the Beanstalk attacker: four vouchers, 271 notes, and a single weak count-match candidate.*
 
 ### 4. KuCoin hack (2020)
@@ -285,16 +285,16 @@ recipient (`linked_sender`): 6 candidates, all 6 true exits; the seventh
 received its withdrawals months later, outside the window. The report opens with
 a flow diagram from the depositor through the pool to the candidates.
 
-![KuCoin depositor in demix](docs/img/case-kucoin.png)
+![KuCoin depositor in demix](https://raw.githubusercontent.com/prettydeath/TornadoCash-demixer/main/docs/img/case-kucoin.png)
 *`demix` on a KuCoin depositor: six moderate candidates, each an exit that received withdrawals sent by the depositor's counterparty; the evidence panel shows which families hold.*
 
-![KuCoin case overview in the HTML report](docs/img/case-kucoin-flow.png)
+![KuCoin case overview in the HTML report](https://raw.githubusercontent.com/prettydeath/TornadoCash-demixer/main/docs/img/case-kucoin-flow.png)
 *The case overview of the HTML report: depositor, pool and the six candidates, coloured by band.*
 
 With `--placebo` the same analysis also runs on a decoy window that ends a day
 before the first deposit, where no withdrawal can spend this depositor's notes:
 
-![Placebo check on the KuCoin depositor](docs/img/case-kucoin-placebo.png)
+![Placebo check on the KuCoin depositor](https://raw.githubusercontent.com/prettydeath/TornadoCash-demixer/main/docs/img/case-kucoin-placebo.png)
 *The placebo check: six `moderate` leads in the real window, none in the decoy window; the one decoy candidate is `weak`.*
 
 ### 5. Harmony Bridge hack (2022)
@@ -311,7 +311,7 @@ python -m tornado_demix demix 0xe71d5fa89d1086d5c3b0ab03eeee2483d2d5ca97 \
     --known-exit 0x0562ddf7ea5ab56728852eea2eacab61c4b78a1a
 ```
 
-![Harmony exit group from one known exit](docs/img/case-harmony-groups.png)
+![Harmony exit group from one known exit](https://raw.githubusercontent.com/prettydeath/TornadoCash-demixer/main/docs/img/case-harmony-groups.png)
 *An exit group anchored by one known exit: 22 addresses paid out in joint bursts, 20 of them on the investigators' list. Across all depositors, one known exit gives 23 addresses on average, 73 % of them on the list.*
 
 **Shared funders.** Correlating the 14 depositors links all of them through five
@@ -322,7 +322,7 @@ immediate funders, each of which was paid directly by the bridge exploiter
 python -m tornado_demix multi --wallets-csv docs/cases/harmony_depositors.csv
 ```
 
-![Harmony depositors linked by shared funders](docs/img/case-harmony-funders.png)
+![Harmony depositors linked by shared funders](https://raw.githubusercontent.com/prettydeath/TornadoCash-demixer/main/docs/img/case-harmony-funders.png)
 *`multi` on the 14 Harmony depositors: operator clusters linked by a shared funder, and the funders themselves.*
 
 **Trace.** From an exit, `trace` follows the 100 ETH it received forward:
@@ -331,11 +331,11 @@ python -m tornado_demix multi --wallets-csv docs/cases/harmony_depositors.csv
 python -m tornado_demix trace 0x04bca8fa79f36749fa605597e9c9f6788c126944 --amount 100 --max-hops 3
 ```
 
-![Three-hop trace from a Harmony exit](docs/img/case-harmony-trace.png)
+![Three-hop trace from a Harmony exit](https://raw.githubusercontent.com/prettydeath/TornadoCash-demixer/main/docs/img/case-harmony-trace.png)
 *`trace` from a Harmony exit: the 100 ETH moves through two intermediate addresses; the trace stops at the hop limit.*
 
 The method on both public cases, with the numbers behind each claim, is in
-[docs/EVALUATION.md](docs/EVALUATION.md); `python tools/real_cases.py` repeats it.
+[docs/EVALUATION.md](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/EVALUATION.md); `python tools/real_cases.py` repeats it.
 
 ## Limitations
 
@@ -344,19 +344,19 @@ The method on both public cases, with the numbers behind each claim, is in
   The band does not depend on the weights at all; they only order candidates
   within a band (check a saved result with `tools/sensitivity.py`). How each
   component behaves on generated data with a known answer is in
-  [docs/EVALUATION.md](docs/EVALUATION.md).
+  [docs/EVALUATION.md](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/EVALUATION.md).
 - On real depositors the count match, self-relay and gas-price reuse do not beat
   chance: a placebo test on 152 random Ethereum depositors found as many such
   leads in decoy windows before the first deposit as in the real windows, at every
   window from 6 hours to 30 days. Only a linked address (a direct counterparty, or
   a withdrawal sent by the depositor's side) stood above chance (30 against 7 over
   30 days, 19 against 1 within 72 hours), so only it makes a `moderate` or `strong`
-  band ([details](docs/EVALUATION.md#placebo-test-on-real-depositors)).
+  band ([details](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/EVALUATION.md#placebo-test-on-real-depositors)).
 - On 31 depositor/exit pairs labelled through ENS (2019-2026), demix found 16 of
   the 21 pairs inside its window, all through a direct transaction between the
   two addresses, which the label sees as well; without that signal it found one.
   Most labelled depositors made single-note deposits, which the count match
-  cannot narrow ([details](docs/EVALUATION.md#a-labelled-set-from-ens)).
+  cannot narrow ([details](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/EVALUATION.md#a-labelled-set-from-ens)).
 - Single-note vouchers cannot be narrowed by count: every recipient in the
   window has count 1.
 - Busy pools and long windows produce many equal counts. `--exit-window` trades
@@ -366,7 +366,7 @@ The method on both public cases, with the numbers behind each claim, is in
   addresses that happen to share the voucher count, never a `moderate` or `strong` one.
   On the public KuCoin and Harmony laundering cases the count match found no exit
   (every exit collected notes of several deposits); in KuCoin the linked withdrawal
-  sender found 6 of 7 exits for one depositor ([docs/EVALUATION.md](docs/EVALUATION.md)).
+  sender found 6 of 7 exits for one depositor ([docs/EVALUATION.md](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/EVALUATION.md)).
 - Only Tornado Cash pools in the registry are covered. Bridges, other mixers and
   cross-chain hops are not followed; `cluster` follows one hop only, and `trace`
   follows funds by FIFO attribution, a convention that does not hold when an
@@ -423,4 +423,4 @@ the data providers you use.
 
 ## License
 
-MIT, see [LICENSE](LICENSE).
+MIT, see [LICENSE](https://github.com/prettydeath/TornadoCash-demixer/blob/main/LICENSE).
