@@ -269,7 +269,7 @@ gas-price gate and the contract check make bounded, memoised RPC calls.
   those pools, received exactly that many withdrawals between the pool's first
   deposit and 72 hours after its last one is flagged `early_profile`. One pool is
   the count match again and is chance-level; over two or more pools and a short
-  window the placebo test on 28,739 depositors gave 318 real-window against 34
+  window the placebo test on 4,194 such depositors gave 318 real-window against 34
   decoy hits (chance share 0.12). It belongs to the amount+timing family (it reads
   the same withdrawals as the count match) but, unlike the rest of that family,
   makes a lead on its own.

@@ -373,7 +373,7 @@ The method on both public cases, with the numbers behind each claim, is in
   withdrawal sent by the depositor's side, or a deposit address swept to a
   labelled exchange) stood above chance (30 against 7 over 30 days, 19 against 1
   within 72 hours), and so did a multi-pool profile of 10+ notes within 72 hours
-  (318 against 34 on 28,739 depositors); only these make a `moderate` or `strong`
+  (318 against 34 on 4,194 such depositors); only these make a `moderate` or `strong`
   band ([details](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/EVALUATION.md#placebo-test-on-real-depositors)).
 - On 31 depositor/exit pairs labelled through ENS (2019-2026), demix found 16 of
   the 21 pairs inside its window, all through a direct transaction between the
