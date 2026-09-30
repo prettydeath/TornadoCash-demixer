@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Check the demix method against two public laundering cases (needs an API key).
 
-KuCoin (2020): investigators attribute to the attacker the address that called
-``withdraw()`` 128 times (``0x82e6...``). Every withdrawal it sent is a true exit;
+KuCoin (2020): Koh (2020, "Deanonymising the Kucoin Hacker") attributes to the
+attacker two addresses that called ``withdraw()`` themselves without a relayer:
+``0x8bd8...`` (323 withdrawals from the 100 ETH pool) and ``0x82e6...`` (114 there,
+128 with those sent through the router). Every withdrawal they sent is a true exit;
 the ground truth comes from the transaction sender, which no demix signal reads,
 except linked_sender when that sender is also a counterparty of the depositor.
 
@@ -56,7 +58,11 @@ KUCOIN = {
         "0xc787eeba9f55933ffb4c37a0284029c24444bbd4",
         "0xeb31973e0febf3e3d7058234a5ebbae1ab4b8c23",
     ],
-    "callers": ["0x82e6b31b0fe94925b9cd1473d05894c86f277398"],
+    # Koh (2020): the two self-withdrawing callers of the attacker
+    "callers": [
+        "0x82e6b31b0fe94925b9cd1473d05894c86f277398",
+        "0x8bd8746310d4ba8a0b044415bfac70db55ada5b0",
+    ],
 }
 HARMONY = {
     # the case's exploiter addresses that deposited into Tornado Cash
@@ -208,21 +214,29 @@ def evaluate(client, network, wallets, truth):
 def kucoin(client, network):
     print("KuCoin 2020 - exits are the withdrawals sent by the attacker's caller")
     tornado = {p.address for p in network.pools} | set(network.routers)
-    sent = set()
+    sent = {}
     for caller in KUCOIN["callers"]:
         for tx in _quiet(client.outgoing_txs, caller):
             if (tx.get("from") or "").lower() == caller and (tx.get("to") or "").lower() in tornado:
-                sent.add(tx["hash"].lower())
+                sent[tx["hash"].lower()] = caller
     wallets = depositors(client, network, KUCOIN["addresses"])
     truth = set()
+    by_caller = {c: set() for c in KUCOIN["callers"]}
     for key in ("100 ETH", "10 ETH"):
         logs = _quiet(
             client.get_logs, network.by_key[key].address, TOPIC_WITHDRAWAL, 11052431, 12367006
         )
-        truth |= {w["to"] for w in map(decode_withdrawal, logs) if w["tx_hash"].lower() in sent}
+        for w in map(decode_withdrawal, logs):
+            caller = sent.get(w["tx_hash"].lower())
+            if caller:
+                truth.add(w["to"])
+                by_caller[caller].add(w["to"])
     print(
-        f"  depositors {len(wallets)}, withdrawals sent by the caller {len(sent)}, exits {len(truth)}"
+        f"  depositors {len(wallets)}, withdrawals sent by the callers {len(sent)}, exits {len(truth)}"
     )
+    for caller, exits in by_caller.items():
+        n = sum(1 for c in sent.values() if c == caller)
+        print(f"    caller {caller}: {n} withdrawals, {len(exits)} exits")
     evaluate(client, network, wallets, truth)
 
 

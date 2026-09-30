@@ -235,9 +235,10 @@ gas-price gate and the contract check make bounded, memoised RPC calls.
   direct non-contract counterparties, sent a withdrawal transaction, its recipient
   is flagged `linked_sender` (linked-address family). The tool reads the outgoing
   transactions of at most 25 counterparties, busiest first, within the searched
-  blocks only. It catches an operator that relays its own withdrawals: in the
-  KuCoin case it listed 6 of the 7 exits, and nothing else, for the depositor whose
-  counterparty called the withdrawals ([EVALUATION.md](EVALUATION.md)).
+  blocks only. It catches an operator that relays its own withdrawals when the
+  relaying address is a counterparty of the depositor: in the KuCoin case it listed
+  the 6 exits of that caller, and nothing else, but none of the 30 exits of the
+  attacker's second caller, which the depositor never transacted with ([EVALUATION.md](EVALUATION.md)).
 - **Shared exchange deposit address.** An exchange gives each customer their own
   deposit address and sweeps what arrives there to its hot wallets, so two
   addresses that sent funds to the same deposit address are, with few exceptions,

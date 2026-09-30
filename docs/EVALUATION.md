@@ -303,21 +303,30 @@ github.com/tayvano/lazarus-bluenoroff-research. Default settings, 30-day window.
 
 | Case | Depositors (deposits) | Exits known | Exits in a window | Candidates | True | Other |
 |---|---|---|---|---|---|---|
-| KuCoin 2020 | 2 (55) | 7 | 6 per depositor | 7 | 6 | 1 `weak` (chance gas-price reuse) |
+| KuCoin 2020 | 2 (55) | 36 | 35 per depositor | 7 | 6 | 1 `weak` (chance gas-price reuse) |
 | Harmony 2022 | 14 (857) | 30 of 55 listed | 0-30 per depositor | 0 | 0 | 0 |
 
 Run with `python tools/real_cases.py`; it also prints the context marks below.
 
-**KuCoin.** The attacker ran its own withdrawal caller, `0x82e6...`, which sent 128
-withdrawals to 7 addresses. That is the ground truth; no demix signal uses the
-transaction sender, except `linked_sender` when the sender is a counterparty of the
-depositor. Before `linked_sender` the tool listed nothing: each exit received 11-29
-withdrawals, none equal to a voucher (24 or 30 notes), because the exits collected
-notes of several deposits. With it, the depositor `0x820a...`, which had transacted
-with the caller, gets 6 candidates, all 6 true exits, all `moderate` (the seventh exit
-received its withdrawals months later, outside the window). The other depositor gets
-one unrelated candidate from a chance gas-price match; it was `moderate` before
-version 2.13 and is `weak` now.
+**KuCoin.** Koh (2020, "Deanonymising the Kucoin Hacker") attributes to the
+attacker two addresses that called `withdraw()` themselves without a relayer:
+`0x8bd8...` (323 withdrawals) and `0x82e6...` (128, of which 114 straight to the
+100 ETH pool and 14 through the router); together they sent the 437 withdrawals from
+the 100 ETH pool counted there. Their recipients, 36 addresses, are the ground truth;
+no demix signal uses the transaction sender, except `linked_sender` when the sender
+is a counterparty of the depositor. The check covers the two case addresses that
+deposited themselves (55 notes); Koh counts 497 deposits of 100 ETH for the attacker
+overall, so this is a slice of the case.
+
+The count match finds nothing: exits received many notes each, none equal to a
+voucher (24 or 30 notes), because they collected notes of several deposits. With
+`linked_sender`, the depositor `0x820a...`, which had transacted with `0x82e6...`,
+gets 6 candidates, all true exits of that caller, all `moderate`; the first of these
+withdrawals came 6.9 days after its last deposit. The 30 exits of `0x8bd8...`, which
+started withdrawing a day after that deposit, are not found: `0x8bd8...` is not a
+counterparty of either depositor. So the tool finds 6 of the 35 exits inside the
+window. The other depositor gets one unrelated candidate from a chance gas-price
+match; it was `moderate` before version 2.13 and is `weak` now.
 
 **Harmony.** Investigators listed 55 withdrawal addresses; 30 of them received 180
 withdrawals from the 100 ETH pool within 30 days of the deposits, 6 per address in
@@ -326,7 +335,7 @@ one. The investigators selected these addresses partly by withdrawal count and
 batching, so this list is not independent of count-based reasoning.
 
 **Context marks.** Every true exit that fell in a window had at most a day of
-history before its first withdrawal: 6 of 6 in KuCoin, 30 of 30 in Harmony. The
+history before its first withdrawal: 35 of 35 in KuCoin, 30 of 30 in Harmony. The
 fresh mark is shown as context and never scored, because a new unrelated wallet
 is fresh as well. The shared-funder edge links the two KuCoin depositors through
 `0x0060...`, an address on the investigators' list. In Harmony it groups all 14
@@ -335,13 +344,14 @@ of the 5 funders received its funds directly from the bridge exploiter
 `0x0d04...ded00`. A sixth funder, shared by 4 depositors, has 200 or more
 transactions and is left out as busy.
 
-**Exit groups.** In Harmony, 287 of the 295 true exits found in the depositors'
-windows sit in an exit group. With one true exit as the only anchor, the group
+**Exit groups.** In Harmony, 287 of the 295 (true exit, depositor window) pairs
+sit in an exit group. With one true exit as the only anchor, the group
 holds 23.0 addresses on average, 16.8 of them (73 %) on the investigators' list;
 the other members were paid out in the same bursts and are leads, not errors, as
-the list itself is partial. In KuCoin the exits, sent by the attacker's own
-caller at different times, form no group, and the chance candidate of the second
-depositor is `weak`, so it anchors nothing.
+the list itself is partial. In KuCoin, 30 of the 70 (true exit, depositor window)
+pairs sit in a group; from one true exit the group holds 4.9 addresses, 4.5 of them
+(91 %) true exits. The chance candidate of the second depositor is `weak`, so it
+anchors nothing.
 
 Both cases show the same limit as the synthetic counter-measures: when notes are
 pooled and redistributed, a count match finds nothing, and the tool reports no
