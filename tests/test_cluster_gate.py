@@ -1,4 +1,4 @@
-"""Regression test for Finding 1 (audit): the cluster layer gate must reuse
+"""Regression test: the cluster layer gate must reuse
 demix's gated ``candidates_by_count``, not recompute candidates from raw
 ``counts``.
 
@@ -85,7 +85,7 @@ def _single_note_voucher_client(n_recipients=30):
     """One 1 ETH deposit (count 1); ``n_recipients`` each hit exactly once.
 
     Every recipient shares count 1, so the count-match eliminates nobody: the
-    audit's headline single-note-voucher fabrication case, reproduced for the
+    headline single-note-voucher fabrication case, reproduced for the
     cluster path with 30 recipients (under LAYER_CAP=35).
     """
     deposit = _tx(POOL_1_ETH, 1.0, 1000, 10, "0xdep")

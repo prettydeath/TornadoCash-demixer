@@ -1,4 +1,4 @@
-"""Property-based tests (Hypothesis) from the independent audit of v2.10.0.
+"""Property-based tests (Hypothesis), written against v2.10.0.
 
 Invariants of the scoring, the count discrimination, voucher clustering and
 window construction over generated inputs rather than hand-picked cases.

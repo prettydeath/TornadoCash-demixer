@@ -1,6 +1,6 @@
-"""Boundary scenarios from the independent audit of v2.10.0.
+"""Boundary scenarios written against v2.10.0.
 
-The audit wrote these tests against v2.10.0 without running them. Most pin an
+These tests were written against v2.10.0 without running them. Most pin an
 edge that held already; four documented defects (a profile match missing from
 the candidate list, token transfers ignored for ``linked``, a multi-session
 consolidation invisible to demix, a window end below its start), and are kept
@@ -313,7 +313,7 @@ def test_a_lagging_current_block_never_ends_a_window_before_it_starts():
 
 
 # --------------------------------------------------------------------------
-# Positive controls: edge cases explicitly named in the audit brief that DO
+# Positive controls: edge cases explicitly named in the test brief that DO
 # hold, added because no existing test exercises them at exactly this edge.
 # --------------------------------------------------------------------------
 def test_count_discrimination_on_a_single_recipient_field_is_zero_not_a_crash():

@@ -73,7 +73,7 @@ def test_a_count_one_recipient_holds_discriminates_fully():
 
 
 def test_single_note_voucher_yields_no_ranked_candidates():
-    """Reproduces the audit: this returned 20 candidates at 47%."""
+    """Reproduces the single-note bug: this returned 20 candidates at 47%."""
     data = _data(_pool_result(n_recipients=40, n_self_relayed=20))
     apply_heuristics(data, counterparties=set())
     assert ranked_candidates(data) == []

@@ -67,7 +67,7 @@ def _recipient(i):
 
 
 def _headline_single_note_client():
-    """The audit's headline case: one 0.1 ETH deposit (count 1); 40 recipients
+    """The headline case: one 0.1 ETH deposit (count 1); 40 recipients
     each hit exactly once; the first 20 self-relayed.
 
     Pre-fix this makes candidates_by_count[1] == all 40 recipients, so 20
