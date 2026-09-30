@@ -327,7 +327,17 @@ def _deposit_addresses_html(data: dict, network: Network) -> str:
             f'<span class="pill">{_e(pool_key)}</span>'
             for pool_key, addr in hits.get(d["address"], [])
         )
-        target = d.get("exchange") or "a hot wallet"
+        if not who and not d.get("evidence", True):
+            who = "<br>".join(
+                f'<span class="mono wrap">{_addr_link(network, addr)}</span> (context)'
+                for addr, addrs in data.get("deposit_context_hits", {}).items()
+                if d["address"] in addrs
+            )
+        target = (
+            d.get("exchange")
+            if d.get("evidence", True)
+            else "an unlabelled busy address (context, not scored)"
+        ) or "a hot wallet"
         parts.append(
             f'<tr><td class="mono wrap">{_addr_link(network, d["address"])}</td>'
             f"<td>{_e(target)}</td>"

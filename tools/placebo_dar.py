@@ -93,12 +93,16 @@ def main():
         d = json.load(open(os.path.join(OUT, "decoy", name), encoding="utf-8"))
         wallet = t["wallet"]
         dep = deposit_addresses(clients[i % len(clients)], network, wallet, labels, is_contract)
-        th = shared_deposit_hits(dep, recipients(t), wallet)
-        dh = shared_deposit_hits(dep, recipients(d), wallet)
+        th = shared_deposit_hits(dep, recipients(t), wallet, evidence_only=False)
+        dh = shared_deposit_hits(dep, recipients(d), wallet, evidence_only=False)
+        eth = shared_deposit_hits(dep, recipients(t), wallet)
+        edh = shared_deposit_hits(dep, recipients(d), wallet)
         return {
             "wallet": wallet,
             "deposit_addresses": len(dep),
             "target_hits": sorted(th),
+            "evidence_target_hits": sorted(eth),
+            "evidence_decoy_hits": sorted(edh),
             "decoy_hits": sorted(dh),
             "target_exposure": exposure(t),
             "decoy_exposure": exposure(d),
@@ -132,9 +136,9 @@ def main():
     if failed:
         _log(f"[!] {len(failed)} still failed after retries: excluded")
 
-    def fdr(rs):
-        t = sum(len(r["target_hits"]) for r in rs)
-        d = sum(len(r["decoy_hits"]) for r in rs)
+    def fdr(rs, prefix=""):
+        t = sum(len(r[prefix + "target_hits"]) for r in rs)
+        d = sum(len(r[prefix + "decoy_hits"]) for r in rs)
         te = sum(r["target_exposure"] for r in rs)
         de = sum(r["decoy_exposure"] for r in rs)
         return ((d / de) / (t / te) if t and te and de else None), t, d
@@ -157,6 +161,23 @@ def main():
         "fdr": round(v, 3) if v is not None else None,
         "fdr_95ci": [round(bs[int(0.025 * len(bs))], 3), round(bs[int(0.975 * len(bs)) - 1], 3)]
         if bs
+        else None,
+    }
+    ev, et, ed = fdr(rows, "evidence_")
+    ebs = sorted(
+        x
+        for x in (
+            fdr([rows[rng.randrange(len(rows))] for _ in rows], "evidence_")[0] for _ in range(2000)
+        )
+        if x is not None
+    )
+    summary["evidence"] = {
+        "target_hits": et,
+        "decoy_hits": ed,
+        "depositors_with_target_hit": sum(1 for r in rows if r["evidence_target_hits"]),
+        "fdr": round(ev, 3) if ev is not None else None,
+        "fdr_95ci": [round(ebs[int(0.025 * len(ebs))], 3), round(ebs[int(0.975 * len(ebs)) - 1], 3)]
+        if ebs
         else None,
     }
     with open(os.path.join(OUT, "dar_summary.json"), "w", encoding="utf-8") as fh:

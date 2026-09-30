@@ -155,12 +155,16 @@ def classify_deposit_address(
         {(labels or {}).get(t, {}).get("entity", "") for t, _n in hot if _is_exchange(labels, t)}
         - {""}
     )
+    labelled_share = sum(n for t, n in hot if _is_exchange(labels, t)) / total
     return {
         "address": address,
         "sweep_target": target,
         "sweep_targets": [t for t, _n in hot],
         "exchange": ", ".join(entities),
         "senders": sorted(senders),
+        # Only sweeps to labelled exchange wallets stood above chance in the placebo
+        # test; an address that qualifies by activity alone is shown, not scored.
+        "evidence": labelled_share >= MIN_SWEEP_SHARE,
     }
 
 
@@ -228,12 +232,20 @@ def depositor_deposit_addresses(
     return found
 
 
-def shared_deposit_hits(deposit_addresses: list[dict], recipients, wallet: str) -> dict:
-    """{recipient: [deposit addresses]} for recipients that also sent to one of them."""
+def shared_deposit_hits(
+    deposit_addresses: list[dict], recipients, wallet: str, evidence_only: bool = True
+) -> dict:
+    """{recipient: [deposit addresses]} for recipients that also sent to one of them.
+
+    With ``evidence_only`` (the default) only deposit addresses that sweep to
+    labelled exchange wallets count; one found by activity alone is context.
+    """
     wallet = wallet.lower()
     out: dict[str, list[str]] = {}
     recips = set(recipients)
     for info in deposit_addresses:
+        if evidence_only and not info.get("evidence", True):
+            continue
         for s in info["senders"]:
             if s != wallet and s in recips:
                 out.setdefault(s, []).append(info["address"])

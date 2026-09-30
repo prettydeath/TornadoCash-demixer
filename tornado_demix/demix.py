@@ -778,6 +778,7 @@ def run_demix(
     is_contract = make_contract_check(network.rpc_url)
     deposit_rows: list[dict] = []
     deposit_hits: dict[str, list[str]] = {}
+    context_hits: dict[str, list[str]] = {}
     if deposit_addresses:
         deposit_rows = depositor_deposit_addresses(
             client,
@@ -788,11 +789,19 @@ def run_demix(
             exclude={p.address for p in network.pools} | set(network.routers),
         )
         _log("[*] exchange deposit addresses of the depositor: {}".format(len(deposit_rows)))
-        deposit_hits = shared_deposit_hits(
-            deposit_rows,
-            {addr for res in results.values() for addr in res["detail"]},
-            wallet,
-        )
+        recipients = {addr for res in results.values() for addr in res["detail"]}
+        deposit_hits = shared_deposit_hits(deposit_rows, recipients, wallet)
+        # Deposit addresses found by activity alone (no exchange label on the hot
+        # wallet) were chance-level in the placebo test: their matches are context.
+        context_hits = {
+            r: addrs
+            for r, addrs in shared_deposit_hits(
+                [d for d in deposit_rows if not d.get("evidence", True)],
+                recipients,
+                wallet,
+                evidence_only=False,
+            ).items()
+        }
     apply_heuristics(
         result,
         counterparties,
@@ -804,6 +813,7 @@ def run_demix(
         shared_deposits=deposit_hits,
     )
     result["deposit_addresses"] = deposit_rows
+    result["deposit_context_hits"] = context_hits
     result["fresh_addresses"] = fresh_addresses(client, result)
     # Exits withdrawn in joint bursts; anchored by a corroborated candidate or a
     # known exit. Context only, like the fresh mark.

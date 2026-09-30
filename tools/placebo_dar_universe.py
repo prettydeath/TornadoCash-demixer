@@ -148,7 +148,11 @@ def main(argv=None):
             "decoy_withdrawals": dn,
             "deposit_addresses": len(dep),
         }
-        for name, keep in (("loose", lambda x: True), ("strict", strict)):
+        for name, keep in (
+            ("loose", lambda x: True),
+            ("evidence", lambda x: x.get("evidence", True)),
+            ("strict", strict),
+        ):
             senders = {s for x in dep if keep(x) for s in x["senders"]} - {wallet}
             out[name] = {"target": sorted(senders & tr), "decoy": sorted(senders & dr)}
         return out
@@ -194,7 +198,7 @@ def main(argv=None):
         "with_deposit_address": sum(1 for r in rows if r["deposit_addresses"]),
         "failed_after_retries": len(failed),
     }
-    for name in ("loose", "strict"):
+    for name in ("loose", "evidence", "strict"):
         v, t, d, te, de = est(rows, name)
         bs = sorted(
             x

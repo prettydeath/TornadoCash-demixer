@@ -377,7 +377,12 @@ def _run_demix(
                     {
                         "address": d["address"],
                         "url": net.addr_url(d["address"]),
-                        "target": d.get("exchange") or "a hot wallet",
+                        "target": (
+                            d.get("exchange")
+                            if d.get("evidence", True)
+                            else "an unlabelled busy address (context, not scored)"
+                        )
+                        or "a hot wallet",
                         "senders": len(d.get("senders", [])),
                         "shared_by": [
                             {"address": addr, "pool_key": pool_key, "url": net.addr_url(addr)}

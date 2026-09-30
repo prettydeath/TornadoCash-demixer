@@ -177,3 +177,16 @@ def test_without_a_label_a_busy_target_must_receive_forwarded_amounts():
     # a labelled exchange needs no forwarding test
     labels = {HOT: {"category": "exchange", "entity": "binance"}}
     assert classify_deposit_address(client, DEPOSIT, labels=labels, busy=lambda a: False)
+
+
+def test_only_deposit_addresses_swept_to_labelled_exchanges_count_as_evidence():
+    # found by activity alone: shown, not scored (chance-level in the placebo test)
+    client = FakeClient(deposit_lists(), busy={HOT})
+    info = classify_deposit_address(client, DEPOSIT, busy=client.busy.__contains__)
+    assert info["evidence"] is False
+    assert shared_deposit_hits([info], {EXIT}, WALLET) == {}
+    assert shared_deposit_hits([info], {EXIT}, WALLET, evidence_only=False) == {EXIT: [DEPOSIT]}
+    labels = {HOT: {"category": "exchange", "entity": "binance"}}
+    info = classify_deposit_address(client, DEPOSIT, labels=labels, busy=lambda a: False)
+    assert info["evidence"] is True
+    assert shared_deposit_hits([info], {EXIT}, WALLET) == {EXIT: [DEPOSIT]}
