@@ -297,8 +297,9 @@ Decoy windows are shifted back as above.
 (target / decoy hits, chance share.) A single-pool profile is the count match again
 and stays near chance. A profile over two or more pools is far rarer by chance,
 and the shorter the window the cleaner: with at least 10 notes over two or more
-pools, 318 hits against 34 within 72 hours (chance share 0.12, 95 % interval
-0.08-0.16), cleaner than a direct linked address. Since version 2.15 this is the
+pools (4,194 depositors), 318 hits against 34 within 72 hours (chance share 0.12,
+95 % interval 0.08-0.16). A direct linked address is cleaner in the same 72-hour
+window (0.06), but the profile rests on different data than an address link. Since version 2.15 this is the
 `early_profile` signal (at least 10 notes, two or more pools, 72 hours); it makes
 a lead on its own. Being a stricter count match, it belongs to the amount+timing
 family, so with a count match it stays `moderate`.
