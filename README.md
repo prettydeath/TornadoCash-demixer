@@ -3,11 +3,12 @@
 Probabilistic demixing of Tornado Cash deposits using only public on-chain data.
 The toolkit links a depositor wallet to likely withdrawal addresses and reports
 each candidate with an evidence band and the evidence behind it. A band needs a
-linked address (a direct counterparty, a withdrawal sent by the depositor's
-side, or a shared exchange deposit address): on real depositors amount+timing
-and gas-price matches turn up as often by chance as for real exits, so they only
-corroborate. It also groups exits paid out
-together, links wallets of one operator and follows withdrawn funds forward.
+lead signal that stood above chance on real depositors: a linked address (a direct
+counterparty, a withdrawal sent by the depositor's side, a deposit address swept
+to a labelled exchange) or an early multi-pool profile match. Amount+timing and
+gas-price matches alone turn up as often by chance as for real exits, so they only
+corroborate. It also groups exits paid out together, links wallets of one operator
+and follows withdrawn funds forward.
 
 Output is a set of leads for further investigation, not proof. Tornado Cash breaks
 the deposit-withdrawal link cryptographically; the tool looks for behavioural
@@ -26,12 +27,15 @@ traces users leave around it.
 - Scores every recipient: a count match weighted by how much of the recipient
   field it eliminates (`disc`; counted only at `disc >= 0.5` in a field of at
   least 5 recipients), self-relayed withdrawals, reuse of a deposit gas price
-  (only in blocks without an EIP-1559 base fee), and direct transactions with the
-  depositor (not counted when the counterparty is a contract).
-- Reports a band per candidate: `strong` (a linked address plus another evidence
-  family), `moderate` (a linked address alone), `weak` (amount+timing and/or gas
-  price without a linked address — chance-level on real depositors, see the
-  placebo test in [EVALUATION.md](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/EVALUATION.md)), with the evidence behind it: every family, whether it holds,
+  (only on withdrawals the user sent, and only in blocks without an EIP-1559 base
+  fee), direct transactions with the depositor (not counted when the counterparty
+  is a contract), and an early multi-pool profile: a recipient that received the
+  wallet's full note profile over two or more pools (10+ notes) within 72 hours of
+  the last deposit in each pool.
+- Reports a band per candidate: `strong` (a lead signal — linked address or early
+  multi-pool profile — plus another evidence family), `moderate` (a lead signal
+  alone), `weak` (amount+timing and/or gas price without one — chance-level on
+  real depositors, see the placebo test in [EVALUATION.md](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/EVALUATION.md)), with the evidence behind it: every family, whether it holds,
   and the numbers (share of the recipient field with the same count, `disc`,
   gas price). Candidates are ordered by band, then by an uncalibrated noisy-OR
   score taken across evidence families (within a family only the strongest
@@ -42,9 +46,11 @@ traces users leave around it.
   operator that pooled several deposits; a group is listed when a corroborated
   candidate or an exit you already know (`--known-exit`) anchors it.
 - Finds the depositor's exchange deposit addresses and flags a recipient that
-  sent funds to the same one (`shared_deposit`, linked-address family; on 999
-  random depositors 57 hits in real windows against 18 in decoy windows, 27
-  against 4 when only labelled exchange hot wallets count).
+  sent funds to the same one (`shared_deposit`, linked-address family). It is
+  scored only when the deposit address sweeps to labelled exchange wallets (on
+  1,000 random depositors 27 real-window against 4 decoy hits); one recognised by
+  activity alone was at chance and is shown as context, so the signal needs an
+  attribution set.
 - Marks a linked exit that withdrew within 72 hours of the deposit (early exit;
   context, never scored).
 - Optionally runs a placebo check (`--placebo`, or the web UI option): the same
@@ -362,10 +368,12 @@ The method on both public cases, with the numbers behind each claim, is in
 - On real depositors the count match, self-relay and gas-price reuse do not beat
   chance: a placebo test on 152 random Ethereum depositors found as many such
   leads in decoy windows before the first deposit as in the real windows, at every
-  window from 6 hours to 30 days. Only a linked address (a direct counterparty, a
-  withdrawal sent by the depositor's side, or a shared exchange deposit address)
-  stood above chance (30 against 7 over
-  30 days, 19 against 1 within 72 hours), so only it makes a `moderate` or `strong`
+  window from 6 hours to 30 days; gas-price matches were almost all on withdrawals
+  whose gas price a relayer chose. A linked address (a direct counterparty, a
+  withdrawal sent by the depositor's side, or a deposit address swept to a
+  labelled exchange) stood above chance (30 against 7 over 30 days, 19 against 1
+  within 72 hours), and so did a multi-pool profile of 10+ notes within 72 hours
+  (318 against 34 on 28,739 depositors); only these make a `moderate` or `strong`
   band ([details](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/EVALUATION.md#placebo-test-on-real-depositors)).
 - On 31 depositor/exit pairs labelled through ENS (2019-2026), demix found 16 of
   the 21 pairs inside its window, all through a direct transaction between the

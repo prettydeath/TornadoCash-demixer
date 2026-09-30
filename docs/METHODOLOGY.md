@@ -210,7 +210,11 @@ gas-price gate and the contract check make bounded, memoised RPC calls.
 - **Unique gas price.** The `Withdrawal` log endpoint returns each withdrawal's
   `gasPrice`, and the wallet's deposit gas prices come from its tx list. A
   withdrawal whose gas price exactly equals a deposit gas price, and which is rare
-  in the window (shared by ≤3 withdrawals), is flagged `gas_price`.
+  in the window (shared by ≤3 withdrawals), is flagged `gas_price`. Only a
+  withdrawal the user sent without a relayer counts: a relayer chooses the gas
+  price of the transactions it sends, so a match there says nothing about the
+  user. On real depositors 44 of 45 matches were on relayed withdrawals before this
+  rule (version 2.15, [EVALUATION.md](EVALUATION.md)).
 
   **Gated on EIP-1559.** The heuristic assumes the sender chose the price. After
   London the effective price on a log is base fee plus tip, and the base fee
@@ -248,24 +252,43 @@ gas-price gate and the contract check make bounded, memoised RPC calls.
   address when it has fewer than 1,000 transactions and at most 50 senders, and at
   least 80 % of its outgoing transfers go to hot wallets: among its three most
   frequent destinations, those labelled as an exchange or with at least 10,000
-  transactions. A recipient in the window that also sent funds to one of these
-  addresses is flagged `shared_deposit` (linked-address family). The lookup costs
-  up to 50 history queries plus a busy check per new sweep target, and can be
-  turned off (`--no-deposit-addresses`).
+  transactions. A busy address counts as a hot wallet only if it is not a contract
+  (a token, a DEX router or the Tornado router is busy too) and receives amounts
+  forwarded within 3,200 blocks, short by at most 0.01 ETH or 1 % of a token amount
+  (the forwarding test of Victor used by Tutela). A recipient in the window that
+  also sent funds to one of these addresses is flagged `shared_deposit`
+  (linked-address family), but only when the deposit address sweeps at least 80 %
+  of its outflow to **labelled** exchange wallets: in the placebo test that version
+  gave 27 real-window against 4 decoy hits, while deposit addresses recognised by
+  activity alone were at chance (16 against 12). Those are shown as context. So
+  without an attribution set the signal does not fire. The lookup costs up to 50
+  history queries plus a busy check per new sweep target, and can be turned off
+  (`--no-deposit-addresses`).
+- **Early multi-pool profile.** A wallet that deposited at least 10 notes over two
+  or more pools has a profile (notes per pool). A recipient that, in every one of
+  those pools, received exactly that many withdrawals between the pool's first
+  deposit and 72 hours after its last one is flagged `early_profile`. One pool is
+  the count match again and is chance-level; over two or more pools and a short
+  window the placebo test on 28,739 depositors gave 318 real-window against 34
+  decoy hits (chance share 0.12). It belongs to the amount+timing family (it reads
+  the same withdrawals as the count match) but, unlike the rest of that family,
+  makes a lead on its own.
 
 **Band, evidence and score.** Each recipient accumulates a signal set
-(`count_match`, `self_relayed`, `gas_price`, `linked`, `linked_sender`,
-`shared_deposit`, and `profile_match` on `multi` runs). The signals fall into
-evidence families: amount+timing (`count_match`, `self_relayed`, `profile_match`),
-gas price, linked address (`linked`, `linked_sender`, `shared_deposit`). The **band** needs a linked address:
-`strong` for a linked address plus another family, `moderate` for a linked address
-alone, `weak` for amount+timing and/or gas price without one. The rule follows the
+(`count_match`, `self_relayed`, `early_profile`, `gas_price`, `linked`,
+`linked_sender`, `shared_deposit`, and `profile_match` on `multi` runs). The signals
+fall into evidence families: amount+timing (`count_match`, `self_relayed`,
+`early_profile`, `profile_match`), gas price, linked address (`linked`,
+`linked_sender`, `shared_deposit`). The **band** needs a lead signal — a linked
+address or an early multi-pool profile: `strong` for a lead signal plus another
+family, `moderate` for a lead signal alone, `weak` otherwise. The rule follows the
 placebo test on real depositors ([EVALUATION.md](EVALUATION.md)): run on decoy
 windows that end before the wallet's first deposit, the pipeline found
 amount+timing and gas-price leads as often as in the real windows, and only
 linked-address leads clearly more often (30 against 7 over 30 days; 19 against 1
-within 72 hours). Before version 2.13 a gas-price match or a self-relayed count
-match alone reached `moderate`, and two non-linked families reached `strong`. A
+within 72 hours); the early multi-pool profile was added in 2.15 on the same kind
+of evidence. Before version 2.13 a gas-price match or a self-relayed count match
+alone reached `moderate`, and two non-linked families reached `strong`. A
 linked exit whose first withdrawal came within 72 hours of the deposit is marked
 as an **early exit**; like the fresh-address mark it is context and does not
 change the band or the score. Every candidate carries its **evidence**: each family, whether it
