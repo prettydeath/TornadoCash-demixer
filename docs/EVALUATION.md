@@ -226,7 +226,7 @@ the previous band rule (so that every family is visible), by family:
 | gas price | 45 | 64 | 1.51 (0.92-2.31) |
 | all, previous rule | 228 | 252 | 1.17 (0.82-1.60) |
 
-(262,387 withdrawals searched in target windows, 248,035 in decoy windows.)
+(268,745 withdrawals searched in target windows, 253,634 in decoy windows.)
 
 The same families by exit window (target / decoy leads):
 
@@ -445,9 +445,9 @@ Run on 2026-09-28 at the commit that added this section.
 
 | Check | Result |
 |---|---|
-| `pytest` (network blocked, incl. `getaddrinfo`) | 645 passed |
+| `pytest` (network blocked, incl. `getaddrinfo`) | 687 passed |
 | `pytest-randomly`, seeds 1, 2, 3 | all pass in every order |
-| Branch coverage (`--cov-branch`) | 92 % overall; `heuristics` 97 %, `demix` 84 %, `cli` 82 % |
+| Branch coverage (`--cov-branch`) | 93 % overall; `heuristics` 97 %, `demix` 93 %, `cli` 89 % |
 | Property-based tests (Hypothesis, 24) and edge-case tests (10) | pass; the four that documented defects now pin the fixes |
 | Mutation testing (`mutmut` 3.8 on `heuristics.py` and `demix.py`, 2479 mutants) | 1751 killed (71 %), 726 survived, 2 not reached (measured before the last `run_demix` test was added) |
 | `pip-audit -r requirements-lock.txt` | no known vulnerabilities |

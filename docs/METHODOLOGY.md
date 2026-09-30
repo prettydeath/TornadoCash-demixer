@@ -242,8 +242,8 @@ gas-price gate and the contract check make bounded, memoised RPC calls.
   deposit address and sweeps what arrives there to its hot wallets, so two
   addresses that sent funds to the same deposit address are, with few exceptions,
   one customer (the address-reuse idea of Tutela). The tool examines the
-  depositor's outgoing counterparties (at most 25, busiest first, skipping
-  contracts, labelled services and Tornado contracts) and takes one for a deposit
+  depositor's outgoing counterparties (at most 25, busiest first; labelled services
+  and Tornado contracts are skipped, other contracts are rejected when checked) and takes one for a deposit
   address when it has fewer than 1,000 transactions and at most 50 senders, and at
   least 80 % of its outgoing transfers go to hot wallets: among its three most
   frequent destinations, those labelled as an exchange or with at least 10,000
