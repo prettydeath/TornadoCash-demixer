@@ -235,7 +235,7 @@ search windows are clamped to the current block.
 | 1 | Ronin Bridge 2022 | `characterize` | OFAC-labelled exploiter, bridge and USDC calls, 12,595 ETH to a second sanctioned address | [OFAC, 14 Apr 2022](https://ofac.treasury.gov/recent-actions/20220414) |
 | 2 | Wintermute 2022 | `characterize` | one 9.9435 ETH inflow from the 10 ETH pool; a disposable address | [Merkle Science](https://www.merklescience.com/blog/hack-track-analysis-of-wintermute-attack) |
 | 3 | Beanstalk 2022 | `demix --exit-window 24` | 271 deposits in three hours; no candidate above `weak` | [Merkle Science](https://www.merklescience.com/blog/hack-track-analysis-of-beanstalk-flash-loan-attack) |
-| 4 | KuCoin 2020 | `demix` | 6 of the 35 exits in the window found through the linked withdrawal sender | [tayvano/lazarus-bluenoroff-research](https://github.com/tayvano/lazarus-bluenoroff-research) |
+| 4 | KuCoin 2020 | `demix` | 6 of the attacker's 35 exits in the window found through the linked withdrawal sender | [tayvano/lazarus-bluenoroff-research](https://github.com/tayvano/lazarus-bluenoroff-research) |
 | 5 | Harmony 2022 | `demix --known-exit`, `multi`, `trace` | an exit group from one known exit; 14 depositors in 5 funder clusters; a three-hop trace | [tayvano/lazarus-bluenoroff-research](https://github.com/tayvano/lazarus-bluenoroff-research) |
 
 Attributing the Ronin, KuCoin and Harmony thefts to Lazarus is the conclusion of
@@ -295,7 +295,8 @@ withdrawals to 36 exits. No exit received a voucher-sized count, so the count
 match finds nothing. The depositor had transacted with one of the callers,
 `0x82e6...`, so every withdrawal it sent marks its recipient (`linked_sender`): 6
 candidates, all true exits. The 30 exits of the other caller, which is not a
-counterparty of the depositor, are not found: 6 of the 35 exits in the window. The report opens with
+counterparty of the depositor, are not found; how many of them carry this
+depositor's notes rather than the attacker's other deposits is unknown. The report opens with
 a flow diagram from the depositor through the pool to the candidates.
 
 ![KuCoin depositor in demix](https://raw.githubusercontent.com/prettydeath/TornadoCash-demixer/main/docs/img/case-kucoin.png)
@@ -380,7 +381,7 @@ The method on both public cases, with the numbers behind each claim, is in
   addresses that happen to share the voucher count, never a `moderate` or `strong` one.
   On the public KuCoin and Harmony laundering cases the count match found no exit
   (every exit collected notes of several deposits); in KuCoin the linked withdrawal
-  sender found 6 of the 35 exits in one depositor's window ([docs/EVALUATION.md](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/EVALUATION.md)).
+  sender found 6 of the attacker's 35 exits in one depositor's window ([docs/EVALUATION.md](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/EVALUATION.md)).
 - Only Tornado Cash pools in the registry are covered. Bridges, other mixers and
   cross-chain hops are not followed; `cluster` follows one hop only, and `trace`
   follows funds by FIFO attribution, a convention that does not hold when an

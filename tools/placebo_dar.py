@@ -40,15 +40,15 @@ OUT = os.path.join(CACHE, "placebo")
 DAR = os.path.join(OUT, "dar")
 
 
-def deposit_addresses(client, network, wallet, labels, is_contract):
-    path = os.path.join(DAR, wallet + ".json")
+def deposit_addresses(client, network, wallet, labels, is_contract, cache=DAR):
+    path = os.path.join(cache, wallet + ".json")
     if os.path.exists(path):
         with open(path, encoding="utf-8") as fh:
             return json.load(fh)
     txs = client.outgoing_txs(wallet) + client.token_transfers(wallet)
     tornado = {p.address for p in network.pools} | set(network.routers)
     found = depositor_deposit_addresses(client, wallet, txs, is_contract, labels, exclude=tornado)
-    os.makedirs(DAR, exist_ok=True)
+    os.makedirs(cache, exist_ok=True)
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(found, fh)
     return found

@@ -324,8 +324,10 @@ voucher (24 or 30 notes), because they collected notes of several deposits. With
 gets 6 candidates, all true exits of that caller, all `moderate`; the first of these
 withdrawals came 6.9 days after its last deposit. The 30 exits of `0x8bd8...`, which
 started withdrawing a day after that deposit, are not found: `0x8bd8...` is not a
-counterparty of either depositor. So the tool finds 6 of the 35 exits inside the
-window. The other depositor gets one unrelated candidate from a chance gas-price
+counterparty of either depositor. So of the attacker's 35 exits inside the window
+the tool finds 6. How many of the others carry notes of these two depositors (55
+of the attacker's 497 notes) cannot be told from chain data, so this is not a
+per-depositor recall: the second caller's notes may come from other deposits. The other depositor gets one unrelated candidate from a chance gas-price
 match; it was `moderate` before version 2.13 and is `weak` now.
 
 **Harmony.** Investigators listed 55 withdrawal addresses; 30 of them received 180

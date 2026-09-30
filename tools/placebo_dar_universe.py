@@ -35,7 +35,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from ens_labels import _load, _log, api_keys  # noqa: E402
-from placebo_dar import deposit_addresses  # noqa: E402
+from placebo_dar import DAR, deposit_addresses  # noqa: E402
 from placebo_eval import END_TS, MAX_SPAN_DAYS  # noqa: E402
 
 from tornado_demix.attribution import load_attribution  # noqa: E402
@@ -89,6 +89,11 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--sample", type=int, default=1000)
     ap.add_argument("--seed", type=int, default=2)
+    ap.add_argument(
+        "--no-labels",
+        action="store_true",
+        help="ignore the attribution set: hot wallets are recognised by activity only",
+    )
     args = ap.parse_args(argv)
 
     uni = _load("universe.json")
@@ -119,7 +124,8 @@ def main(argv=None):
 
     network = get_network("ethereum")
     clients = [EtherscanClient(k, pause=0.36, **network.client_kwargs()) for k in api_keys()]
-    labels = load_attribution("ethereum")
+    labels = {} if args.no_labels else load_attribution("ethereum")
+    cache = os.path.join(os.path.dirname(DAR), "dar_nolabels") if args.no_labels else DAR
     is_contract = make_contract_check(network.rpc_url)
     _log(f"[*] {len(sample)} depositors of {len(ok)} eligible, {len(clients)} key(s)")
 
@@ -130,7 +136,9 @@ def main(argv=None):
         vs = vouchers(deps)
         ts = [t for _p, t in deps]
         offset = max(ts) - min(ts) + WINDOW + DAY
-        dep = deposit_addresses(clients[i % len(clients)], network, wallet, labels, is_contract)
+        dep = deposit_addresses(
+            clients[i % len(clients)], network, wallet, labels, is_contract, cache
+        )
         tr, tn = window_recipients(wd_index, vs, 0)
         dr, dn = window_recipients(wd_index, vs, offset)
         out = {
@@ -192,7 +200,7 @@ def main(argv=None):
         ".cache",
         "labels",
         "placebo",
-        "dar_universe.json",
+        "dar_universe_nolabels.json" if args.no_labels else "dar_universe.json",
     )
     with open(path, "w", encoding="utf-8") as fh:
         json.dump({"summary": summary, "rows": rows}, fh, indent=1)
