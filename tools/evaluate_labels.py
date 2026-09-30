@@ -75,7 +75,7 @@ def _rows(data, drop_linked):
         signals = set(r["signals"])
         if drop_linked:
             signals.discard("linked")
-            if not signals & {"linked_sender", "gas_price", "count_match", "profile_match"}:
+            if not signals:
                 continue  # linked was what admitted it
         rows.append((r["pool_key"], r["address"], confidence_band(signals), r["signals"]))
     return rows

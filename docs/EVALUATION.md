@@ -437,8 +437,8 @@ attribution labels loaded) on every labelled depositor:
 | | strong | up to moderate | all bands |
 |---|---|---|---|
 | Pairs found (of 31; 21 inside the window) | 1 | 16 (76 % of those in the window) | 16 |
-| Precision, lower bound | 1 of 4 | 16 of 40 (40 %) | 16 of 2,849 |
-| Pairs found without the `linked` signal | 0 | 0 | 1 |
+| Precision, lower bound | 1 of 4 | 16 of 40 (40 %) | 16 of 2,811 |
+| Pairs found without the `linked` signal | 0 | 2 | 3 |
 
 (Under the previous band rule, where a gas-price match or a self-relayed count
 match alone reached `moderate`, the lower bound was 16 of 85, 19 %.)
@@ -446,7 +446,10 @@ match alone reached `moderate`, the lower bound was 16 of 85, 19 %.)
 All 16 pairs are found through a direct transaction between the depositor and
 the recipient (`linked`). The ENS link and `linked` see the same relationship,
 so this confirms that careless users also transact directly; it does not
-measure the other signals. Those find almost nothing here, for a reason the
+measure the other signals. Two of the 16 pairs are also found by `shared_deposit`
+(version 2.15: depositor and recipient sent funds to the same deposit address of a
+labelled exchange), so they stay `moderate` without `linked`. Otherwise the other
+signals find almost nothing here, for a reason the
 method states in advance: 24 of the 31 pairs come from depositors whose only
 voucher in that pool is a single note, where the count match cannot narrow the
 field (discrimination 0.12-0.33 against the 0.5 threshold), and a gas-price
@@ -477,7 +480,7 @@ and H5 (cross-pool deposit profile) from the paper and applies the protocol to t
 | Wang H3 (direct transfer, whole history) | 1.00 | 0.93 | 0.96 |
 | Wang H5 | 0.00 | 0.00 | 0.00 |
 | demix, up to `moderate` | 1.00 | 0.55 | 0.71 |
-| demix without `linked` | 0.00 | 0.00 | 0.00 |
+| demix without `linked` | 1.00 | 0.07 | 0.13 |
 
 A direct-transfer check alone, with no mixer analysis at all, scores 0.96,
 because 27 of the 29 pairs transacted directly. Labels built from address links
