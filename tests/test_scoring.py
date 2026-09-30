@@ -275,6 +275,7 @@ def test_evidence_lists_every_family_and_marks_what_holds():
         "linked",
         "linked_sender",
         "shared_deposit",
+        "early_profile",
     }
     assert by_signal["linked"]["holds"] is True
     assert by_signal["count_match"]["holds"] is False

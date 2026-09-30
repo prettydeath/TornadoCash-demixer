@@ -40,6 +40,7 @@ def test_the_documented_thresholds_and_weights():
         "linked_sender": 0.40,
         "shared_deposit": 0.40,
         "profile_match": 0.35,
+        "early_profile": 0.35,
     }
 
 

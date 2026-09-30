@@ -507,8 +507,8 @@ def build_html_report(
     )
     p.append(
         '<div class="meta">These are <b>probabilistic leads for '
-        "corroboration, not proof</b>. A lead needs a linked address; the band "
-        "rises to strong when another family corroborates it. Amount+timing and gas "
+        "corroboration, not proof</b>. A lead needs a linked address or an early "
+        "multi-pool profile match; the band rises to strong when another family corroborates it. Amount+timing and gas "
         "price alone are chance-level on real depositors and stay weak. Each card "
         "lists what was checked. The score only orders leads within a band.</div>"
     )
@@ -616,7 +616,7 @@ def build_html_report(
         p.append("</table>")
         p.append(
             '<div class="meta">The <b>band</b> is the headline: strong is a linked address '
-            "plus another family, moderate a linked address alone, weak amount+timing or "
+            "or early multi-pool profile match plus another family, moderate one of them alone, weak amount+timing or "
             "gas price without one (chance-level on real depositors). The score is a "
             "noisy-OR over expert signal weights that orders leads within a band; it is "
             "uncalibrated and is not a probability.</div>"

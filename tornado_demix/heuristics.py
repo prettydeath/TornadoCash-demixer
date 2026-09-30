@@ -26,6 +26,7 @@ SIGNAL_WEIGHTS = {
     "linked_sender": 0.40,  # withdrawal sent by the depositor or its direct counterparty
     "shared_deposit": 0.40,  # sent to the same exchange deposit address as the depositor
     "profile_match": 0.35,  # received the full pool fingerprint
+    "early_profile": 0.35,  # received the wallet's whole note profile within 72 h
 }
 # Noisy-OR keeps the score in [0, 1] only for weights inside (0, 1).
 if not all(0.0 < w < 1.0 for w in SIGNAL_WEIGHTS.values()):
@@ -40,6 +41,17 @@ MIN_COUNT_DISCRIMINATION = 0.5
 # reaches 1.0 although a chance match is still likely. Below this field size a
 # count match is not evidence at all.
 MIN_FIELD_SIZE = 5
+
+# Early multi-pool profile match (tools/placebo_profile.py): a recipient that, in
+# every pool the wallet used, received exactly the wallet's note count inside
+# [first deposit, last deposit + EARLY_PROFILE_HOURS]. One pool or a handful of
+# notes is chance-level; over >= 2 pools and >= 10 notes the chance share was 0.12
+# on 28,739 real depositors (a direct linked address: 0.25). The recipient's
+# withdrawals come from the search windows, so an exit window under
+# EARLY_PROFILE_HOURS hours cannot hold the full window and nobody qualifies.
+EARLY_PROFILE_MIN_POOLS = 2
+EARLY_PROFILE_MIN_NOTES = 10
+EARLY_PROFILE_HOURS = 72
 
 
 def count_discrimination(res, hits):
@@ -67,6 +79,43 @@ def count_is_evidence(res: dict, hits: int) -> bool:
     return field >= MIN_FIELD_SIZE and count_discrimination(res, hits) >= MIN_COUNT_DISCRIMINATION
 
 
+def wallet_profile(data: dict) -> dict[str, int]:
+    """Notes deposited per pool over all of the wallet's deposits: {pool_key: count}."""
+    return dict(Counter(d["pool_key"] for d in data.get("deposits", []) if d.get("pool_key")))
+
+
+def early_profile_applies(profile: dict[str, int]) -> bool:
+    """True when a profile is wide and large enough to be a fingerprint."""
+    return (
+        len(profile) >= EARLY_PROFILE_MIN_POOLS and sum(profile.values()) >= EARLY_PROFILE_MIN_NOTES
+    )
+
+
+def _early_profile_hits(data: dict, profile: dict[str, int]) -> list[str]:
+    """Recipients holding exactly ``profile`` inside every pool's early window."""
+    deposits = data.get("deposits", [])
+    windows = {}
+    for pool_key in profile:
+        stamps = [d["ts"] for d in deposits if d.get("pool_key") == pool_key and d.get("ts")]
+        if not stamps or pool_key not in data.get("denoms", {}):
+            return []
+        windows[pool_key] = (min(stamps), max(stamps) + EARLY_PROFILE_HOURS * 3600)
+    first, *rest = profile
+    candidates = set(data["denoms"][first]["detail"])
+    for pool_key in rest:
+        candidates &= set(data["denoms"][pool_key]["detail"])
+    hits = []
+    for addr in sorted(candidates):
+        for pool_key, need in profile.items():
+            lo, hi = windows[pool_key]
+            got = sum(1 for r in data["denoms"][pool_key]["detail"][addr] if lo <= r["ts"] <= hi)
+            if got != need:
+                break
+        else:
+            hits.append(addr)
+    return hits
+
+
 def apply_heuristics(
     data: dict,
     counterparties: set[str],
@@ -85,6 +134,8 @@ def apply_heuristics(
     is the depositor or one of its direct counterparties (``linked_sender``).
     ``shared_deposits`` maps a recipient to the exchange deposit addresses it shares
     with the depositor (``shared_deposit``, see :mod:`tornado_demix.deposit_addresses`).
+    ``early_profile`` needs no input: it reads ``data["deposits"]`` and the recipients'
+    withdrawals (see :data:`EARLY_PROFILE_HOURS`).
     """
     wallet = (data.get("wallet") or "").lower()
     withdrawal_senders = withdrawal_senders or {}
@@ -157,6 +208,14 @@ def apply_heuristics(
                     sig.add("linked")
                     linked_hits.append((pool_key, addr))
 
+    profile = wallet_profile(data)
+    profile_hits = []  # (pool_key, recipient, {pool_key: count})
+    if early_profile_applies(profile):
+        for addr in _early_profile_hits(data, profile):
+            for pool_key in profile:
+                signals.setdefault((pool_key, addr), set()).add("early_profile")
+                profile_hits.append((pool_key, addr, dict(profile)))
+
     for pool_key, res in data.get("denoms", {}).items():
         res["signals"] = {}
         res["confidence"] = {}
@@ -175,6 +234,7 @@ def apply_heuristics(
         "linked_contracts": sorted(linked_contracts),
         "linked_senders": sender_hits,
         "shared_deposits": deposit_hits,
+        "early_profiles": profile_hits,
     }
     return data
 
@@ -187,6 +247,7 @@ SIGNAL_LABEL = {
     "linked_sender": "Withdrawal sent by the depositor or its counterparty",
     "shared_deposit": "Shared exchange deposit address",
     "profile_match": "Denomination-profile match",
+    "early_profile": "Early multi-pool profile match",
 }
 
 
@@ -248,6 +309,11 @@ def candidate_reason(row: dict) -> str:
         bits.append("a withdrawal to it was sent by the depositor or its direct counterparty")
     if "shared_deposit" in row["signals"]:
         bits.append("sent funds to the same exchange deposit address as the depositor")
+    if "early_profile" in row["signals"]:
+        bits.append(
+            f"received the wallet's full note profile within {EARLY_PROFILE_HOURS} h "
+            "of the last deposit in each pool"
+        )
     text = "; ".join(bits)
     return text[0].upper() + text[1:] + "."
 
@@ -260,6 +326,7 @@ EVIDENCE_LABEL = {
     "linked_sender": "linked withdrawal sender",
     "shared_deposit": "shared exchange deposit address",
     "profile_match": "denomination profile",
+    "early_profile": "early multi-pool profile (same family as amount + timing)",
 }
 
 
@@ -304,6 +371,31 @@ def _deposit_detail(data, pool_key, address):
         "sent funds to the same exchange deposit address as the depositor ("
         + "; ".join(parts)
         + ")"
+    )
+
+
+def _profile_text(data, profile):
+    denom = {d["pool_key"]: d.get("denom", 0) for d in data.get("deposits", [])}
+    ordered = sorted(profile.items(), key=lambda kv: denom.get(kv[0], 0))
+    return " + ".join(f"{n}×{pk}" for pk, n in ordered)
+
+
+def _early_profile_detail(data, signals):
+    profile = wallet_profile(data)
+    if not early_profile_applies(profile):
+        return (
+            f"does not apply: the wallet's profile ({_profile_text(data, profile) or 'no notes'}) "
+            f"needs at least {EARLY_PROFILE_MIN_POOLS} pools and {EARLY_PROFILE_MIN_NOTES} notes"
+        )
+    text = _profile_text(data, profile)
+    if "early_profile" in signals:
+        return (
+            f"received the wallet's full profile {text} within {EARLY_PROFILE_HOURS} h "
+            "of the last deposit in each pool"
+        )
+    return (
+        f"did not receive the wallet's full profile {text} within {EARLY_PROFILE_HOURS} h "
+        "of the last deposit in each pool"
     )
 
 
@@ -375,6 +467,7 @@ def candidate_evidence(data: dict, pool_key: str, address: str) -> list[dict]:
         ("linked", _linked_detail(data, signals, address)),
         ("linked_sender", _sender_detail(data, pool_key, address)),
         ("shared_deposit", _deposit_detail(data, pool_key, address)),
+        ("early_profile", _early_profile_detail(data, signals)),
     ]
     if "profile_match" in signals:
         lines.append(("profile_match", "received the wallet's full multi-pool fingerprint"))
@@ -399,6 +492,7 @@ def method_breakdown(data: dict) -> list[dict]:
         "linked",
         "linked_sender",
         "shared_deposit",
+        "early_profile",
     ]
     per = {s: [] for s in order}
     for pool_key, res in data.get("denoms", {}).items():
@@ -415,6 +509,7 @@ def method_breakdown(data: dict) -> list[dict]:
                 "linked": "linked" in sig,
                 "linked_sender": "linked_sender" in sig,
                 "shared_deposit": "shared_deposit" in sig,
+                "early_profile": "early_profile" in sig,
             }
             for s in order:
                 if not include[s]:
@@ -426,6 +521,7 @@ def method_breakdown(data: dict) -> list[dict]:
                     "linked": "direct counterparty of the depositor",
                     "linked_sender": "withdrawal sent by the depositor or its counterparty",
                     "shared_deposit": "sent to an exchange deposit address the depositor also used",
+                    "early_profile": "received the wallet's full profile within 72 h",
                 }[s]
                 per[s].append(
                     {
@@ -445,12 +541,13 @@ def method_breakdown(data: dict) -> list[dict]:
     return out
 
 
-# Evidence families. count_match, self_relayed and profile_match read the same
-# withdrawals, so they are one family.
+# Evidence families. count_match, self_relayed, profile_match and early_profile
+# read the same withdrawals, so they are one family.
 METHOD_FAMILY = {
     "count_match": "amount+timing",
     "self_relayed": "amount+timing",
     "profile_match": "amount+timing",
+    "early_profile": "amount+timing",
     "gas_price": "gas price",
     "linked": "linked address",
     "linked_sender": "linked address",
@@ -462,11 +559,14 @@ METHOD_FAMILY = {
 # are presented by band. A placebo test on real depositors (docs/EVALUATION.md:
 # the same pipeline run on decoy windows that cannot hold the wallet's notes)
 # found amount+timing and gas-price leads as frequent in decoy windows as in real
-# ones; only the linked-address family stood above chance. A band therefore
-# needs a linked address; other families corroborate it but never make a lead.
+# ones; only the linked-address family stood above chance, and so did the early
+# multi-pool profile match (chance share 0.12, tools/placebo_profile.py). A band
+# therefore needs a linked address or an early multi-pool profile match; other
+# families corroborate it but never make a lead.
 BAND_ORDER = {"strong": 3, "moderate": 2, "weak": 1}
 
 LINKED_SIGNALS = frozenset({"linked", "linked_sender", "shared_deposit"})
+LEAD_SIGNALS = LINKED_SIGNALS | {"early_profile"}
 
 # A linked exit this soon after the voucher's last deposit: in the placebo test
 # 19 such leads in real windows against 1 in decoy windows. Shown, not scored.
@@ -476,21 +576,24 @@ EARLY_EXIT_HOURS = 72
 def confidence_band(signals):
     """Return "strong", "moderate" or "weak" from the candidate's signal set.
 
-    strong: a linked address plus another family; moderate: a linked address;
-    weak: amount+timing and/or gas price without a linked address.
+    strong: a linked address or early multi-pool profile match plus another
+    family; moderate: one of those on its own (the early profile is in the
+    amount+timing family, so it does not corroborate a count match); weak:
+    amount+timing and/or gas price without either.
     """
     families = {METHOD_FAMILY[s] for s in signals if s in METHOD_FAMILY}
-    if signals & LINKED_SIGNALS:
+    if signals & LEAD_SIGNALS:
         return "strong" if len(families) >= 2 else "moderate"
     return "weak"
 
 
 def band_rationale(band: str, signals: set[str]) -> str:
     """Plain-language reason for the band; never claims a signal the candidate lacks."""
+    lead = "a linked address" if signals & LINKED_SIGNALS else "an early multi-pool profile match"
     if band == "strong":
-        return "a linked address corroborated by another family of evidence"
+        return f"{lead} corroborated by another family of evidence"
     if band == "moderate":
-        return "a linked address on its own"
+        return f"{lead} on its own"
     if "gas_price" in signals:
         return "gas price or amount+timing without a linked address - chance-level on real data"
     return "amount+timing only - chance-level on real data"
@@ -622,7 +725,7 @@ def ranked_candidates(
             # Self-relaying is a property of the withdrawal, so it never admits alone.
             disc = res.get("discrimination", {}).get(addr, 0.0)
             discriminating = bool(
-                set(sig) & (LINKED_SIGNALS | {"gas_price", "count_match", "profile_match"})
+                set(sig) & (LEAD_SIGNALS | {"gas_price", "count_match", "profile_match"})
             )
             if not discriminating or conf < min_confidence:
                 continue
