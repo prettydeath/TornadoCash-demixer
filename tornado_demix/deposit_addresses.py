@@ -171,8 +171,14 @@ def depositor_deposit_addresses(
     is_contract: Callable[[str], bool | None] | None = None,
     labels: dict | None = None,
     exclude: set[str] | frozenset[str] = frozenset(),
+    errors: list | None = None,
 ) -> list[dict]:
-    """Deposit addresses the wallet sent funds to (see the module docstring)."""
+    """Deposit addresses the wallet sent funds to (see the module docstring).
+
+    Explorer errors on single addresses are not fatal (the address is skipped); when
+    ``errors`` is a list, each skip is appended to it as ``(address, message)`` so a
+    caller that needs complete results (an evaluation) can retry instead.
+    """
     wallet = wallet.lower()
     sent = Counter(
         (t.get("to") or "").lower()
@@ -188,12 +194,14 @@ def depositor_deposit_addresses(
                 busy_cache[target] = bool(has and has(target, HOT_WALLET_TXS))
             except ApiKeyError:
                 raise
-            except ApiError:
+            except ApiError as exc:
                 # Some explorers refuse a 10,000-row page for a busy address
                 # (Routescan answers with an HTML error page). An unchecked
                 # target is not taken for a hot wallet: the signal is lost for
                 # this address, the run is not.
                 busy_cache[target] = False
+                if errors is not None:
+                    errors.append((target, str(exc)[:200]))
         return busy_cache[target]
 
     found = []
@@ -211,7 +219,9 @@ def depositor_deposit_addresses(
             info = classify_deposit_address(client, addr, is_contract, labels, busy)
         except ApiKeyError:
             raise
-        except ApiError:
+        except ApiError as exc:
+            if errors is not None:
+                errors.append((addr, str(exc)[:200]))
             continue  # history unreadable: this counterparty is not examined
         if info:
             found.append(info)

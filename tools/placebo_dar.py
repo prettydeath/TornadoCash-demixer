@@ -20,6 +20,7 @@ import json
 import os
 import random
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -47,7 +48,20 @@ def deposit_addresses(client, network, wallet, labels, is_contract, cache=DAR):
             return json.load(fh)
     txs = client.outgoing_txs(wallet) + client.token_transfers(wallet)
     tornado = {p.address for p in network.pools} | set(network.routers)
-    found = depositor_deposit_addresses(client, wallet, txs, is_contract, labels, exclude=tornado)
+    errors = []
+
+    def checked(address):
+        result = is_contract(address)
+        if result is None:
+            errors.append((address, "contract check failed"))
+        return result
+
+    found = depositor_deposit_addresses(
+        client, wallet, txs, checked, labels, exclude=tornado, errors=errors
+    )
+    if errors:
+        # Incomplete (rate limit, provider error): not cached, the caller retries.
+        raise RuntimeError(f"{len(errors)} lookup error(s), e.g. {errors[0]}")
     os.makedirs(cache, exist_ok=True)
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(found, fh)
@@ -90,15 +104,33 @@ def main():
             "decoy_exposure": exposure(d),
         }
 
+    failed = []
     with ThreadPoolExecutor(max_workers=len(clients)) as pool:
-        futs = {pool.submit(one, i, n): n for i, n in enumerate(names)}
+        futs = {pool.submit(one, i, x): x for i, x in enumerate(names)}
         for n, fut in enumerate(as_completed(futs), 1):
             try:
                 rows.append(fut.result())
-            except Exception as exc:  # reported, not dropped silently
+            except Exception as exc:  # retried below, never dropped silently
+                failed.append(futs[fut])
                 _log(f"[!] {futs[fut]}: {str(exc)[:120]}")
             if n % 10 == 0:
                 _log(f"  {n} / {len(names)}")
+    # An incomplete lookup (rate limit, provider error) is retried one at a time,
+    # so that a busy key cannot silently lower the number of deposit addresses.
+    for round_ in range(1, 4):
+        if not failed:
+            break
+        time.sleep(30)
+        _log(f"[*] retry round {round_}: {len(failed)}")
+        again, failed = failed, []
+        for x in again:
+            try:
+                rows.append(one(names.index(x), x))
+            except Exception as exc:
+                failed.append(x)
+                _log(f"[!] {x}: {str(exc)[:120]}")
+    if failed:
+        _log(f"[!] {len(failed)} still failed after retries: excluded")
 
     def fdr(rs):
         t = sum(len(r["target_hits"]) for r in rs)
@@ -117,6 +149,7 @@ def main():
     summary = {
         "depositors": len(rows),
         "with_deposit_address": sum(1 for r in rows if r["deposit_addresses"]),
+        "failed_after_retries": len(failed),
         "deposit_addresses": sum(r["deposit_addresses"] for r in rows),
         "target_hits": t,
         "decoy_hits": d,

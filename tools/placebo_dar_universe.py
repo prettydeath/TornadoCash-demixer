@@ -28,6 +28,7 @@ import json
 import os
 import random
 import sys
+import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -152,15 +153,33 @@ def main(argv=None):
             out[name] = {"target": sorted(senders & tr), "decoy": sorted(senders & dr)}
         return out
 
+    failed = []
     with ThreadPoolExecutor(max_workers=len(clients)) as pool:
-        futs = {pool.submit(one, i, w): w for i, w in enumerate(sample)}
+        futs = {pool.submit(one, i, x): x for i, x in enumerate(sample)}
         for n, fut in enumerate(as_completed(futs), 1):
             try:
                 rows.append(fut.result())
-            except Exception as exc:  # reported, not dropped silently
+            except Exception as exc:  # retried below, never dropped silently
+                failed.append(futs[fut])
                 _log(f"[!] {futs[fut]}: {str(exc)[:120]}")
             if n % 50 == 0:
                 _log(f"  {n} / {len(sample)}")
+    # An incomplete lookup (rate limit, provider error) is retried one at a time,
+    # so that a busy key cannot silently lower the number of deposit addresses.
+    for round_ in range(1, 4):
+        if not failed:
+            break
+        time.sleep(30)
+        _log(f"[*] retry round {round_}: {len(failed)}")
+        again, failed = failed, []
+        for x in again:
+            try:
+                rows.append(one(sample.index(x), x))
+            except Exception as exc:
+                failed.append(x)
+                _log(f"[!] {x}: {str(exc)[:120]}")
+    if failed:
+        _log(f"[!] {len(failed)} still failed after retries: excluded")
 
     def est(rs, name):
         t = sum(len(r[name]["target"]) for r in rs)
@@ -173,6 +192,7 @@ def main(argv=None):
     summary = {
         "depositors": len(rows),
         "with_deposit_address": sum(1 for r in rows if r["deposit_addresses"]),
+        "failed_after_retries": len(failed),
     }
     for name in ("loose", "strict"):
         v, t, d, te, de = est(rows, name)

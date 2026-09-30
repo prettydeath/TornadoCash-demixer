@@ -41,7 +41,7 @@ from tornado_demix.heuristics import (  # noqa: E402
 )
 
 OUT = os.path.join(CACHE, "placebo")
-FAMILIES = ("linked address", "amount+timing", "gas price")
+FAMILIES = ("linked address", "amount+timing", "gas price", "early_profile")
 
 
 def narrow(data, hours):
@@ -91,6 +91,8 @@ def tally(data):
         if r["band"] in ("strong", "moderate"):
             for f in {METHOD_FAMILY.get(s) for s in r["signals"]} - {None}:
                 fam[f] += 1
+            if "early_profile" in r["signals"]:
+                fam["early_profile"] += 1
     fam["strong+moderate"] = bands["strong"] + bands["moderate"]
     exposure = sum(sum(res["counts"].values()) for res in data["denoms"].values())
     return fam, exposure
