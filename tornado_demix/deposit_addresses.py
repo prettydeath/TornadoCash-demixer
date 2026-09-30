@@ -12,8 +12,9 @@ An address ``X`` counts as a deposit address when all of the following hold:
 * at most ``MAX_DEPOSIT_SENDERS`` distinct addresses sent it funds;
 * at least ``MIN_SWEEP_SHARE`` of its outgoing transfers go to hot wallets: among
   its ``MAX_SWEEP_TARGETS`` most frequent destinations, those labelled as an
-  exchange or with at least ``HOT_WALLET_TXS`` transactions (an exchange sweeps
-  to several hot wallets, so the share is summed over them).
+  exchange, or ordinary (non-contract) addresses with at least ``HOT_WALLET_TXS``
+  transactions (an exchange sweeps to several hot wallets, so the share is summed
+  over them; a token, DEX router or Tornado contract is busy but not an exchange).
 
 Only the depositor's own outgoing counterparties are examined, busiest first and at
 most ``MAX_CANDIDATES`` of them, so the cost is bounded: two history queries per
@@ -91,7 +92,15 @@ def classify_deposit_address(
     total = sum(outgoing.values())
     hot = []
     for target, n in outgoing.most_common(MAX_SWEEP_TARGETS):
-        if _is_exchange(labels, target) or (busy is not None and busy(target)):
+        if _is_exchange(labels, target):
+            hot.append((target, n))
+        elif (
+            busy is not None
+            and not (is_contract is not None and is_contract(target))
+            and busy(target)
+        ):
+            # Activity alone marks a hot wallet only for an ordinary address: a token,
+            # a DEX router or a Tornado contract is busy too but is not an exchange.
             hot.append((target, n))
     if not hot or sum(n for _t, n in hot) / total < MIN_SWEEP_SHARE:
         return None

@@ -126,3 +126,19 @@ def test_an_explorer_error_on_one_address_skips_it_without_failing_the_run():
     found = depositor_deposit_addresses(client, WALLET, txs, labels={**labels})
     # OTHER is skipped, DEPOSIT still qualifies through the exchange label
     assert [f["address"] for f in found] == [DEPOSIT]
+
+
+def test_a_busy_contract_is_not_a_hot_wallet():
+    # A token or router contract has millions of transactions but is not an exchange:
+    # an address whose outflow goes to USDC or the Tornado router is not a deposit address.
+    client = FakeClient(deposit_lists(), busy={HOT})
+    info = classify_deposit_address(
+        client, DEPOSIT, is_contract=lambda a: a == HOT, busy=client.busy.__contains__
+    )
+    assert info is None
+    # a labelled exchange still counts, contract or not
+    labels = {HOT: {"category": "exchange", "entity": "binance"}}
+    info = classify_deposit_address(
+        client, DEPOSIT, is_contract=lambda a: a == HOT, labels=labels, busy=lambda a: False
+    )
+    assert info["exchange"] == "binance"
