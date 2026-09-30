@@ -3,7 +3,7 @@ message: "If you use this software, please cite it as below."
 title: "TornadoCash-demixer"
 abstract: >-
   Tornado Cash forensics on public on-chain data: evidence-banded exit leads,
-  exit groups, operator clusters and FIFO tracing on 8 EVM chains, with a
+  exit groups, operator clusters and multi-hop fund tracing after withdrawal on 8 EVM chains, with a
   placebo (target-decoy) check that measures what chance alone produces.
 type: software
 authors:

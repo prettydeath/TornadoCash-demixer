@@ -1,7 +1,7 @@
 site_name: TornadoCash Demixer
 site_description: >-
   Tornado Cash forensics on public on-chain data: evidence-banded exit leads,
-  exit groups, operator clusters and FIFO tracing on 8 EVM chains, with a
+  exit groups, operator clusters and multi-hop fund tracing after withdrawal on 8 EVM chains, with a
   placebo check that measures what chance alone produces.
 site_url: https://prettydeath.github.io/TornadoCash-demixer/
 repo_url: https://github.com/prettydeath/TornadoCash-demixer

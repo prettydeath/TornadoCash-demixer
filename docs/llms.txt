@@ -25,4 +25,5 @@ Install: `python -m pip install tornado-demix` (CLI, from PyPI); the local Flask
 
 - A careful user (relayers, delays, fresh split exits) leaves no linked address; the tool then reports no lead or only `weak` candidates.
 - Bridges, other mixers and cross-chain hops are not followed.
+- FIFO is used only to attribute withdrawn funds to later transfers when tracing forward; the tool does not match deposits to withdrawals by FIFO order (the temporal heuristic of Cristodaro et al., arXiv 2510.09433, a paper since withdrawn).
 - Results depend on the explorer API and its rate limits.
