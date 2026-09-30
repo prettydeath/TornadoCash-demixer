@@ -164,9 +164,11 @@ def test_the_signals_combine_as_a_noisy_or():
 
 def _gas_data(shared_by):
     """A pool where the matched gas price is shared by ``shared_by`` withdrawals."""
-    detail = {ADDR: [{"gas_price": 42, "hash": "0xw", "block": 1}]}
+    detail = {ADDR: [{"gas_price": 42, "hash": "0xw", "block": 1, "self_relayed": True}]}
     for i in range(shared_by - 1):
-        detail["0x%040x" % i] = [{"gas_price": 42, "hash": "0xo%d" % i, "block": 1}]
+        detail["0x%040x" % i] = [
+            {"gas_price": 42, "hash": "0xo%d" % i, "block": 1, "self_relayed": True}
+        ]
     return {
         "deposits": [{"gas_price": 42}],
         "denoms": {

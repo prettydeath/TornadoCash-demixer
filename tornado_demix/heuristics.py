@@ -121,8 +121,13 @@ def apply_heuristics(
 
             # A withdrawal reusing one of the wallet's deposit gas prices, where
             # that price is rare in the window (not a common auto-fee value).
-            # gas_gate rejects blocks whose price the sender did not choose.
+            # Only a withdrawal the user sent without a relayer counts: a relayer
+            # chooses the gas price of the transactions it sends (on real data 44 of
+            # 45 such matches were relayed). gas_gate rejects blocks whose price the
+            # sender did not choose.
             for r in recs:
+                if not r.get("self_relayed"):
+                    continue
                 gp = r.get("gas_price")
                 if gp and gp in deposit_gas and gp_counts[gp] <= MAX_GAS_PRICE_SHARE:
                     if gas_gate is not None and not gas_gate(r.get("block")):

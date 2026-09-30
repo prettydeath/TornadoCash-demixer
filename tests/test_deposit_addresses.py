@@ -1,6 +1,7 @@
 """Exchange deposit addresses shared by a depositor and a withdrawal recipient."""
 
 from tornado_demix.deposit_addresses import (
+    FORWARD_BLOCKS,
     HOT_WALLET_TXS,
     MAX_DEPOSIT_SENDERS,
     MAX_DEPOSIT_TXS,
@@ -16,8 +17,14 @@ HOT = "0x" + "d" * 40
 OTHER = "0x" + "e" * 40
 
 
-def tx(frm, to):
-    return {"from": frm, "to": to, "hash": "0x" + frm[-4:] + to[-4:]}
+def tx(frm, to, value=10**18, block=100):
+    return {
+        "from": frm,
+        "to": to,
+        "hash": "0x" + frm[-4:] + to[-4:],
+        "value": str(value),
+        "blockNumber": str(block),
+    }
 
 
 class FakeClient:
@@ -38,7 +45,9 @@ class FakeClient:
 
 
 def deposit_lists(senders=(WALLET, EXIT), target=HOT, sweeps=3):
-    rows = [tx(s, DEPOSIT) for s in senders] + [tx(DEPOSIT, target) for _ in range(sweeps)]
+    rows = [tx(s, DEPOSIT) for s in senders] + [
+        tx(DEPOSIT, target, value=10**18 - 10**15, block=101) for _ in range(sweeps)
+    ]
     return {("txlist", DEPOSIT): rows}
 
 
@@ -101,7 +110,13 @@ def test_shared_hits_list_recipients_that_sent_to_the_same_deposit_address():
 
 def test_sweeps_split_over_several_hot_wallets_still_count():
     hot2 = "0x" + "f" * 40
-    rows = [tx(WALLET, DEPOSIT), tx(DEPOSIT, HOT), tx(DEPOSIT, hot2), tx(DEPOSIT, HOT)]
+    fwd = 10**18 - 10**15
+    rows = [
+        tx(WALLET, DEPOSIT),
+        tx(DEPOSIT, HOT, value=fwd, block=101),
+        tx(DEPOSIT, hot2, value=fwd, block=102),
+        tx(DEPOSIT, HOT, value=fwd, block=103),
+    ]
     client = FakeClient({("txlist", DEPOSIT): rows}, busy={HOT, hot2})
     info = classify_deposit_address(client, DEPOSIT, busy=client.busy.__contains__)
     assert info["sweep_targets"] == [HOT, hot2]
@@ -142,3 +157,23 @@ def test_a_busy_contract_is_not_a_hot_wallet():
         client, DEPOSIT, is_contract=lambda a: a == HOT, labels=labels, busy=lambda a: False
     )
     assert info["exchange"] == "binance"
+
+
+def test_without_a_label_a_busy_target_must_receive_forwarded_amounts():
+    # the wallet pays the busy address an amount it did not just receive: not a sweep
+    rows = [
+        tx(WALLET, DEPOSIT, value=10**18, block=100),
+        tx(DEPOSIT, HOT, value=5 * 10**17, block=101),
+    ]
+    client = FakeClient({("txlist", DEPOSIT): rows}, busy={HOT})
+    assert classify_deposit_address(client, DEPOSIT, busy=client.busy.__contains__) is None
+    # forwarded too late (more than FORWARD_BLOCKS after the incoming transfer)
+    rows = [
+        tx(WALLET, DEPOSIT, block=100),
+        tx(DEPOSIT, HOT, value=10**18, block=100 + FORWARD_BLOCKS + 1),
+    ]
+    client = FakeClient({("txlist", DEPOSIT): rows}, busy={HOT})
+    assert classify_deposit_address(client, DEPOSIT, busy=client.busy.__contains__) is None
+    # a labelled exchange needs no forwarding test
+    labels = {HOT: {"category": "exchange", "entity": "binance"}}
+    assert classify_deposit_address(client, DEPOSIT, labels=labels, busy=lambda a: False)

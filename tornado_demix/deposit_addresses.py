@@ -13,8 +13,10 @@ An address ``X`` counts as a deposit address when all of the following hold:
 * at least ``MIN_SWEEP_SHARE`` of its outgoing transfers go to hot wallets: among
   its ``MAX_SWEEP_TARGETS`` most frequent destinations, those labelled as an
   exchange, or ordinary (non-contract) addresses with at least ``HOT_WALLET_TXS``
-  transactions (an exchange sweeps to several hot wallets, so the share is summed
-  over them; a token, DEX router or Tornado contract is busy but not an exchange).
+  transactions to which ``X`` forwards amounts it has just received (within
+  ``FORWARD_BLOCKS``, short by at most 0.01 ETH or 1 % of a token amount). An
+  exchange sweeps to several hot wallets, so the share is summed over them; a
+  token, DEX router or Tornado contract is busy but not an exchange.
 
 Only the depositor's own outgoing counterparties are examined, busiest first and at
 most ``MAX_CANDIDATES`` of them, so the cost is bounded: two history queries per
@@ -34,6 +36,9 @@ MAX_DEPOSIT_SENDERS = 50  # distinct senders a per-customer address can have
 MIN_SWEEP_SHARE = 0.8  # share of outgoing transfers that go to hot wallets
 MAX_SWEEP_TARGETS = 3  # most frequent destinations checked for a hot wallet
 HOT_WALLET_TXS = 10000  # a sweep target this busy is taken for a hot wallet
+FORWARD_BLOCKS = 3200  # a sweep follows the incoming transfer within this many blocks
+FORWARD_ETH_WEI = 10**16  # ...and forwards it less at most 0.01 ETH (Victor, FC 2020)
+FORWARD_TOKEN_SHARE = 0.01  # tokens: forwards at least 99 % of the incoming amount
 
 
 def _rows(client, action: str, address: str) -> list[dict]:
@@ -56,6 +61,44 @@ def _rows(client, action: str, address: str) -> list[dict]:
 
 def _is_exchange(labels: dict | None, address: str) -> bool:
     return bool(labels) and (labels.get(address) or {}).get("category") == "exchange"
+
+
+def _asset(row: dict) -> str:
+    return (row.get("contractAddress") or "").lower() or "eth"
+
+
+def forwards_to(rows: list[dict], address: str, target: str) -> bool:
+    """True when ``address`` sent ``target`` an amount it had just received: an
+    incoming transfer of the same asset at most FORWARD_BLOCKS earlier, and the
+    sweep short of it by at most 0.01 ETH (ETH) or 1 % (tokens). This is how an
+    exchange deposit address behaves (the forwarding test of Victor, FC 2020, used
+    by Tutela); a personal wallet that merely pays a busy address does not."""
+    incoming = [
+        r
+        for r in rows
+        if (r.get("to") or "").lower() == address and str(r.get("value", "0")).isdigit()
+    ]
+    for out in rows:
+        if (out.get("from") or "").lower() != address or (out.get("to") or "").lower() != target:
+            continue
+        try:
+            ob, ov = int(out.get("blockNumber", 0)), int(out.get("value", 0))
+        except ValueError:
+            continue
+        if ov <= 0:
+            continue
+        for inc in incoming:
+            if _asset(inc) != _asset(out):
+                continue
+            ib, iv = int(inc.get("blockNumber", 0)), int(inc["value"])
+            if not 0 <= ob - ib <= FORWARD_BLOCKS or iv < ov:
+                continue
+            if _asset(out) == "eth":
+                if iv - ov <= FORWARD_ETH_WEI:
+                    return True
+            elif iv - ov <= iv * FORWARD_TOKEN_SHARE:
+                return True
+    return False
 
 
 def classify_deposit_address(
@@ -97,10 +140,13 @@ def classify_deposit_address(
         elif (
             busy is not None
             and not (is_contract is not None and is_contract(target))
+            and forwards_to(rows, address, target)
             and busy(target)
         ):
-            # Activity alone marks a hot wallet only for an ordinary address: a token,
-            # a DEX router or a Tornado contract is busy too but is not an exchange.
+            # Without a label, a hot wallet is an ordinary (non-contract) busy address
+            # that receives forwarded deposits: a token, a DEX router or a Tornado
+            # contract is busy too but is not an exchange, and a wallet that merely
+            # pays a busy address does not forward what it received.
             hot.append((target, n))
     if not hot or sum(n for _t, n in hot) / total < MIN_SWEEP_SHARE:
         return None

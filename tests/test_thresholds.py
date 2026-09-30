@@ -61,7 +61,7 @@ def _gas_data(sharing):
     for i in range(10):
         addr = "0x%040x" % (i + 1)
         gas = 999 if i < sharing else 5
-        detail[addr] = [{"hash": "0x%x" % i, "gas_price": gas, "block": 1}]
+        detail[addr] = [{"hash": "0x%x" % i, "gas_price": gas, "block": 1, "self_relayed": True}]
     res = {"counts": Counter({a: 1 for a in detail}), "detail": detail, "target_counts": []}
     return {"deposits": [{"gas_price": 999}], "denoms": {"0.1 ETH": res}}
 
@@ -72,6 +72,19 @@ def test_a_gas_price_shared_by_three_withdrawals_still_counts_but_not_by_four():
     assert "gas_price" in held["denoms"]["0.1 ETH"]["signals"][first]
     common = apply_heuristics(_gas_data(4), counterparties=set())
     assert "gas_price" not in common["denoms"]["0.1 ETH"]["signals"][first]
+
+
+def test_a_relayed_withdrawal_never_earns_gas_price():
+    # the relayer chose that gas price, not the user
+    data = _gas_data(1)
+    for recs in data["denoms"]["0.1 ETH"]["detail"].values():
+        for r in recs:
+            r["self_relayed"] = False
+    first = "0x%040x" % 1
+    assert (
+        "gas_price"
+        not in apply_heuristics(data, counterparties=set())["denoms"]["0.1 ETH"]["signals"][first]
+    )
 
 
 def test_a_gas_price_match_alone_is_weak():

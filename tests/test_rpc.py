@@ -225,12 +225,14 @@ def test_a_gated_gas_price_match_is_not_credited():
                 "counts": {"0xa": 1},
                 "unique_recipients": 1,
                 "target_counts": [1],
-                "detail": {"0xa": [{"gas_price": 42, "hash": "0xw", "block": 99}]},
+                "detail": {
+                    "0xa": [{"gas_price": 42, "hash": "0xw", "block": 99, "self_relayed": True}]
+                },
             }
         },
     }
     apply_heuristics(data, set(), gas_gate=lambda block: False)
-    assert data["denoms"]["1 ETH"]["signals"]["0xa"] == []
+    assert "gas_price" not in data["denoms"]["1 ETH"]["signals"]["0xa"]
 
     apply_heuristics(data, set(), gas_gate=lambda block: True)
     assert "gas_price" in data["denoms"]["1 ETH"]["signals"]["0xa"]
