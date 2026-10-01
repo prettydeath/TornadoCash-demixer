@@ -17,7 +17,7 @@ traces users leave around it.
 
 ## What it does
 
-- Finds a wallet's deposits into the 55 registered pools on 8 EVM networks
+- Finds a wallet's deposits into the 56 registered pools on 8 EVM networks
   (native transfers, internal transfers from contract wallets, ERC-20 transfers,
   direct or through a router).
 - Groups deposits into vouchers (one pool, one session, `--gap-hours`, default 24)
@@ -102,10 +102,16 @@ The method, thresholds and the reasoning behind them are in
 ## Requirements
 
 - Python 3.9 or newer. Runtime dependency: `requests`. The web UI adds `flask`.
-- An Etherscan V2 API key. One key covers Ethereum, BNB Smart Chain, Polygon,
-  Arbitrum, Base and Gnosis. Avalanche (Routescan) and Optimism (Blockscout) need
-  no key. On the free Etherscan plan the `getLogs` endpoint was not
-  available for BNB Smart Chain, Gnosis and Base at the time of writing.
+- An Etherscan V2 API key. On the free plan it covers Ethereum, Polygon, Arbitrum
+  and Optimism (Optimism is served by Blockscout). Avalanche uses Routescan and
+  Base uses Blockscout; neither needs a key. BNB Smart Chain and Gnosis need a
+  paid Etherscan plan: the free tier does not serve them. Where a provider has no
+  `proxy` module (Blockscout), the client reads the head block from Blockscout's
+  `block` module and falls back to the network's JSON-RPC node.
+- The Tornado proxy `0x0D5550d5...9b17` is registered for Polygon, Avalanche,
+  Arbitrum, Optimism, Gnosis and Base, so deposits made through it are detected
+  there (before, an Arbitrum wallet with 4 proxy deposits showed 0). BNB Smart
+  Chain has none: no deposit could be sampled with free data sources.
 
 ## Installation
 
@@ -423,8 +429,8 @@ The method on both public cases, with the numbers behind each claim, is in
   cross-chain hops are not followed; `cluster` follows one hop only, and `trace`
   follows funds by FIFO attribution, a convention that does not hold when an
   address mixes the traced funds with others.
-- Native chains other than Ethereum, Polygon and Avalanche have no verified
-  router in the registry, so routed deposits there are not detected.
+- BNB Smart Chain has no verified router in the registry, so routed deposits
+  there are not detected.
 - `characterize` counts inflows from native pools only.
 - Results depend on the explorer API. Provider failures raise errors instead of
   returning empty results, and pools whose search window cannot be resolved are

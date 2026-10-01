@@ -17,7 +17,7 @@ from tornado_demix.networks import load_networks
 # assertion is still made on every release build.
 tomllib = pytest.importorskip("tomllib", reason="stdlib from Python 3.11")
 
-EXPECTED_POOLS = 55
+EXPECTED_POOLS = 56
 EXPECTED_NETWORKS = 8
 
 

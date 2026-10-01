@@ -17,8 +17,8 @@ from the chain-id table below.
 accumulate across rows, so a chain with several routers lists one per row.
 :func:`~tornado_demix.demix.detect_deposits` follows the router path only for a
 declared router, so a chain without one detects direct-to-pool deposits only.
-Ethereum, Polygon and Avalanche ship verified routers; the other native chains
-ship none, because no proxy there has been verified on-chain.
+Ethereum, Polygon, Avalanche, Arbitrum, Optimism, Gnosis and Base ship verified
+routers; BSC ships none, because no proxy there has been verified on-chain.
 
 Never add an address you have not verified: a wrong pool produces confident,
 meaningless results.
@@ -128,6 +128,7 @@ class Network:
             "chain_id": self.chain_id,
             "base_url": self.api_base or ETHERSCAN_API_URL,
             "style": self.api_style,
+            "rpc_url": self.rpc_url,
         }
 
     def __repr__(self):

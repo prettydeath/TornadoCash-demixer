@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import re
 import sys
 import time
+import urllib.request
 from collections import Counter
 from typing import Any
 
@@ -12,6 +14,8 @@ import requests
 
 from .constants import CHAIN_ID, ETHERSCAN_API_URL, WEI
 from .errors import ApiError, ApiKeyError, BlockLookupError
+
+_fetch = urllib.request.urlopen  # module-level so tests can replace it
 
 # BlockLookupError is re-exported: callers import it from here.
 __all__ = [
@@ -86,6 +90,7 @@ class EtherscanClient:
         retries: int = 5,
         base_url: str = ETHERSCAN_API_URL,
         style: str = "v2",
+        rpc_url: str = "",
     ) -> None:
         self.api_key = api_key
         self.chain_id = chain_id
@@ -97,6 +102,11 @@ class EtherscanClient:
         #               (Blockscout, Routescan, classic scan). No chainid param.
         self.base_url = base_url
         self.style = style
+        # Optional JSON-RPC node: the last resort for the two lookups that need the
+        # proxy module, which Blockscout does not serve.
+        self.rpc_url = rpc_url
+        self._proxy_proven = False  # a proxy call has succeeded on this provider
+        self._proxy_dead = False  # a compat provider that does not serve the proxy
         self.session = requests.Session()
         self._head = None  # (block, time) of the last current_block answer
 
@@ -303,19 +313,73 @@ class EtherscanClient:
         """Return the chain's latest block number.
 
         Used to clamp a search window that ends in the future: block-by-time
-        with closest="after" rejects a future timestamp.
+        with closest="after" rejects a future timestamp. Etherscan answers through
+        the proxy module; Blockscout has none and has ``block/eth_block_number``
+        instead; a configured JSON-RPC node is the last resort.
         """
         now = time.time()
         if self._head and now - self._head[1] < 60:
             return self._head[0]
-        result = self.call({"module": "proxy", "action": "eth_blockNumber"})
-        try:
-            self._head = (int(result, 16), now)
-            return self._head[0]
-        except (TypeError, ValueError) as exc:
+        result = self._proxy({"module": "proxy", "action": "eth_blockNumber"})
+        head = _hex_int(result)
+        if head is None and self.style == "compat":
+            try:
+                result = self.call({"module": "block", "action": "eth_block_number"})
+            except ApiError:
+                result = None
+            head = _hex_int(result)
+        if head is None:
+            result = self._rpc("eth_blockNumber", [])
+            head = _hex_int(result)
+        if head is None:
             raise BlockLookupError(
                 "could not read the current block number: provider returned {!r}".format(result)
-            ) from exc
+            )
+        self._head = (head, now)
+        return head
+
+    def _proxy(self, params: dict) -> Any:
+        """One proxy-module call; None when the provider cannot answer it.
+
+        A compat explorer without the proxy module ("Unknown module") is probed
+        once with a single attempt and then skipped, so the retry backoff is not
+        paid on every hash.
+        """
+        if self._proxy_dead:
+            return None
+        probe = self.style == "compat" and not self._proxy_proven
+        retries = self.retries
+        if probe:
+            self.retries = 1
+        try:
+            result = self.call(params)
+        except ApiError:
+            if probe:
+                self._proxy_dead = True
+            return None
+        finally:
+            self.retries = retries
+        self._proxy_proven = True
+        return result
+
+    def _rpc(self, method: str, params: list) -> Any:
+        """One JSON-RPC call to ``rpc_url``; None when unset or unanswered."""
+        if not self.rpc_url:
+            return None
+        body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
+        request = urllib.request.Request(
+            self.rpc_url,
+            data=body.encode(),
+            headers={"Content-Type": "application/json", "User-Agent": "tornado-demix"},
+        )
+        try:
+            with _fetch(request, timeout=30) as resp:
+                payload = json.loads(resp.read().decode())
+        except (OSError, ValueError):
+            return None
+        if not isinstance(payload, dict) or payload.get("error"):
+            return None
+        return payload.get("result")
 
     def outgoing_txs(self, address: str) -> list[dict]:
         """Return every normal transaction sent from ``address``."""
@@ -325,15 +389,14 @@ class EtherscanClient:
         """Return the address that broadcast ``tx_hash``, or None.
 
         None covers both an unknown hash and a provider that cannot serve the
-        proxy module, so the caller records the lead as unverified rather than
-        failing the run.
+        proxy module (the node in ``rpc_url`` is tried next), so the caller
+        records the lead as unverified rather than failing the run.
         """
-        try:
-            result = self.call(
-                {"module": "proxy", "action": "eth_getTransactionByHash", "txhash": tx_hash}
-            )
-        except ApiError:
-            return None
+        result = self._proxy(
+            {"module": "proxy", "action": "eth_getTransactionByHash", "txhash": tx_hash}
+        )
+        if not isinstance(result, dict):
+            result = self._rpc("eth_getTransactionByHash", [tx_hash])
         if isinstance(result, dict):
             sender = result.get("from")
             return sender.lower() if sender else None
@@ -467,6 +530,16 @@ class EtherscanClient:
                 }
             )
         return sends
+
+
+def _hex_int(value):
+    """Parse a 0x-prefixed hex string, or None for anything else."""
+    if not isinstance(value, str):
+        return None
+    try:
+        return int(value, 16)
+    except ValueError:
+        return None
 
 
 def _row_identity(row):

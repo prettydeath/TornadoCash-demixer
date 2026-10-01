@@ -535,3 +535,107 @@ def test_has_at_least_txs_reads_the_single_row_at_position_n():
     assert client.session.calls[0]["offset"] == 1
     empty = {"status": "0", "message": "No transactions found", "result": []}
     assert _proxy_client([empty]).has_at_least_txs(SENDER, 10000) is False
+
+
+# Blockscout has no proxy module: current_block / tx_sender fall back.
+BLOCKSCOUT_NO_PROXY = {"status": "0", "message": "NOTOK", "result": "Unknown module"}
+RPC_URL = "https://rpc.example"
+
+
+def _compat_client(payloads, rpc_url="", retries=1):
+    client = EtherscanClient(
+        "",
+        retries=retries,
+        base_url="https://x.blockscout.com/api",
+        style="compat",
+        rpc_url=rpc_url,
+    )
+    client.session = _FakeSession(payloads)
+    return client
+
+
+def test_current_block_falls_back_to_the_block_module():
+    client = _compat_client(
+        [BLOCKSCOUT_NO_PROXY, {"jsonrpc": "2.0", "id": 1, "result": "0x319f4cb"}]
+    )
+    assert client.current_block() == 0x319F4CB
+    assert [c["module"] for c in client.session.calls] == ["proxy", "block"]
+    assert client.session.calls[1]["action"] == "eth_block_number"
+
+
+def test_current_block_falls_back_to_the_rpc_node(monkeypatch):
+    client = _compat_client([BLOCKSCOUT_NO_PROXY, BLOCKSCOUT_NO_PROXY], rpc_url=RPC_URL)
+    monkeypatch.setattr(client, "_rpc", lambda method, params: "0x10")
+    assert client.current_block() == 16
+
+
+def test_current_block_raises_when_every_source_fails():
+    from tornado_demix.errors import BlockLookupError
+
+    client = _compat_client([BLOCKSCOUT_NO_PROXY, BLOCKSCOUT_NO_PROXY])
+    with pytest.raises(BlockLookupError):
+        client.current_block()
+
+
+def test_a_provider_without_the_proxy_is_probed_once():
+    client = _compat_client([BLOCKSCOUT_NO_PROXY], retries=3)
+    assert client.tx_sender("0xa") is None
+    assert len(client.session.calls) == 1  # one attempt, not `retries`
+    assert client.tx_sender("0xb") is None
+    assert len(client.session.calls) == 1  # the proxy is not asked again
+
+
+def test_tx_sender_falls_back_to_the_rpc_node(monkeypatch):
+    client = _compat_client([BLOCKSCOUT_NO_PROXY], rpc_url=RPC_URL)
+    seen = []
+
+    def fake_rpc(method, params):
+        seen.append((method, params))
+        return {"from": SENDER}
+
+    monkeypatch.setattr(client, "_rpc", fake_rpc)
+    assert client.tx_sender("0xdead") == SENDER.lower()
+    assert seen == [("eth_getTransactionByHash", ["0xdead"])]
+
+
+def test_tx_sender_is_none_without_proxy_and_rpc():
+    assert _compat_client([BLOCKSCOUT_NO_PROXY]).tx_sender("0xdead") is None
+
+
+def test_the_rpc_helper_posts_json_rpc_and_survives_a_failure(monkeypatch):
+    import io
+    import json
+
+    import tornado_demix.etherscan as mod
+
+    sent = {}
+
+    def fake_urlopen(request, timeout=None):
+        sent["url"] = request.full_url
+        sent["body"] = json.loads(request.data)
+        sent["timeout"] = timeout
+        return io.BytesIO(b'{"jsonrpc":"2.0","id":1,"result":"0x5"}')
+
+    monkeypatch.setattr(mod, "_fetch", fake_urlopen)
+    client = EtherscanClient("KEY", rpc_url=RPC_URL)
+    assert client._rpc("eth_blockNumber", []) == "0x5"
+    assert sent["url"] == RPC_URL
+    assert sent["body"]["method"] == "eth_blockNumber"
+    assert sent["timeout"]
+
+    def broken(request, timeout=None):
+        raise OSError("down")
+
+    monkeypatch.setattr(mod, "_fetch", broken)
+    assert client._rpc("eth_blockNumber", []) is None
+    assert EtherscanClient("KEY")._rpc("eth_blockNumber", []) is None  # no rpc_url
+
+
+def test_etherscan_v2_does_not_try_the_block_module():
+    """A V2 client keeps its behaviour: no extra module probing."""
+    client = _proxy_client([{"jsonrpc": "2.0", "id": 1, "result": None}])
+    from tornado_demix.errors import BlockLookupError
+
+    with pytest.raises(BlockLookupError):
+        client.current_block()
+    assert len(client.session.calls) == 1

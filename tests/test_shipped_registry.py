@@ -7,7 +7,7 @@ from tornado_demix.networks import load_networks
 EXPECTED_POOL_COUNTS = {
     "ethereum": 28,
     "bsc": 4,
-    "base": 4,
+    "base": 5,
     "arbitrum": 4,
     "optimism": 4,
     "polygon": 3,
@@ -32,8 +32,8 @@ def test_pool_counts_match(shipped):
 
 def test_totals_split_between_native_and_token_pools(shipped):
     pools = [p for net in shipped.values() for p in net.pools]
-    assert len(pools) == 55
-    assert len([p for p in pools if p.is_native]) == 31
+    assert len(pools) == 56
+    assert len([p for p in pools if p.is_native]) == 32
     assert len([p for p in pools if not p.is_native]) == 24
 
 
@@ -127,18 +127,21 @@ AVALANCHE_ROUTERS = {
 def test_ethereum_and_verified_altchains_declare_routers(shipped):
     """The schema supports routers; the registry ships only verified ones.
 
-    Ethereum's three proxies are built in. Polygon's and Avalanche's proxies
-    were re-verified on-chain (each sampled deposit calls the router's
+    Ethereum's three proxies are built in. On the other chains the Tornado proxy
+    0x0D55...9b17 ships where sampled deposits were seen to call its
     ``deposit(_tornado, _commitment)`` [selector 0x13d98d13] with ``_tornado``
-    equal to a known pool on that chain), so they ship. The remaining native
-    chains have no verified proxy, so they ship none - a documented detection
-    gap is honest, a guessed address is not.
+    equal to a known pool on that chain: Polygon and Avalanche (earlier),
+    Arbitrum and Optimism (20 of 20 sampled calls, 2026-10-01), Gnosis (2 of 2)
+    and Base (where it also feeds the 0.01 ETH pool). On BSC no deposit could be
+    sampled with the free data sources, so it ships none - a documented
+    detection gap is honest, a guessed address is not.
     """
     assert len(shipped["ethereum"].routers) == 3
     assert shipped["polygon"].routers == {POLYGON_ROUTER}
     assert shipped["avalanche"].routers == AVALANCHE_ROUTERS
-    for name in ("bsc", "arbitrum", "optimism", "base", "gnosis"):
-        assert shipped[name].routers == set(), name
+    for name in ("arbitrum", "optimism", "gnosis", "base"):
+        assert shipped[name].routers == {POLYGON_ROUTER}, name
+    assert shipped["bsc"].routers == set()
 
 
 def test_verified_altchain_routers_are_entry_points(shipped):
@@ -152,6 +155,15 @@ def test_pool_keys_are_unique_within_each_network(shipped):
     for name, net in shipped.items():
         keys = [p.key for p in net.pools]
         assert len(keys) == len(set(keys)), name
+
+
+def test_base_uses_blockscout_and_v2_chains_use_etherscan(shipped):
+    base = shipped["base"].client_kwargs()
+    assert base["base_url"] == "https://base.blockscout.com/api"
+    assert base["style"] == "compat"
+    assert base["rpc_url"].startswith("https://")
+    for name in ("ethereum", "polygon", "arbitrum"):
+        assert shipped[name].client_kwargs()["style"] == "v2", name
 
 
 @pytest.mark.live

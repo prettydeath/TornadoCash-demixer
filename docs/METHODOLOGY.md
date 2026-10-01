@@ -6,8 +6,8 @@ read their output honestly.
 ## 1. Deposits and vouchers
 
 Tornado.Cash is deployed on many chains. The registry holds a set of
-fixed-denomination **pool contracts** per network — 31 native-currency pools across 8
-chains, plus 24 ERC-20 pools on Ethereum (DAI, cDAI, USDC, cUSDC, USDT, WBTC), 55 pools
+fixed-denomination **pool contracts** per network — 32 native-currency pools across 8
+chains, plus 24 ERC-20 pools on Ethereum (DAI, cDAI, USDC, cUSDC, USDT, WBTC), 56 pools
 as shipped — and every definition below is stated against a pool, not against a number.
 See [Pool identity](#pool-identity).
 
@@ -32,12 +32,14 @@ Denominations are per chain and per asset: `0.1 / 1 / 10 / 100 ETH` on Ethereum,
 on.
 
 > **Detection gap: undeclared routers.** The router path only fires for an address the
-> network declares in its `router_address` column. Ethereum, Polygon and Avalanche ship
-> verified routers; **BNB Smart Chain, Arbitrum, Optimism, Gnosis and Base declare none,
-> so there only direct-to-pool deposits are detected.** A deposit routed through an
-> undeclared proxy is invisible, and the run reports "no Tornado deposits found" — a
-> false negative, not a clean wallet. No proxy on those chains has been verified
-> on-chain, and an unverified address must never enter the registry.
+> network declares in its `router_address` column. Ethereum, Polygon, Avalanche,
+> Arbitrum, Optimism, Gnosis and Base ship verified routers (the Tornado proxy
+> `0x0D55...9b17` on the last four: sampled deposits call `deposit(_tornado, _commitment)`
+> into a known pool); **BNB Smart Chain declares none, so there only direct-to-pool
+> deposits are detected.** A deposit routed through an undeclared proxy is invisible,
+> and the run reports "no Tornado deposits found" — a false negative, not a clean
+> wallet. No proxy on BSC could be sampled with free data sources, and an unverified
+> address must never enter the registry.
 
 Consecutive deposits **into the same pool** that occur within `--gap-hours` are grouped
 into a **voucher**. A voucher of size *N* means the depositor put *N* notes of that pool

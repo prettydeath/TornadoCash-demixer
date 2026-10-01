@@ -91,7 +91,7 @@ def test_the_registry_parses_even_with_an_excel_written_bom(tmp_path):
         "optimism",
         "polygon",
     ]
-    assert sum(len(n.pools) for n in nets.values()) == 55
+    assert sum(len(n.pools) for n in nets.values()) == 56
 
 
 def test_the_forward_cache_round_trips_utf8(tmp_path):

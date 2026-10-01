@@ -79,7 +79,7 @@ def test_a_good_row_still_loads(tmp_path):
 
 def test_the_shipped_registry_has_no_rejected_rows(capsys):
     nets = load_networks()
-    assert sum(len(n.pools) for n in nets.values()) == 55
+    assert sum(len(n.pools) for n in nets.values()) == 56
     assert "unusable row" not in capsys.readouterr().err
 
 

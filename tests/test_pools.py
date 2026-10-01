@@ -133,11 +133,11 @@ def test_to_units_is_exact_for_the_denomination_that_broke_to_raw():
 
 
 def test_every_shipped_pool_round_trips_exactly():
-    """to_units(to_raw(denom)) == denom, for all 55."""
+    """to_units(to_raw(denom)) == denom, for all 56."""
     path = os.path.join(PACKAGE_DATA, "networks.csv")
     with open(path, newline="", encoding="utf-8-sig") as fh:
         rows = list(csv.DictReader(fh))
-    assert len(rows) == 55
+    assert len(rows) == 56
     for row in rows:
         pool = Pool(
             row["pool_address"],

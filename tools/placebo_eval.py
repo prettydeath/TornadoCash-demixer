@@ -39,6 +39,7 @@ import random
 import sys
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -60,9 +61,10 @@ MAX_SPAN_DAYS = 60  # longer deposit histories would push the decoy too far back
 END_TS = 1785542400  # 2026-08-01: target windows must be complete
 
 
-def sample_depositors(n, seed, window_days):
+def sample_depositors(n, seed, window_days, after_ts=0):
     """Random depositors whose deposits span at most MAX_SPAN_DAYS and whose decoy
-    windows fall after the pool's first withdrawal."""
+    windows fall after the pool's first withdrawal; with ``after_ts``, only those
+    whose first deposit is at or after it."""
     uni = _load("universe.json")
     first_w = {}
     for pool, _addr, ts, _h in uni["withdrawals"]:
@@ -75,6 +77,8 @@ def sample_depositors(n, seed, window_days):
         ts = [t for _p, t in deps]
         span = max(ts) - min(ts)
         if span > MAX_SPAN_DAYS * DAY or max(ts) + window_days * DAY > END_TS:
+            continue
+        if min(ts) < after_ts:
             continue
         offset = span + (window_days + 1) * DAY
         if all(t - offset > first_w.get(p, 1 << 62) + DAY for p, t in deps):
@@ -178,9 +182,24 @@ def main(argv=None):
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--window-days", type=int, default=30)
     ap.add_argument("--report-only", action="store_true")
+    ap.add_argument(
+        "--after", default=None, help="only depositors whose first deposit is on or after this date"
+    )
+    ap.add_argument(
+        "--dir",
+        default="",
+        help="sub-directory of the placebo cache for the runs and the summary (keeps samples apart)",
+    )
     args = ap.parse_args(argv)
+    global OUT
+    OUT = os.path.join(OUT, args.dir) if args.dir else OUT
+    after_ts = (
+        int(datetime.fromisoformat(args.after).replace(tzinfo=timezone.utc).timestamp())
+        if args.after
+        else 0
+    )
 
-    depositors = sample_depositors(args.sample, args.seed, args.window_days)
+    depositors = sample_depositors(args.sample, args.seed, args.window_days, after_ts)
     network = get_network("ethereum")
     results = {}
     if args.report_only:
