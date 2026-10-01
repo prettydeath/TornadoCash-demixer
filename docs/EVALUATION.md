@@ -337,6 +337,24 @@ gives 319 hits; the other depositors' profiles give a mean of 45 (min 28, max 61
 over 20 rounds, a ratio of 0.14. The hits therefore come from the depositor's own
 note counts, not from the pool set or the window alone.
 
+**Other chains.** `tools/ens_labels.py universe --network ... --extra ...` builds
+the same deposit/withdrawal universe for another chain (on L2 chains deposits go
+through the Tornado proxy `0x0D5550d52428E7e3175bfc9550207e4ad3859b17`, which the
+registry does not list), and `tools/placebo_profile.py --universe` and
+`tools/placebo_profile_perm.py --universe` read it. BSC, Gnosis and Base are not
+served by the free explorer tier, so Arbitrum (the same four ETH pools) and
+Polygon (100, 1,000 and 10,000 MATIC) were used; universes from June 2021 to
+September 2026. The rule as used by the tool (10+ notes, 2+ pools, 72 h):
+
+| Chain | Deposits / withdrawals | Eligible depositors | Target / decoy hits | Chance share (95 % CI) | Permutation: own / borrowed profile |
+|---|---|---|---|---|---|
+| Ethereum | (see above) | 4,194 | 318 / 34 | 0.12 (0.08-0.16) | 319 / 45 |
+| Arbitrum | 6,721 / 6,315 | 74 | 16 / 0 | 0 | 17 / 0.2 |
+| Polygon | 20,194 / 19,428 | 253 | 50 / 1 | 0.02 (0.00-0.09) | 54 / 4.9 |
+
+The early profile stands above chance on both chains; the samples are small,
+Arbitrum's especially. The linked-address placebo test was not repeated there.
+
 ### Does a second family make a lead stronger?
 
 Before 2.16, a lead signal plus any other family was `strong`. `tools/placebo_strong.py`
@@ -580,11 +598,11 @@ Run on 2026-09-28 at the commit that added this section.
 
 | Check | Result |
 |---|---|
-| `pytest` (network blocked, incl. `getaddrinfo`) | 709 passed |
+| `pytest` (network blocked, incl. `getaddrinfo`) | 732 passed |
 | `pytest-randomly`, seeds 1, 2, 3 | all pass in every order |
 | Branch coverage (`--cov-branch`) | 93 % overall; `heuristics` 97 %, `demix` 93 %, `cli` 89 % |
 | Property-based tests (Hypothesis, 24) and edge-case tests (10) | pass; the four that documented defects now pin the fixes |
-| Mutation testing (`mutmut` 3.8 on `heuristics.py` and `demix.py`, 2479 mutants) | 1751 killed (71 %), 726 survived, 2 not reached (measured before the last `run_demix` test was added) |
+| Mutation testing (`mutmut` 3.8 on `heuristics.py` and `demix.py`, 2952 mutants, version 2.16) | 2189 killed (74 %), 761 survived, 2 not reached |
 | `pip-audit -r requirements-lock.txt` | no known vulnerabilities |
 | `pytest -m live` (every shipped pool re-verified on chain) | 55 pools on 8 networks verified |
 | README cases re-run (Ronin, Wintermute, Beanstalk) | same figures: 12,595.3 ETH hop; one 9.9435 ETH inflow; 271 deposits in 2.97 h, one `weak` candidate |

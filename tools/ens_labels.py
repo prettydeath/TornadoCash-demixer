@@ -160,17 +160,30 @@ def _block_by_time(pool, ts, closest):
 
 
 # ---------------------------------------------------------------- 1. universe
-def build_universe(start: str, end: str):
-    net = get_network("ethereum")
+def build_universe(
+    start: str,
+    end: str,
+    network: str = "ethereum",
+    extra: tuple = (),
+    step: int = BLOCK_STEP,
+    out: str = "universe.json",
+):
+    """Deposits and withdrawals of the native pools of ``network`` in [start, end].
+
+    ``extra`` adds deposit entry points missing from the registry (on L2 chains
+    deposits go through the Tornado proxy, 0x0D55...9b17); ``step`` is the block
+    range per explorer query (L2 chains have far more, emptier blocks).
+    """
+    net = get_network(network)
     keys = KeyPool(net)
     pools = [p for p in net.pools if p.is_native]
     targets = {p.address: p for p in pools}
-    routers = set(net.routers)
+    routers = set(net.routers) | {a.lower() for a in extra}
     t0 = int(datetime.fromisoformat(start).replace(tzinfo=timezone.utc).timestamp())
     t1 = int(datetime.fromisoformat(end).replace(tzinfo=timezone.utc).timestamp())
     b0, b1 = _block_by_time(keys, t0, "after"), _block_by_time(keys, t1, "before")
 
-    state = _load("universe.json") or {
+    state = _load(out) or {
         "start": start,
         "end": end,
         "blocks": [b0, b1],
@@ -191,7 +204,7 @@ def build_universe(start: str, end: str):
         for seg_lo, seg_hi in segments:
             lo = seg_lo
             while lo <= seg_hi:
-                hi = min(lo + BLOCK_STEP - 1, seg_hi)
+                hi = min(lo + step - 1, seg_hi)
                 yield lo, hi
                 lo = hi + 1
 
@@ -218,7 +231,7 @@ def build_universe(start: str, end: str):
                 )
             done.add(tag)
             state["done"] = sorted(done)
-            _save("universe.json", state)
+            _save(out, state)
         _log(f"  deposits via {addr}: {len(state['deposits'])} so far")
 
     # Withdrawals: the recipient named in the pool's Withdrawal event.
@@ -232,7 +245,7 @@ def build_universe(start: str, end: str):
                 state["withdrawals"].append([pool.key, w["to"], w["ts"], w["tx_hash"].lower()])
             done.add(tag)
             state["done"] = sorted(done)
-            _save("universe.json", state)
+            _save(out, state)
         _log(f"  withdrawals from {pool.key}: {len(state['withdrawals'])} so far")
 
     _log(
@@ -431,9 +444,23 @@ def main(argv=None):
     parser.add_argument("step", choices=["universe", "names", "pairs", "all"])
     parser.add_argument("--start", default="2019-12-16")
     parser.add_argument("--end", default="2022-08-08")
+    parser.add_argument("--network", default="ethereum", help="universe step only")
+    parser.add_argument("--extra", nargs="*", default=[], help="extra deposit entry points")
+    parser.add_argument("--block-step", type=int, default=BLOCK_STEP)
+    parser.add_argument("--out", default="universe.json", help="universe file under the cache")
     args = parser.parse_args(argv)
+    if args.network != "ethereum" and args.step != "universe":
+        raise SystemExit("names and pairs are Ethereum-only (ENS)")
 
-    universe = build_universe(args.start, args.end) if args.step in ("universe", "all") else None
+    universe = (
+        build_universe(
+            args.start, args.end, args.network, tuple(args.extra), args.block_step, args.out
+        )
+        if args.step in ("universe", "all")
+        else None
+    )
+    if args.step == "universe":
+        return
     universe = universe or _load("universe.json")
     if universe is None:
         raise SystemExit("run the universe step first")

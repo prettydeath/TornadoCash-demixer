@@ -16,6 +16,7 @@ Usage
 
 from __future__ import annotations
 
+import argparse
 import bisect
 import json
 import os
@@ -35,8 +36,14 @@ MIN_NOTES = 10
 ROUNDS = 20
 
 
-def main():
-    uni = _load("universe.json")
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    ap.add_argument(
+        "--universe", default="universe.json", help="universe file (tools/ens_labels.py)"
+    )
+    ap.add_argument("--out", default="profile_perm.json")
+    args = ap.parse_args(argv)
+    uni = _load(args.universe)
     wd = defaultdict(list)
     for pool, addr, ts, _h in uni["withdrawals"]:
         wd[pool].append((ts, addr))
@@ -106,7 +113,7 @@ def main():
             "max": borrowed[-1],
         },
     }
-    with open(os.path.join(CACHE, "placebo", "profile_perm.json"), "w", encoding="utf-8") as fh:
+    with open(os.path.join(CACHE, "placebo", args.out), "w", encoding="utf-8") as fh:
         json.dump(out, fh, indent=1)
     print(json.dumps(out, indent=1))
 

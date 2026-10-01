@@ -50,11 +50,14 @@ def main(argv=None):
     ap.add_argument("--period", choices=("all", "before", "after"), default="all")
     ap.add_argument("--split", default="2022-08-08")
     ap.add_argument("--out", default="profile.json")
+    ap.add_argument(
+        "--universe", default="universe.json", help="universe file (tools/ens_labels.py)"
+    )
     args = ap.parse_args(argv)
     split_ts = int(
         dt.datetime.fromisoformat(args.split).replace(tzinfo=dt.timezone.utc).timestamp()
     )
-    uni = _load("universe.json")
+    uni = _load(args.universe)
     wd = defaultdict(list)
     first_w = {}
     for pool, addr, ts, _h in uni["withdrawals"]:
