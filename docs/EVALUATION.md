@@ -606,11 +606,13 @@ attribution labels loaded) on every labelled depositor:
 
 | | strong | up to moderate | all bands |
 |---|---|---|---|
-| Pairs found (of 31; 21 inside the window) | 2 | 16 (76 % of those in the window) | 16 |
-| Precision, lower bound | 2 of 2 | 16 of 40 (40 %) | 16 of 2,811 |
+| Pairs found (of 31; 21 inside the window) | 2 | 12 (57 % of those in the window) | 16 |
+| Precision, lower bound | 2 of 2 | 12 of 28 (43 %) | 16 of 2,811 |
 | Pairs found without the `linked` signal | 0 | 2 | 3 |
 
-(Under the previous band rule, where a gas-price match or a self-relayed count
+(Version 2.17. Four labelled pairs fall to `weak` because their direct link came
+later than 72 hours; under 2.16 the column read 16 found, 16 of 40 (40 %). Under
+the band rule before 2.13, where a gas-price match or a self-relayed count
 match alone reached `moderate`, the lower bound was 16 of 85, 19 %. Before 2.16,
 `strong` was a lead signal plus any other family: 1 pair found, 1 of 4 candidates.)
 
@@ -652,7 +654,7 @@ and H5 (cross-pool deposit profile) from the paper and applies the protocol to t
 | Wang H2 | 1.00 | 0.03 | 0.07 |
 | Wang H3 (direct transfer, whole history) | 1.00 | 0.93 | 0.96 |
 | Wang H5 | 0.00 | 0.00 | 0.00 |
-| demix, up to `moderate` | 1.00 | 0.55 | 0.71 |
+| demix, up to `moderate` | 1.00 | 0.41 | 0.59 |
 | demix without `linked` | 1.00 | 0.07 | 0.13 |
 
 A direct-transfer check alone, with no mixer analysis at all, scores 0.96,

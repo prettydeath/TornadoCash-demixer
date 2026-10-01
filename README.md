@@ -1,5 +1,8 @@
 # TornadoCash Demixer
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23085804.svg)](https://doi.org/10.5281/zenodo.23085804)
+[![PyPI](https://img.shields.io/pypi/v/tornado-demix)](https://pypi.org/project/tornado-demix/)
+
 Probabilistic demixing of Tornado Cash deposits using only public on-chain data.
 The toolkit links a depositor wallet to likely withdrawal addresses and reports
 each candidate with an evidence band and the evidence behind it. A band needs a
