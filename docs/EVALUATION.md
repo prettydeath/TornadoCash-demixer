@@ -422,6 +422,19 @@ Wang et al. demix up to `moderate` scores precision 1.00, recall 0.41, F1 0.59
 (0.71 before). The evaluation tools re-apply the current heuristics to cached
 runs, so these numbers follow the rules as shipped.
 
+### Bybit (2025)
+
+The Bybit theft of 21 February 2025 is a later, independently labelled case: the
+repository of Liu et al. (*Evasion Under Blockchain Sanctions*, WWW 2026) lists
+about 9,300 tracked and 12,200 Elliptic-flagged Ethereum addresses. Nine of them
+deposited into the Ethereum ETH pools (24 February to 2 April 2025; 1 to 22 notes).
+`demix` (30-day window, attribution set loaded) gives one `moderate` lead in
+total, a withdrawal back to the depositor's own address, and one listed address
+among the `weak` candidates (a count match). No early multi-pool profile fired
+for the three depositors with 11 to 22 notes, and no unlisted address reached
+`moderate` or `strong`. The launderers spread the exits, so the method finds
+almost nothing here, but it raises no false lead either.
+
 ### Signals tested and not used
 
 **Priority tip after EIP-1559.** Since London a sender's gas price is the block's
