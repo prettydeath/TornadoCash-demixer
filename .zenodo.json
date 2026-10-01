@@ -1,0 +1,26 @@
+{
+  "title": "TornadoCash-demixer",
+  "upload_type": "software",
+  "description": "Tornado Cash forensics on public on-chain data: evidence-banded exit leads, exit groups, operator clusters and multi-hop fund tracing after withdrawal on 8 EVM chains, with a placebo (target-decoy) check that measures what chance alone produces.",
+  "creators": [
+    {
+      "name": "prettydeath"
+    }
+  ],
+  "license": "MIT",
+  "keywords": [
+    "tornado-cash",
+    "blockchain-forensics",
+    "ethereum",
+    "deanonymization",
+    "osint",
+    "aml"
+  ],
+  "related_identifiers": [
+    {
+      "identifier": "https://github.com/prettydeath/TornadoCash-demixer",
+      "relation": "isSupplementTo",
+      "scheme": "url"
+    }
+  ]
+}
