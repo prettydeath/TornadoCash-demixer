@@ -184,6 +184,9 @@
     few minutes. Add networks in <span class="mono">config/networks.csv</span>.</div>
 
   {% if error %}<div class="err">{{ error }}</div>{% endif %}
+  {% if labels_msg %}
+    <div class="{{ 'note' if labels_msg.ok else 'err' }}">{% for line in labels_msg.lines %}{{ line }}{% if not loop.last %}<br>{% endif %}{% endfor %}</div>
+  {% endif %}
 
   {% if result %}
     <h2>Results <span class="chip">{{ result.n_wallets }} wallet(s) · {{ result.network }} · {{ result.kind }}</span></h2>
@@ -194,6 +197,15 @@
     {% if result.report_key %}<a class="btn" href="/report/{{ result.report_key }}.html">Download report</a>{% endif %}
 
     {% if result.kind == 'demix' %}
+      {% if result.no_labels %}
+        <form method="post" action="/labels/fetch" class="note">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          No attribution set loaded for {{ result.network }}: exchange deposit addresses are shown as context only and the shared-deposit signal cannot fire. Download the public label set:
+          <button class="btn" type="submit" name="network" value="{{ result.network }}">{{ result.network }}</button>
+          <button class="btn" type="submit" name="network" value="all">all networks</button>
+          <br>Third-party data (<a href="https://github.com/prettydeath/wallet-attribution" target="_blank" rel="noopener">prettydeath/wallet-attribution</a>); each upstream source keeps its own licence.
+        </form>
+      {% endif %}
       {% for b in result.blocks %}
         <div class="card">
           <h3 class="mono">{{ b.wallet }}

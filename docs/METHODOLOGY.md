@@ -264,7 +264,8 @@ gas-price gate and the contract check make bounded, memoised RPC calls.
   of its outflow to **labelled** exchange wallets: in the placebo test that version
   gave 27 real-window against 4 decoy hits, while deposit addresses recognised by
   activity alone were at chance (16 against 12). Those are shown as context. So
-  without an attribution set the signal does not fire. The lookup costs up to 50
+  without an attribution set the signal does not fire (`tornado-demix labels fetch`
+  downloads the public set). The lookup costs up to 50
   history queries plus a busy check per new sweep target, and can be turned off
   (`--no-deposit-addresses`).
 - **Early multi-pool profile.** A wallet that deposited at least 10 notes over two

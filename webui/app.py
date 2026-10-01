@@ -21,10 +21,22 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from flask import Flask, Response, abort, render_template, request, session  # noqa: E402
+from flask import (  # noqa: E402
+    Flask,
+    Response,
+    abort,
+    redirect,
+    render_template,
+    request,
+    session,
+)
 
 from tornado_demix import config  # noqa: E402
-from tornado_demix.attribution import format_label, load_attribution  # noqa: E402
+from tornado_demix.attribution import (  # noqa: E402
+    fetch_attribution,
+    format_label,
+    load_attribution,
+)
 from tornado_demix.characterize import characterize_address  # noqa: E402
 from tornado_demix.cluster import trace_wallet  # noqa: E402
 from tornado_demix.demix import run_demix  # noqa: E402
@@ -650,6 +662,7 @@ def index():
     ctx = _base_context()
     session.setdefault("csrf", secrets.token_hex(16))
     ctx["csrf"] = session["csrf"]
+    ctx["labels_msg"] = session.pop("labels_msg", None)
     if request.method != "POST":
         return render_template("index.html", **ctx)
     if not secrets.compare_digest(request.form.get("csrf", ""), session["csrf"]):
@@ -784,9 +797,38 @@ def index():
         has_csv=bool(rows),
         report_wallets=[k for k in reports if not k.endswith(".json")],
         report_key=report_key,
+        no_labels=analysis == "demix" and not load_attribution(net.name),
     )
     ctx["result"] = payload
     return render_template("index.html", **ctx)
+
+
+@app.route("/labels/fetch", methods=["POST"])
+def labels_fetch():
+    """Download the public label set for one network (or all) on request.
+
+    The file lands where ``load_attribution`` looks first, so the next analysis
+    picks it up. The outcome is kept in the session and shown on the form page.
+    """
+    if not secrets.compare_digest(request.form.get("csrf", ""), session.get("csrf", "")):
+        abort(400)
+    network = request.form.get("network") or "all"
+    try:
+        results = fetch_attribution(None if network == "all" else [network])
+    except TornadoDemixError as exc:
+        session["labels_msg"] = {"ok": False, "lines": [str(exc)]}
+        return redirect("/")
+    lines = []
+    for name, r in results.items():
+        if r["status"] == "ok":
+            lines.append("{}: {:,} labels, {:,} exchange.".format(name, r["rows"], r["exchange"]))
+        else:
+            lines.append("{}: {}".format(name, r["status"]))
+    ok = all(r["status"] == "ok" for r in results.values())
+    if ok:
+        lines.append("Run the analysis again to use them.")
+    session["labels_msg"] = {"ok": ok, "lines": lines}
+    return redirect("/")
 
 
 @app.route("/download.csv")

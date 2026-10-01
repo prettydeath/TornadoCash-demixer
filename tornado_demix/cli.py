@@ -6,6 +6,7 @@ Subcommands:
   cluster       - trace split-exit reconvergence for one or more wallets
   characterize  - describe one exit-candidate address
   trace         - follow withdrawn funds forward over several hops
+  labels        - download or inspect the address-label (attribution) set
 
 The API key is read from api.csv (see tornado_demix.config), never from argv.
 """
@@ -18,7 +19,12 @@ import sys
 from datetime import datetime, timezone
 
 from . import config
-from .attribution import format_label, load_attribution
+from .attribution import (
+    attribution_status,
+    fetch_attribution,
+    format_label,
+    load_attribution,
+)
 from .characterize import characterize_address
 from .cluster import MIN_FORWARD_FRACTION, trace_wallet
 from .demix import run_demix
@@ -555,6 +561,43 @@ def cmd_trace(args: argparse.Namespace) -> None:
         print(f"[*] HTML report: {args.report}", file=sys.stderr)
 
 
+LABELS_NOTE = (
+    "Labels are third-party data and are not bundled: each upstream source keeps its "
+    "own licence (see the README of prettydeath/wallet-attribution)."
+)
+
+
+def _count(n: int) -> str:
+    return "{:,}".format(n)
+
+
+def cmd_labels(args: argparse.Namespace) -> None:
+    """``labels fetch`` / ``labels status``: manage the attribution set."""
+    print(LABELS_NOTE)
+    if args.labels_command == "fetch":
+        results = fetch_attribution(args.network or None, args.dir)
+        print("{:<10} {:>9} {:>9}  {}".format("network", "rows", "exchange", "result"))
+        for name, r in results.items():
+            print(
+                "{:<10} {:>9} {:>9}  {}".format(
+                    name,
+                    _count(r["rows"]),
+                    _count(r["exchange"]),
+                    r["path"] if r["status"] == "ok" else r["status"],
+                )
+            )
+        if any(r["status"] != "ok" for r in results.values()):
+            raise SystemExit(1)
+        return
+    print("{:<10} {:>9} {:>9}  {}".format("network", "rows", "exchange", "file"))
+    for name, r in attribution_status(args.network or None, args.dir).items():
+        print(
+            "{:<10} {:>9} {:>9}  {}".format(
+                name, _count(r["rows"]), _count(r["exchange"]), r["path"] or "not loaded"
+            )
+        )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="tornado-demix",
@@ -704,6 +747,31 @@ def build_parser() -> argparse.ArgumentParser:
         "address ends the trace",
     )
     p_trace.set_defaults(func=cmd_trace)
+
+    p_labels = sub.add_parser(
+        "labels", help="download or inspect the address-label (attribution) set"
+    )
+    labels_sub = p_labels.add_subparsers(dest="labels_command", required=True)
+    for name, text in (
+        ("fetch", "download the public label set (prettydeath/wallet-attribution)"),
+        ("status", "show which networks have labels loaded"),
+    ):
+        p_sub = labels_sub.add_parser(name, help=text)
+        p_sub.add_argument(
+            "--network",
+            action="extend",
+            nargs="+",
+            default=[],
+            metavar="N",
+            help="network(s) to {} (default: all networks of the tool)".format(name),
+        )
+        p_sub.add_argument(
+            "--dir",
+            default=None,
+            help="directory holding <network>.csv; default $TORNADO_DEMIX_ATTRIBUTION "
+            "or config/attribution/",
+        )
+    p_labels.set_defaults(func=cmd_labels)
 
     return parser
 

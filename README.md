@@ -141,6 +141,28 @@ case inputs apart. `config/wallets.csv` (column `address`) can replace addresses
 on the command line. `config/networks.csv`, if present, overrides the bundled
 registry.
 
+### Labels (attribution set)
+
+The shared exchange deposit address signal is scored only when exchange labels
+are loaded. With them, the placebo test gave 27 real-window against 4 decoy hits
+on 1,000 depositors; without them, deposit addresses found by activity alone sit
+at chance (16 against 12), so they are shown as context and the signal does not
+fire. To load the public label set (about 88,000 Ethereum addresses, 26,000 of
+them exchange labels):
+
+```bash
+tornado-demix labels fetch                    # all 8 networks
+tornado-demix labels fetch --network bsc      # one network
+tornado-demix labels status                   # what is loaded
+```
+
+Files go to `$TORNADO_DEMIX_ATTRIBUTION` if set, else `config/attribution/`
+(`--dir` overrides), one `<network>.csv` per chain; that is where lookups read
+them. The web UI shows the same download as a button when a demix result has no
+labels for its network. Nothing is downloaded unless you run the command, and the
+data is not bundled: it is third-party, and each upstream source keeps its own
+licence (see below).
+
 ### Address labels (optional)
 
 Labels are not bundled. The tool reads one `<network>.csv` per chain
