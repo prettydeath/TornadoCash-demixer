@@ -77,7 +77,8 @@ def _rows(data, drop_linked, window_days=30):
     """
     from placebo_windows import narrow
 
-    data = narrow(data, window_days * 24)
+    if data.get("vouchers") and data.get("denoms"):
+        data = narrow(data, window_days * 24)
     rows = []
     for r in ranked_candidates(data):
         signals = set(r["signals"])
