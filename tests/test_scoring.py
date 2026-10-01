@@ -55,7 +55,17 @@ def _data(res, voucher_count=1):
         "wallet": "0xw",
         "params": {"mode": "events"},
         "deposits": [{"gas_price": 999, "pool_key": "0.1 ETH"}],
-        "vouchers": [{"pool_key": "0.1 ETH", "denom": 0.1, "asset": "ETH", "count": voucher_count}],
+        # Withdrawals come 100 s after the last deposit, inside EARLY_EXIT_HOURS.
+        "vouchers": [
+            {
+                "pool_key": "0.1 ETH",
+                "denom": 0.1,
+                "asset": "ETH",
+                "count": voucher_count,
+                "first_ts": 900,
+                "last_ts": 900,
+            }
+        ],
         "denoms": {"0.1 ETH": res},
     }
 

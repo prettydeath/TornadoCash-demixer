@@ -38,6 +38,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from ens_labels import CACHE, _load, _log, api_keys  # noqa: E402
+from placebo_windows import narrow  # noqa: E402
 
 from tornado_demix.etherscan import EtherscanClient  # noqa: E402
 from tornado_demix.heuristics import confidence_band, ranked_candidates  # noqa: E402
@@ -139,11 +140,13 @@ def main():
             continue
         with open(path, encoding="utf-8") as fh:
             data = json.load(fh)
+        # Re-apply the current heuristics to the cached run (see evaluate_labels._rows).
+        data = narrow(data, 30 * 24)
         for r in ranked_candidates(data):
             ours["all bands"].add((d, r["address"]))
             if r["band"] in ("strong", "moderate"):
                 ours["moderate+"].add((d, r["address"]))
-            sig = set(r["signals"]) - {"linked"}
+            sig = set(r["signals"]) - {"linked", "linked_late"}
             if confidence_band(sig) in ("strong", "moderate"):
                 ours["moderate+ without linked"].add((d, r["address"]))
 

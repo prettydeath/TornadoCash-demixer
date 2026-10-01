@@ -59,6 +59,15 @@ EXPLORERS = {
 _FALLBACK_EXPLORER = ("https://etherscan.io/address/", "https://etherscan.io/tx/")
 
 
+# Keyless Etherscan-compatible explorers for chains the free Etherscan V2 tier
+# does not serve. Etherscan stays first (a paid key works); the client switches
+# to the fallback only when Etherscan refuses the chain. Blockscout throttles
+# keyless clients, so heavy use may still need a paid Etherscan plan.
+KEYLESS_FALLBACK = {
+    8453: "https://base.blockscout.com/api",  # Base
+}
+
+
 class Network:
     """A chain plus the Tornado pool contracts deployed on it."""
 
@@ -129,6 +138,7 @@ class Network:
             "base_url": self.api_base or ETHERSCAN_API_URL,
             "style": self.api_style,
             "rpc_url": self.rpc_url,
+            "fallback_url": KEYLESS_FALLBACK.get(self.chain_id, "") if not self.api_base else "",
         }
 
     def __repr__(self):

@@ -68,13 +68,21 @@ def _run(client, network, depositor, window_days, labels=None):
     return data
 
 
-def _rows(data, drop_linked):
-    """Ranked candidates, optionally re-banded without the linked signal."""
+def _rows(data, drop_linked, window_days=30):
+    """Ranked candidates, optionally re-banded without the linked signal.
+
+    A cached run carries the signals of the version that produced it, so the
+    heuristics are re-applied first (tools/placebo_windows.narrow, full window):
+    the numbers always follow the current rules.
+    """
+    from placebo_windows import narrow
+
+    data = narrow(data, window_days * 24)
     rows = []
     for r in ranked_candidates(data):
         signals = set(r["signals"])
         if drop_linked:
-            signals.discard("linked")
+            signals -= {"linked", "linked_late"}
             if not signals:
                 continue  # linked was what admitted it
         rows.append((r["pool_key"], r["address"], confidence_band(signals), r["signals"]))

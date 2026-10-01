@@ -91,6 +91,7 @@ class EtherscanClient:
         base_url: str = ETHERSCAN_API_URL,
         style: str = "v2",
         rpc_url: str = "",
+        fallback_url: str = "",
     ) -> None:
         self.api_key = api_key
         self.chain_id = chain_id
@@ -105,6 +106,10 @@ class EtherscanClient:
         # Optional JSON-RPC node: the last resort for the two lookups that need the
         # proxy module, which Blockscout does not serve.
         self.rpc_url = rpc_url
+        # Optional keyless Etherscan-compatible explorer for a chain the free
+        # Etherscan tier refuses ("Free API access is not supported for this
+        # chain"): the client switches to it once and stays there.
+        self.fallback_url = fallback_url
         self._proxy_proven = False  # a proxy call has succeeded on this provider
         self._proxy_dead = False  # a compat provider that does not serve the proxy
         self.session = requests.Session()
@@ -163,12 +168,26 @@ class EtherscanClient:
 
             if status == "1":
                 return result
+            # Blockscout answers status "2" with the rows it has when part of the
+            # range is still being indexed ("Some internal transactions within this
+            # block range have not yet been processed"). The rows are valid; the
+            # list may lack the newest internal transactions.
+            if status == "2" and isinstance(result, list) and "not yet been processed" in message:
+                return result
             if isinstance(result, str) and (
                 "rate limit" in result.lower() or "max calls" in result.lower()
             ):
                 last_error = "rate limited: {}".format(result[:120])
                 time.sleep(1.2 * (attempt + 1))
                 continue
+            if (
+                isinstance(result, str)
+                and "free api access is not supported" in result.lower()
+                and self.fallback_url
+                and self.base_url != self.fallback_url
+            ):
+                self.base_url, self.style = self.fallback_url, "compat"
+                return self.call(params)
             if isinstance(result, str) and _is_key_rejection(result):
                 raise ApiKeyError(
                     _redact(

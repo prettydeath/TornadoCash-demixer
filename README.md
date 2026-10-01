@@ -4,8 +4,9 @@ Probabilistic demixing of Tornado Cash deposits using only public on-chain data.
 The toolkit links a depositor wallet to likely withdrawal addresses and reports
 each candidate with an evidence band and the evidence behind it. A band needs a
 lead signal that stood above chance on real depositors: a linked address (a direct
-counterparty, a withdrawal sent by the depositor's side, a deposit address swept
-to a labelled exchange) or an early multi-pool profile match; two independent
+counterparty whose first withdrawal came within 72 hours of the deposit, a
+withdrawal sent by the depositor's side, a deposit address swept to a labelled
+exchange) or an early multi-pool profile match; two independent
 lead sources make a band `strong`. Amount+timing and gas-price matches turn up as
 often by chance as for real exits, so they are shown as context and never raise
 a band. It also groups exits paid out together, links wallets of one operator
@@ -30,7 +31,8 @@ traces users leave around it.
   least 5 recipients), self-relayed withdrawals, reuse of a deposit gas price
   (only on withdrawals the user sent, and only in blocks without an EIP-1559 base
   fee), direct transactions with the depositor (not counted when the counterparty
-  is a contract), and an early multi-pool profile: a recipient that received the
+  is a contract; a lead only when the recipient's first withdrawal came within 72
+  hours of the last deposit, otherwise shown as a late direct link, context), and an early multi-pool profile: a recipient that received the
   wallet's full note profile over two or more pools (10+ notes) within 72 hours of
   the last deposit in each pool.
 - Reports a band per candidate: `strong` (lead signals from two independent sources
@@ -53,8 +55,12 @@ traces users leave around it.
   1,000 random depositors 27 real-window against 4 decoy hits); one recognised by
   activity alone was at chance and is shown as context, so the signal needs an
   attribution set.
-- Marks a linked exit that withdrew within 72 hours of the deposit (early exit;
-  context, never scored).
+- Marks a linked exit that withdrew within 72 hours of the deposit (early exit).
+  Since 2.17 a direct link is a lead only then: on 302 random Ethereum depositors
+  a direct link first withdrawn within 72 hours was a lead 26 times in real
+  windows against once in decoy windows, a later one 8 against 13, chance level.
+  A later direct link is listed as context and never raises the band or the
+  score; the withdrawal-sender and shared-deposit signals are unchanged.
 - Optionally runs a placebo check (`--placebo`, or the web UI option): the same
   analysis on a decoy window that ends before the wallet's first deposit, so the
   report shows how many leads chance alone produces for this wallet.
@@ -102,10 +108,11 @@ The method, thresholds and the reasoning behind them are in
 ## Requirements
 
 - Python 3.9 or newer. Runtime dependency: `requests`. The web UI adds `flask`.
-- An Etherscan V2 API key. On the free plan it covers Ethereum, Polygon, Arbitrum
-  and Optimism (Optimism is served by Blockscout). Avalanche uses Routescan and
-  Base uses Blockscout; neither needs a key. BNB Smart Chain and Gnosis need a
-  paid Etherscan plan: the free tier does not serve them. Where a provider has no
+- An Etherscan V2 API key. On the free plan it covers Ethereum, Polygon and
+  Arbitrum; Optimism is served by Blockscout and Avalanche by Routescan, neither
+  needing a key. Base goes through Etherscan when the key's plan serves it and
+  otherwise switches to keyless Blockscout, which throttles heavy use. BNB Smart
+  Chain and Gnosis need a paid Etherscan plan: the free tier does not serve them. Where a provider has no
   `proxy` module (Blockscout), the client reads the head block from Blockscout's
   `block` module and falls back to the network's JSON-RPC node.
 - The Tornado proxy `0x0D5550d5...9b17` is registered for Polygon, Avalanche,
@@ -402,12 +409,15 @@ The method on both public cases, with the numbers behind each claim, is in
   whose gas price a relayer chose. A linked address (a direct counterparty, a
   withdrawal sent by the depositor's side, or a deposit address swept to a
   labelled exchange) stood above chance (30 against 7 over 30 days, 19 against 1
-  within 72 hours), and so did a multi-pool profile of 10+ notes within 72 hours
+  within 72 hours, measured before 2.17). The pooled 30-day number hid that a
+  direct link withdrawn later than 72 hours is chance-level (8 against 13 on 302
+  depositors, against 26 to 1 within 72 hours), so since 2.17 it is context; and so did a multi-pool profile of 10+ notes within 72 hours
   (318 against 34 on 4,194 such depositors); only these make a `moderate` or `strong`
   band, and `strong` needs two independent ones ([details](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/EVALUATION.md#placebo-test-on-real-depositors)).
 - On 31 depositor/exit pairs labelled through ENS (2019-2026), demix found 16 of
-  the 21 pairs inside its window, all through a direct transaction between the
-  two addresses, which the label sees as well; without that signal it found two
+  the 21 pairs inside its window (measured before 2.17, when a direct link counted
+  at any delay), all through a direct transaction between the two addresses,
+  which the label sees as well; without that signal it found two
   (through a shared exchange deposit address, again an address link).
   Most labelled depositors made single-note deposits, which the count match
   cannot narrow ([details](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/EVALUATION.md#a-labelled-set-from-ens)).

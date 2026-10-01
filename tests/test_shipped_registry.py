@@ -157,13 +157,52 @@ def test_pool_keys_are_unique_within_each_network(shipped):
         assert len(keys) == len(set(keys)), name
 
 
-def test_base_uses_blockscout_and_v2_chains_use_etherscan(shipped):
+def test_base_tries_etherscan_first_then_keyless_blockscout(shipped):
     base = shipped["base"].client_kwargs()
-    assert base["base_url"] == "https://base.blockscout.com/api"
-    assert base["style"] == "compat"
+    assert base["style"] == "v2"
+    assert base["fallback_url"] == "https://base.blockscout.com/api"
     assert base["rpc_url"].startswith("https://")
     for name in ("ethereum", "polygon", "arbitrum"):
-        assert shipped[name].client_kwargs()["style"] == "v2", name
+        kw = shipped[name].client_kwargs()
+        assert kw["style"] == "v2", name
+        assert kw["fallback_url"] == "", name
+
+
+def test_a_refused_chain_switches_to_the_keyless_fallback(monkeypatch):
+    from tornado_demix.etherscan import EtherscanClient
+
+    answers = [
+        {
+            "status": "0",
+            "message": "NOTOK",
+            "result": "Free API access is not supported for this chain",
+        },
+        {"status": "1", "message": "OK", "result": [{"hash": "0x1"}]},
+    ]
+    seen = []
+
+    class _Resp:
+        status_code = 200
+
+        def __init__(self, body):
+            self.body = body
+
+        def json(self):
+            return self.body
+
+    client = EtherscanClient("k", chain_id=8453, fallback_url="https://base.blockscout.com/api")
+
+    def fake_get(url, params=None, **kw):
+        seen.append((url, dict(params or {})))
+        return _Resp(answers.pop(0))
+
+    monkeypatch.setattr(client.session, "get", fake_get)
+    assert client.call({"module": "account", "action": "txlist", "address": "0x1"}) == [
+        {"hash": "0x1"}
+    ]
+    assert client.base_url == "https://base.blockscout.com/api"
+    assert client.style == "compat"
+    assert "chainid" not in seen[-1][1]
 
 
 @pytest.mark.live

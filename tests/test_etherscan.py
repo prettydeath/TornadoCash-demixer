@@ -639,3 +639,25 @@ def test_etherscan_v2_does_not_try_the_block_module():
     with pytest.raises(BlockLookupError):
         client.current_block()
     assert len(client.session.calls) == 1
+
+
+def test_a_partially_indexed_blockscout_answer_keeps_its_rows(monkeypatch):
+    """Blockscout's status "2" (range still being indexed) carries valid rows."""
+    rows = [{"hash": "0xabc", "blockNumber": "1"}]
+    payload = {
+        "status": "2",
+        "message": "Some internal transactions within this block range have not yet been processed",
+        "result": rows,
+    }
+
+    class _Resp:
+        status_code = 200
+
+        def json(self):
+            return payload
+
+    client = EtherscanClient(
+        "k", pause=0, base_url="https://base.blockscout.com/api", style="compat"
+    )
+    monkeypatch.setattr(client.session, "get", lambda *a, **k: _Resp())
+    assert client.call({"module": "account", "action": "txlistinternal", "address": "0x1"}) == rows

@@ -238,7 +238,17 @@ gas-price gate and the contract check make bounded, memoised RPC calls.
   rather than a person and does not earn `linked`; the evidence line says so. When
   the check cannot be made the signal is kept. A withdrawal back to the depositor's
   own address is `linked` as well, and so is a direct ERC-20 transfer between the
-  depositor and the candidate (token transfers are read once per run).
+  depositor and the candidate (token transfers are read once per run). Since 2.17
+  a direct link is `linked` only when the recipient's first withdrawal in that
+  pool came within 72 hours (`EARLY_EXIT_HOURS`) after a voucher's last deposit
+  into the same pool; a later one is `linked_late`, shown in the evidence with
+  its delay but never scored and never a lead. On 302 random Ethereum depositors
+  (`tools/placebo_eval.py`, 152 plus 150 after 2022-08-08) a direct link withdrawn
+  within 72 hours was a lead 26 times in real windows against once in decoy
+  windows (before 2022-08-08 15 against 0, after it 11 against 1); a later one 8
+  against 13 (5 against 4, 3 against 9), chance level ([EVALUATION.md](EVALUATION.md#direct-links-early-versus-late)).
+  The rule applies to the depositor's own address as well. `linked_sender` and
+  `shared_deposit` are unchanged.
 - **Linked withdrawal sender.** `withdraw()` may be called by anyone, and the
   caller is recorded as the transaction sender. If the depositor, or one of its
   direct non-contract counterparties, sent a withdrawal transaction, its recipient
@@ -282,7 +292,8 @@ gas-price gate and the contract check make bounded, memoised RPC calls.
 
 **Band, evidence and score.** Each recipient accumulates a signal set
 (`count_match`, `self_relayed`, `early_profile`, `gas_price`, `linked`,
-`linked_sender`, `shared_deposit`, and `profile_match` on `multi` runs). The signals
+`linked_sender`, `shared_deposit`, and `profile_match` on `multi` runs), and
+possibly `linked_late`, which is context only: no family, no weight, no band. The signals
 fall into evidence families: amount+timing (`count_match`, `self_relayed`,
 `early_profile`, `profile_match`), gas price, linked address (`linked`,
 `linked_sender`, `shared_deposit`). The **band** needs a lead signal — a linked
@@ -297,17 +308,20 @@ placebo test on real depositors ([EVALUATION.md](EVALUATION.md)): run on decoy
 windows that end before the wallet's first deposit, the pipeline found
 amount+timing and gas-price leads as often as in the real windows, and only
 linked-address leads clearly more often (30 against 7 over 30 days; 19 against 1
-within 72 hours); the early multi-pool profile was added in 2.15 on the same kind
+within 72 hours, measured before 2.17); the early multi-pool profile was added in 2.15 on the same kind
 of evidence. Version 2.16 added the two-source rule for `strong`: among
 candidates with a lead signal, a second amount+timing family did not lower the
 chance share (4 real against 1 decoy at 72 hours, 4 against 0 over 30 days;
 `tools/placebo_strong.py`). Before 2.16 a lead signal plus any other family was
 `strong`, so a direct link plus a count match was `strong`; before version 2.13 a
 gas-price match or a self-relayed count match alone reached `moderate`, and two
-non-linked families reached `strong`. A
+non-linked families reached `strong`. Since 2.17 a direct link counts as a lead
+only within 72 hours (see above); the pooled 30-day number hid that a later one
+is chance-level. Before 2.17 a direct link at any delay was `linked`. A
 linked exit whose first withdrawal came within 72 hours of the deposit is marked
-as an **early exit**; like the fresh-address mark it is context and does not
-change the band or the score. Every candidate carries its **evidence**: each family, whether it
+as an **early exit**; like the fresh-address mark it does not change the band or
+the score by itself (an early direct link is `linked` by definition; for
+`linked_sender` and `shared_deposit` the mark is context). Every candidate carries its **evidence**: each family, whether it
 holds, and the numbers behind it (share of the field with the same count, `disc`,
 gas price, number of relayer-free withdrawals).
 
@@ -342,7 +356,8 @@ two wallets; connected components are reported as operator clusters. Only two
 signals qualify, and the reason is the window-overlap artefact of §4:
 `gas_price` is computed against a particular wallet's own deposit gas prices and
 `linked` against its own counterparty set, so either one holding at a shared
-address is a statement about the pair. `self_relayed` is **not** — it is a
+address is a statement about the pair. `linked_late` does not qualify: a direct
+link this late is chance-level on real depositors (since 2.17). `self_relayed` is **not** — it is a
 property of the withdrawal, identical for every wallet whose window contains it,
 and since overlapping windows share count-matched recipients by construction and
 zero-fee withdrawals are ordinary, crediting it would merge unrelated depositors

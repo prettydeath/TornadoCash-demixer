@@ -11,7 +11,9 @@ immediate funder that is neither a labelled service nor a busy address.
 one address says something about the pair. ``self_relayed`` does not: it is a
 property of the withdrawal, identical for every wallet whose window contains it,
 and crediting it would merge unrelated depositors that merely deposited the same
-note count at around the same time.
+note count at around the same time. ``linked_late`` (a direct link first
+withdrawn more than 72 h after the last deposit) is not among them either: it
+is chance-level on real depositors, so it does not join two wallets.
 """
 
 from __future__ import annotations

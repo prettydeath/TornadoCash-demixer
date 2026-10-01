@@ -130,6 +130,11 @@ def apply_heuristics(
     not follow the address into another. ``gas_gate(block)`` says whether the
     sender chose that block's gas price (None: ungated). ``is_contract(address)``
     returns True, False or None; a contract counterparty does not earn ``linked``.
+    A direct link (the depositor itself or a non-contract counterparty) earns
+    ``linked`` only when the recipient's first withdrawal in the pool is within
+    :data:`EARLY_EXIT_HOURS` after a voucher's last deposit there; a later one earns
+    ``linked_late``, which is context: no score, no band (placebo test,
+    docs/EVALUATION.md).
     ``withdrawal_senders`` maps a withdrawal tx hash to its sender when that sender
     is the depositor or one of its direct counterparties (``linked_sender``).
     ``shared_deposits`` maps a recipient to the exchange deposit addresses it shares
@@ -144,7 +149,8 @@ def apply_heuristics(
     deposit_gas = {d["gas_price"] for d in deposits if d.get("gas_price")}
 
     gas_matches = []  # (pool_key, recipient, gas_price, tx_hash)
-    linked_hits = []  # (pool_key, recipient)
+    linked_hits = []  # (pool_key, recipient): every direct link, early or late
+    late_hits = []  # (pool_key, recipient, hours after the last deposit or None)
     linked_contracts = set()  # direct counterparties that are contracts
     sender_hits = []  # (pool_key, recipient, sender, tx_hash)
     deposit_hits = []  # (pool_key, recipient, [deposit addresses])
@@ -198,15 +204,24 @@ def apply_heuristics(
                 sig.add("shared_deposit")
                 deposit_hits.append((pool_key, addr, list(shared_deposits[addr])))
 
-            if addr == wallet:  # a withdrawal back to the depositor itself
-                sig.add("linked")
-                linked_hits.append((pool_key, addr))
-            elif addr in counterparties:
+            # A withdrawal back to the depositor itself, or to a direct
+            # non-contract counterparty. Only an early one is a lead.
+            direct = addr == wallet
+            if not direct and addr in counterparties:
                 if is_contract is not None and is_contract(addr):
                     linked_contracts.add(addr)
                 else:
+                    direct = True
+            if direct:
+                linked_hits.append((pool_key, addr))
+                stamps = [r["ts"] for r in recs if r.get("ts") is not None]
+                if stamps and early_exit(data, pool_key, min(stamps)):
                     sig.add("linked")
-                    linked_hits.append((pool_key, addr))
+                else:
+                    sig.add("linked_late")
+                    late_hits.append(
+                        (pool_key, addr, _withdrawal_delay_hours(data, pool_key, recs))
+                    )
 
     profile = wallet_profile(data)
     profile_hits = []  # (pool_key, recipient, {pool_key: count})
@@ -231,6 +246,7 @@ def apply_heuristics(
         "deposit_gas_prices": sorted(deposit_gas),
         "gas_price_matches": gas_matches,
         "linked_addresses": linked_hits,
+        "linked_late": late_hits,
         "linked_contracts": sorted(linked_contracts),
         "linked_senders": sender_hits,
         "shared_deposits": deposit_hits,
@@ -244,6 +260,7 @@ SIGNAL_LABEL = {
     "self_relayed": "Self-relayed exit (paid own gas)",
     "gas_price": "Unique gas-price reuse",
     "linked": "Linked address (direct counterparty)",
+    "linked_late": "Late direct link (context)",
     "linked_sender": "Withdrawal sent by the depositor or its counterparty",
     "shared_deposit": "Shared exchange deposit address",
     "profile_match": "Denomination-profile match",
@@ -305,6 +322,11 @@ def candidate_reason(row: dict) -> str:
         bits.append("reused one of the wallet's deposit gas prices")
     if "linked" in row["signals"]:
         bits.append("transacts directly with the depositor outside Tornado")
+    if "linked_late" in row["signals"]:
+        bits.append(
+            "transacts directly with the depositor, but first withdrew more than "
+            f"{EARLY_EXIT_HOURS} h after the last deposit (context only)"
+        )
     if "linked_sender" in row["signals"]:
         bits.append("a withdrawal to it was sent by the depositor or its direct counterparty")
     if "shared_deposit" in row["signals"]:
@@ -323,6 +345,7 @@ EVIDENCE_LABEL = {
     "self_relayed": "self-relay (same family as amount + timing)",
     "gas_price": "gas price",
     "linked": "linked address",
+    "linked_late": "late direct link (context)",
     "linked_sender": "linked withdrawal sender",
     "shared_deposit": "shared exchange deposit address",
     "profile_match": "denomination profile",
@@ -331,13 +354,44 @@ EVIDENCE_LABEL = {
 
 
 def _linked_detail(data, signals, address):
-    if address == (data.get("wallet") or "").lower():
-        return "is the depositor's own address"
+    own = address == (data.get("wallet") or "").lower()
     if "linked" in signals:
-        return "transacts directly with the depositor outside Tornado"
+        if own:
+            return (
+                f"is the depositor's own address; first withdrawal within {EARLY_EXIT_HOURS} h "
+                "of the last deposit"
+            )
+        return (
+            "transacts directly with the depositor outside Tornado; first withdrawal "
+            f"within {EARLY_EXIT_HOURS} h of the last deposit"
+        )
+    if "linked_late" in signals:
+        return "a direct link, but withdrawn late: see the next line"
+    if own:
+        return "is the depositor's own address"
     if address in data.get("heuristics", {}).get("linked_contracts", []):
         return "transacts with the depositor, but is a contract (router, DEX, service): not counted"
     return "no direct transaction with the depositor"
+
+
+def _late_detail(data, pool_key, address):
+    hits = [
+        hours
+        for pk, addr, hours in data.get("heuristics", {}).get("linked_late", [])
+        if pk == pool_key and addr == address
+    ]
+    own = address == (data.get("wallet") or "").lower()
+    who = "is the depositor's own address" if own else "transacts directly with the depositor"
+    hours = hits[0] if hits else None
+    when = (
+        f"its first withdrawal came {hours:.0f} h after the last deposit"
+        if hours is not None
+        else f"its first withdrawal did not come within {EARLY_EXIT_HOURS} h of a deposit"
+    )
+    return (
+        f"{who}, but {when}: a direct link this late is chance-level on real "
+        "depositors (placebo test), so it is context, not a lead"
+    )
 
 
 def _sender_detail(data, pool_key, address):
@@ -469,6 +523,8 @@ def candidate_evidence(data: dict, pool_key: str, address: str) -> list[dict]:
         ("shared_deposit", _deposit_detail(data, pool_key, address)),
         ("early_profile", _early_profile_detail(data, signals)),
     ]
+    if "linked_late" in signals:
+        lines.insert(4, ("linked_late", _late_detail(data, pool_key, address)))
     if "profile_match" in signals:
         lines.append(("profile_match", "received the wallet's full multi-pool fingerprint"))
     return [
@@ -552,7 +608,12 @@ METHOD_FAMILY = {
     "linked": "linked address",
     "linked_sender": "linked address",
     "shared_deposit": "linked address",
+    "linked_late": "context",
 }
+
+# Shown as evidence, never scored, never a lead, never an independent family:
+# a direct link first withdrawn later than EARLY_EXIT_HOURS (since version 2.17).
+CONTEXT_SIGNALS = frozenset({"linked_late"})
 
 
 # The score is uncalibrated and a percentage reads as a probability, so results
@@ -578,8 +639,12 @@ LEAD_SOURCE = {
     "early_profile": "early multi-pool profile",
 }
 
-# A linked exit this soon after the voucher's last deposit: in the placebo test
-# 19 such leads in real windows against 1 in decoy windows. Shown, not scored.
+# A linked exit this soon after the voucher's last deposit. Since version 2.17 a
+# direct link (``linked``) is a lead only this early: on 302 random depositors a
+# direct link first withdrawn within 72 h was a lead 26 times in real windows
+# against 1 in decoy windows, a later one 8 against 13 (chance level), so a later
+# one is ``linked_late``, context only. linked_sender and shared_deposit keep
+# their band at any delay; the early-exit mark on a row shows when they are early.
 EARLY_EXIT_HOURS = 72
 
 
@@ -607,6 +672,11 @@ def band_rationale(band: str, signals: set[str]) -> str:
         return f"two independent lead signals ({' and '.join(sources)})"
     if band == "moderate":
         return f"one lead signal ({sources[0]}); other evidence is context only"
+    if "linked_late" in signals:
+        return (
+            f"no lead signal; a direct link first withdrawn more than {EARLY_EXIT_HOURS} h "
+            "after the last deposit is chance-level on real data, so it is context only"
+        )
     if "gas_price" in signals:
         return "gas price or amount+timing without a lead signal - chance-level on real data"
     return "amount+timing only - chance-level on real data"
@@ -678,7 +748,9 @@ def conclusion(data: dict) -> str:
     lines = []
     if cands:
         top = cands[0]
-        families = sorted({METHOD_FAMILY.get(s, s) for s in top["signals"]})
+        families = sorted(
+            {METHOD_FAMILY.get(s, s) for s in top["signals"] if s not in CONTEXT_SIGNALS}
+        )
         lines.append(
             f"Top candidate: {top['address']} ({top['pool_key']}), band {top['band']}, "
             f"score {top['confidence']:.2f}."
@@ -736,9 +808,11 @@ def ranked_candidates(
             # Admit an address on a wallet-specific signal, a voucher-sized count
             # that narrows the field, or the wallet's full multi-pool fingerprint.
             # Self-relaying is a property of the withdrawal, so it never admits alone.
+            # A late direct link admits (it is about this wallet) but stays weak.
             disc = res.get("discrimination", {}).get(addr, 0.0)
             discriminating = bool(
-                set(sig) & (LEAD_SIGNALS | {"gas_price", "count_match", "profile_match"})
+                set(sig)
+                & (LEAD_SIGNALS | CONTEXT_SIGNALS | {"gas_price", "count_match", "profile_match"})
             )
             if not discriminating or conf < min_confidence:
                 continue

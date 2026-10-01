@@ -79,7 +79,17 @@ def narrow(data, hours):
             n: [a for a, c in res["counts"].items() if c == n] if count_is_evidence(res, n) else []
             for n in res["target_counts"]
         }
-    apply_heuristics(d, linked, gas_gate=None, is_contract=None, withdrawal_senders=senders)
+    shared = {}
+    for _pk, addr, addrs in h.get("shared_deposits", []):
+        shared.setdefault(addr, list(addrs))
+    apply_heuristics(
+        d,
+        linked,
+        gas_gate=None,
+        is_contract=None,
+        withdrawal_senders=senders,
+        shared_deposits=shared,
+    )
     return d
 
 

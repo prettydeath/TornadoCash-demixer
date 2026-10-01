@@ -266,7 +266,8 @@ What this shows:
 - **The linked-address family does.** Its leads are four times as frequent in real
   windows as in decoy ones over 30 days, and within 72 hours of the deposit 19
   against 1. That is why a band needs a lead signal such as a linked address, and why a linked exit
-  within 72 hours is marked as an early exit (context, not scored).
+  within 72 hours is marked as an early exit. Since 2.17 a direct link counts only
+  within 72 hours ([below](#direct-links-early-versus-late)).
 - A decoy lead is a false *note* link, not necessarily a false *identity* link: a
   linked address in a decoy window may still belong to the depositor. For the
   linked family the chance share is therefore an upper bound.
@@ -373,6 +374,53 @@ as context. Under the 2.16 rule these 152 runs give no `strong` lead: they preda
 `shared_deposit`, so `strong` could only have come from a direct link plus an early
 profile. `moderate` (one lead source) is 21 / 1 at 72 h (0.06, CI 0-0.23) and
 32 / 7 at 30 days (0.23, CI 0.07-0.53).
+
+### Direct links: early versus late
+
+The 152 runs are mostly from before the sanctions. A second sample of 150
+depositors whose first deposit is on or after 2022-08-08 (`tools/placebo_eval.py
+--after 2022-08-08 --dir post2022 --seed 3`) was run the same way, and
+`tools/placebo_periods.py` splits both by period. Together they hold 302
+depositors (210 after the sanctions: 150 plus 60 of the first sample). Splitting
+the direct-link leads (`linked`, at the 30-day window) by the delay of the
+recipient's first withdrawal after the voucher's last deposit (target / decoy
+leads):
+
+| First deposit | within 72 h | later than 72 h |
+|---|---|---|
+| before 2022-08-08 | 15 / 0 | 5 / 4 |
+| on or after 2022-08-08 | 11 / 1 | 3 / 9 |
+| all 302 | 26 / 1 | 8 / 13 |
+
+A direct link withdrawn within 72 hours stands well above chance in both
+periods; a later one is at chance level. For the 210 post-2022 depositors the
+whole linked-address family gives 12 / 1 within 72 hours (chance share 0.11) but
+14 / 12 within 30 days (0.95). The pooled number above, 30 against 7 over 30
+days, hid this: it mixed early links, which separate, with late ones, which do
+not. Since 2.17 a direct link is `linked` only when the first withdrawal came
+within 72 hours (`EARLY_EXIT_HOURS`); a later one is `linked_late`, listed in the
+evidence with its delay, never scored and never a lead. The withdrawal-sender
+signal gave 3 / 0 early and 5 / 2 late, too few to decide, and in the KuCoin case
+the attacker's real exits started 6.9 days after the deposit, so `linked_sender`
+is left as is; so are `shared_deposit` and `early_profile`. The tables above
+keep the rule under which they were measured.
+
+Re-scored under 2.17 (all strong and moderate leads, real / decoy):
+
+| Sample | within 72 h | within 30 days |
+|---|---|---|
+| 152 depositors (first sample) | 21 / 1 (0.06, 0-0.21) | 25 / 1 (0.04, 0-0.17) |
+| 210 post-2022 depositors | 12 / 1 (0.11, 0-0.53) | 12 / 3 (0.28, 0-0.90) |
+| all 302 depositors | 31 / 1 (0.04, 0-0.15) | 35 / 3 (0.09, 0-0.27) |
+
+(Before 2.17 the first sample gave 32 / 7, 0.23, over 30 days.) On the ENS set
+2.17 finds 12 of the 31 pairs (21 inside the window) as `moderate` or `strong`
+among 28 such candidates (precision lower bound 43 %, against 16 of 40 before);
+the two `strong` candidates are both labelled pairs; four labelled pairs fall to
+`weak` because their direct link came later than 72 hours. Under the protocol of
+Wang et al. demix up to `moderate` scores precision 1.00, recall 0.41, F1 0.59
+(0.71 before). The evaluation tools re-apply the current heuristics to cached
+runs, so these numbers follow the rules as shipped.
 
 ### Does the discrimination gate remove chance matches?
 

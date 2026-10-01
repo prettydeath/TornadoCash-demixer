@@ -517,7 +517,8 @@ def build_html_report(
     )
     p.append(
         '<div class="meta">These are <b>probabilistic leads for '
-        "corroboration, not proof</b>. A lead needs a linked address or an early "
+        "corroboration, not proof</b>. A lead needs a linked address (a direct link only "
+        "when its first withdrawal came within 72 h of the last deposit) or an early "
         "multi-pool profile match; the band rises to strong only when two independent lead sources agree. Amount+timing and gas "
         "price never raise the band and alone are chance-level on real depositors and stay weak. Each card "
         "lists what was checked. The score only orders leads within a band.</div>"
@@ -716,15 +717,26 @@ def build_html_report(
                 )
             p.append("</table>")
         if h.get("linked_addresses"):
+            late = {(pk, addr): hours for pk, addr, hours in h.get("linked_late", [])}
             p.append(
                 "<h3>Linked addresses (direct counterparties of the depositor)</h3>"
-                '<table><colgroup><col style="width:12%"><col></colgroup>'
-                "<tr><th>Pool</th><th>Recipient</th></tr>"
+                '<div class="meta">A direct link is a lead only when its first withdrawal came '
+                "within 72 h of the last deposit; a later one is chance-level on real "
+                "depositors and is shown as context.</div>"
+                '<table><colgroup><col style="width:12%"><col style="width:44%"><col></colgroup>'
+                "<tr><th>Pool</th><th>Recipient</th><th>Timing</th></tr>"
             )
             for pool_key, addr in h["linked_addresses"][:40]:
+                if (pool_key, addr) not in late:
+                    timing = "within 72 h: lead"
+                elif late[(pool_key, addr)] is None:
+                    timing = "not within 72 h of a deposit: context"
+                else:
+                    timing = f"{late[(pool_key, addr)]:.0f} h after the last deposit: context"
                 p.append(
                     f'<tr><td class="num">{_e(pool_key)}</td>'
-                    f'<td class="mono wrap">{_addr_link(network, addr)}</td></tr>'
+                    f'<td class="mono wrap">{_addr_link(network, addr)}</td>'
+                    f"<td>{_e(timing)}</td></tr>"
                 )
             p.append("</table>")
 
@@ -773,9 +785,10 @@ def build_html_report(
 
     p.append(
         '<h2>How to read this<span class="rule"></span></h2><div class="callout">'
-        "This report lists <b>probabilistic leads, not proof</b>. The strongest signals are "
-        "<b>linked</b> and <b>gas-price</b> matches; a <b>self-relayed</b> exit strengthens a "
-        "count match but belongs to the same evidence family. A bare count "
+        "This report lists <b>probabilistic leads, not proof</b>. The lead signals are a "
+        "<b>linked</b> address (a direct link only when withdrawn within 72 h of the last "
+        "deposit), a shared exchange deposit address and an early multi-pool profile; "
+        "<b>gas-price</b> and <b>self-relayed</b> matches are context. A bare count "
         "match on a busy pool is weak, and single-note (count of 1) vouchers cannot be demixed "
         "by this method. Corroborate any candidate with independent evidence (funding source, "
         "exchange KYC, further hops) before drawing a conclusion.</div>"
