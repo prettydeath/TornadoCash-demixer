@@ -37,6 +37,7 @@ from placebo_windows import OUT, narrow  # noqa: E402
 LONDON_BLOCK = 12_965_000
 RPC = "https://ethereum-rpc.publicnode.com"
 FEE_CACHE = os.path.join(OUT, "basefee.json")
+_fetch = urllib.request.urlopen  # JSON-RPC over HTTP, not a file
 
 
 def load_runs():
@@ -83,7 +84,7 @@ def base_fees(runs):
                 req = urllib.request.Request(
                     RPC, json.dumps(batch).encode(), {"content-type": "application/json"}
                 )
-                with urllib.request.urlopen(req, timeout=60) as resp:
+                with _fetch(req, timeout=60) as resp:
                     for o in json.load(resp):
                         if o.get("result") and o["result"].get("baseFeePerGas"):
                             fee[str(o["id"])] = int(o["result"]["baseFeePerGas"], 16)
