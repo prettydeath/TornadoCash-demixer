@@ -422,6 +422,27 @@ Wang et al. demix up to `moderate` scores precision 1.00, recall 0.41, F1 0.59
 (0.71 before). The evaluation tools re-apply the current heuristics to cached
 runs, so these numbers follow the rules as shipped.
 
+### Signals tested and not used
+
+**Priority tip after EIP-1559.** Since London a sender's gas price is the block's
+base fee plus a priority tip, so the old gas-price signal cannot fire; the tip is
+the part a user chooses. `tools/placebo_tip.py` computes tips for every
+self-relayed withdrawal and every deposit of the 302 placebo depositors (base
+fees from a public node) and flags a recipient whose tip equals one of the
+depositor's deposit tips and is rare in the pool window:
+
+| Rarity rule | 72 h, target / decoy | 30 days, target / decoy |
+|---|---|---|
+| tip shared by at most 3 self-relayed withdrawals | 33 / 44 (1.57, 0.98-2.58) | 60 / 70 (1.26, 0.83-1.97) |
+| at most 10 | 102 / 105 (1.21) | 181 / 204 (1.22) |
+
+Tips cluster on wallet defaults (3, 0.5, 1 and 2 gwei), so a shared tip is
+chance-level and the signal is not used. Wallet fingerprints (gas limit,
+transaction type, fee settings) belong to the same class of client defaults and
+would need a transaction lookup per withdrawal; given this result they were not
+pursued. Anonymity-mining reveals (AP/TORN claims) apply only to 2020-2021
+deposits, too few in these samples to test.
+
 ### Does the discrimination gate remove chance matches?
 
 `tools/placebo_disc.py` (output `disc.json`) bins count matches (every recipient
