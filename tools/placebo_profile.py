@@ -13,11 +13,19 @@ come from a bootstrap over depositors. No explorer calls.
 Usage
 -----
     python tools/placebo_profile.py
+    python tools/placebo_profile.py --period before --out profile_before.json
+    python tools/placebo_profile.py --notes 6 10 15 --hours 24 72 168 --out profile_grid.json
+
+``--period before|after`` keeps depositors whose first deposit is before or after
+``--split`` (default 2022-08-08, the sanctions), for a hold-out check of the
+thresholds chosen on the whole set.
 """
 
 from __future__ import annotations
 
+import argparse
 import bisect
+import datetime as dt
 import json
 import os
 import random
@@ -35,7 +43,17 @@ HOURS = (24, 72, 720)
 MIN_NOTES = (2, 6, 10)
 
 
-def main():
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    ap.add_argument("--notes", type=int, nargs="+", default=list(MIN_NOTES))
+    ap.add_argument("--hours", type=int, nargs="+", default=list(HOURS))
+    ap.add_argument("--period", choices=("all", "before", "after"), default="all")
+    ap.add_argument("--split", default="2022-08-08")
+    ap.add_argument("--out", default="profile.json")
+    args = ap.parse_args(argv)
+    split_ts = int(
+        dt.datetime.fromisoformat(args.split).replace(tzinfo=dt.timezone.utc).timestamp()
+    )
     uni = _load("universe.json")
     wd = defaultdict(list)
     first_w = {}
@@ -71,11 +89,15 @@ def main():
             continue
         profile = Counter(p for p, _t in deps)
         notes = sum(profile.values())
-        if notes < min(MIN_NOTES):
+        if notes < min(args.notes):
+            continue
+        if args.period == "before" and min(stamps) >= split_ts:
+            continue
+        if args.period == "after" and min(stamps) < split_ts:
             continue
         row = {"notes": notes, "pools": len(profile)}
         ok = True
-        for hours in HOURS:
+        for hours in args.hours:
             offset = span + hours * 3600 + DAY
             if any(t - offset < first_w.get(p, 1 << 62) + DAY for p, t in deps):
                 ok = False
@@ -100,11 +122,11 @@ def main():
         return ((d / dn) / (t / tn) if t and tn and dn else None), t, d
 
     rng = random.Random(8)
-    out = {"depositors": len(rows), "cells": []}
-    for m in MIN_NOTES:
+    out = {"depositors": len(rows), "period": args.period, "split": args.split, "cells": []}
+    for m in args.notes:
         for min_pools in (1, 2):
             sub = [r for r in rows if r["notes"] >= m and r["pools"] >= min_pools]
-            for hours in HOURS:
+            for hours in args.hours:
                 v, t, d = est(sub, hours)
                 bs = (
                     sorted(
@@ -135,7 +157,7 @@ def main():
                         else None,
                     }
                 )
-    with open(os.path.join(CACHE, "placebo", "profile.json"), "w", encoding="utf-8") as fh:
+    with open(os.path.join(CACHE, "placebo", args.out), "w", encoding="utf-8") as fh:
         json.dump(out, fh, indent=1)
     print(f"depositors {out['depositors']}")
     for c in out["cells"]:

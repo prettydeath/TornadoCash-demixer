@@ -58,12 +58,13 @@ def test_a_shared_deposit_alone_is_a_moderate_band_and_admits_the_recipient():
     assert confidence_band({"shared_deposit"}) == "moderate"
 
 
-def test_a_shared_deposit_with_a_count_match_is_strong():
+def test_a_shared_deposit_with_a_count_match_is_moderate():
     data = fx.two_pool_result()
     apply_heuristics(data, counterparties=set(), shared_deposits={fx.ALICE: [DEPOSIT]})
     row = _row(data, fx.ALICE)
     assert {"count_match", "shared_deposit"} <= set(row["signals"])
-    assert row["band"] == "strong"
+    # one lead source; the count match is context only
+    assert row["band"] == "moderate"
 
 
 def test_the_signal_is_recorded_per_pool_where_the_recipient_appears():

@@ -561,12 +561,22 @@ METHOD_FAMILY = {
 # found amount+timing and gas-price leads as frequent in decoy windows as in real
 # ones; only the linked-address family stood above chance, and so did the early
 # multi-pool profile match (chance share 0.12, tools/placebo_profile.py). A band
-# therefore needs a linked address or an early multi-pool profile match; other
-# families corroborate it but never make a lead.
+# therefore needs one of these lead signals. Since version 2.16 only lead signals
+# corroborate each other: among candidates with a lead, a count match did not
+# lower the chance share (72 h: 4 real against 1 decoy; tools/placebo_strong.py),
+# so amount+timing and gas price are shown as context and never raise the band.
 BAND_ORDER = {"strong": 3, "moderate": 2, "weak": 1}
 
 LINKED_SIGNALS = frozenset({"linked", "linked_sender", "shared_deposit"})
 LEAD_SIGNALS = LINKED_SIGNALS | {"early_profile"}
+
+# Independent sources of lead evidence; "strong" needs two of them.
+LEAD_SOURCE = {
+    "linked": "direct link",
+    "linked_sender": "direct link",
+    "shared_deposit": "shared deposit address",
+    "early_profile": "early multi-pool profile",
+}
 
 # A linked exit this soon after the voucher's last deposit: in the placebo test
 # 19 such leads in real windows against 1 in decoy windows. Shown, not scored.
@@ -576,26 +586,29 @@ EARLY_EXIT_HOURS = 72
 def confidence_band(signals):
     """Return "strong", "moderate" or "weak" from the candidate's signal set.
 
-    strong: a linked address or early multi-pool profile match plus another
-    family; moderate: one of those on its own (the early profile is in the
-    amount+timing family, so it does not corroborate a count match); weak:
-    amount+timing and/or gas price without either.
+    strong: lead signals from two independent sources (a direct link, a shared
+    exchange deposit address, an early multi-pool profile match); moderate: a
+    lead signal from one source; weak: amount+timing and/or gas price only.
+    Amount+timing and gas price never raise the band: on real depositors they
+    are chance-level, also next to a lead signal.
     """
-    families = {METHOD_FAMILY[s] for s in signals if s in METHOD_FAMILY}
-    if signals & LEAD_SIGNALS:
-        return "strong" if len(families) >= 2 else "moderate"
+    sources = {LEAD_SOURCE[s] for s in signals if s in LEAD_SOURCE}
+    if len(sources) >= 2:
+        return "strong"
+    if sources:
+        return "moderate"
     return "weak"
 
 
 def band_rationale(band: str, signals: set[str]) -> str:
     """Plain-language reason for the band; never claims a signal the candidate lacks."""
-    lead = "a linked address" if signals & LINKED_SIGNALS else "an early multi-pool profile match"
+    sources = sorted({LEAD_SOURCE[s] for s in signals if s in LEAD_SOURCE})
     if band == "strong":
-        return f"{lead} corroborated by another family of evidence"
+        return f"two independent lead signals ({' and '.join(sources)})"
     if band == "moderate":
-        return f"{lead} on its own"
+        return f"one lead signal ({sources[0]}); other evidence is context only"
     if "gas_price" in signals:
-        return "gas price or amount+timing without a linked address - chance-level on real data"
+        return "gas price or amount+timing without a lead signal - chance-level on real data"
     return "amount+timing only - chance-level on real data"
 
 

@@ -5,9 +5,10 @@ The toolkit links a depositor wallet to likely withdrawal addresses and reports
 each candidate with an evidence band and the evidence behind it. A band needs a
 lead signal that stood above chance on real depositors: a linked address (a direct
 counterparty, a withdrawal sent by the depositor's side, a deposit address swept
-to a labelled exchange) or an early multi-pool profile match. Amount+timing and
-gas-price matches alone turn up as often by chance as for real exits, so they only
-corroborate. It also groups exits paid out together, links wallets of one operator
+to a labelled exchange) or an early multi-pool profile match; two independent
+lead sources make a band `strong`. Amount+timing and gas-price matches turn up as
+often by chance as for real exits, so they are shown as context and never raise
+a band. It also groups exits paid out together, links wallets of one operator
 and follows withdrawn funds forward.
 
 Output is a set of leads for further investigation, not proof. Tornado Cash breaks
@@ -32,9 +33,10 @@ traces users leave around it.
   is a contract), and an early multi-pool profile: a recipient that received the
   wallet's full note profile over two or more pools (10+ notes) within 72 hours of
   the last deposit in each pool.
-- Reports a band per candidate: `strong` (a lead signal — linked address or early
-  multi-pool profile — plus another evidence family), `moderate` (a lead signal
-  alone), `weak` (amount+timing and/or gas price without one — chance-level on
+- Reports a band per candidate: `strong` (lead signals from two independent sources
+  among direct link, shared exchange deposit address and early multi-pool
+  profile), `moderate` (a lead signal from one source), `weak` (amount+timing
+  and/or gas price only, which never raise the band — chance-level on
   real depositors, see the placebo test in [EVALUATION.md](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/EVALUATION.md)), with the evidence behind it: every family, whether it holds,
   and the numbers (share of the recipient field with the same count, `disc`,
   gas price). Candidates are ordered by band, then by an uncalibrated noisy-OR
@@ -223,7 +225,7 @@ contract that paid nothing back, not moved on) and every edge with its attribute
 amount, swaps included; the HTML report, CSV and JSON can be downloaded.
 
 ![demix in the web UI with the evidence panel open](https://raw.githubusercontent.com/prettydeath/TornadoCash-demixer/main/docs/img/demix-evidence.png)
-*A demix run on Avalanche: two vouchers, a `strong` candidate (count match plus a direct transaction with the depositor) and the evidence panel listing every family that was checked.*
+*A demix run on Avalanche: two vouchers, a `moderate` candidate (count match plus a direct transaction with the depositor, one lead source) and the evidence panel listing every family that was checked.*
 
 The UI binds to localhost and has no authentication (forms carry a CSRF token); see
 [SECURITY.md](https://github.com/prettydeath/TornadoCash-demixer/blob/main/SECURITY.md).
@@ -374,12 +376,17 @@ The method on both public cases, with the numbers behind each claim, is in
   labelled exchange) stood above chance (30 against 7 over 30 days, 19 against 1
   within 72 hours), and so did a multi-pool profile of 10+ notes within 72 hours
   (318 against 34 on 4,194 such depositors); only these make a `moderate` or `strong`
-  band ([details](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/EVALUATION.md#placebo-test-on-real-depositors)).
+  band, and `strong` needs two independent ones ([details](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/EVALUATION.md#placebo-test-on-real-depositors)).
 - On 31 depositor/exit pairs labelled through ENS (2019-2026), demix found 16 of
   the 21 pairs inside its window, all through a direct transaction between the
-  two addresses, which the label sees as well; without that signal it found one.
+  two addresses, which the label sees as well; without that signal it found two
+  (through a shared exchange deposit address, again an address link).
   Most labelled depositors made single-note deposits, which the count match
   cannot narrow ([details](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/EVALUATION.md#a-labelled-set-from-ens)).
+- The discrimination gate (`disc >= 0.5`) cuts the count matches about twelvefold
+  but does not remove chance ones: in the placebo test the chance share stays near
+  1 in every discrimination bin (717 against 591 gated in, 72 hours). A count match
+  never raises a band.
 - Single-note vouchers cannot be narrowed by count: every recipient in the
   window has count 1.
 - Busy pools and long windows produce many equal counts. `--exit-window` trades

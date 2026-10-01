@@ -17,8 +17,12 @@ scale. It found amount+timing and gas-price leads as frequent in decoy windows a
 in real ones; above chance stood the linked-address family (a direct counterparty,
 a withdrawal sent by the depositor's side, a deposit address swept to a labelled
 exchange) and, measured later, an early multi-pool profile match. A band needs one
-of these (since version 2.13 for the linked family, since 2.15 for the profile);
-the synthetic tables below use the current rule. The gas-price signal turned out
+of these (since version 2.13 for the linked family, since 2.15 for the profile).
+Since version 2.16 `strong` needs lead signals from two independent sources
+(direct link, shared deposit address, early profile); one source is `moderate`,
+and amount+timing and gas price are context that never raises the band. Before
+2.16, a lead signal plus any other family was `strong`, so a direct link plus a
+count match was `strong`. The synthetic tables below use the current rule. The gas-price signal turned out
 to fire almost only on withdrawals whose gas price a relayer chose; since 2.15 it
 counts only on withdrawals the user sent.
 
@@ -193,9 +197,11 @@ address a chance count or gas-price match stays `weak`.
   among the candidates, and the question is how high it ranks. The placebo test below
   shows that the amount+timing and gas-price part of this does not carry over to real
   pools.
-- **A band now means a linked address.** `moderate` and `strong` are reached only by
+- **A band now means a linked address.** `moderate` is reached only by
   exits that transacted with the depositor (20 % of generated exits), so P ≥mod is 1.00
-  and R ≥mod about 0.18-0.20. In the negative controls, where no exit is findable, no
+  and R ≥mod about 0.18-0.20. The generated field has no shared deposit address and
+  no early profile, so `strong` (two lead sources) never arises in it; the tables
+  are byte-identical under the 2.16 rule. In the negative controls, where no exit is findable, no
   unrelated address reaches `moderate` or `strong` (before version 2.13: `moderate` in
   about 80 % and `strong` in 11 % of trials, through self-relay and chance gas-price
   reuse).
@@ -259,7 +265,7 @@ What this shows:
   turns up as often where no note of the wallet can be.
 - **The linked-address family does.** Its leads are four times as frequent in real
   windows as in decoy ones over 30 days, and within 72 hours of the deposit 19
-  against 1. That is why a band now needs a linked address, and why a linked exit
+  against 1. That is why a band needs a lead signal such as a linked address, and why a linked exit
   within 72 hours is marked as an early exit (context, not scored).
 - A decoy lead is a false *note* link, not necessarily a false *identity* link: a
   linked address in a decoy window may still belong to the depositor. For the
@@ -302,7 +308,70 @@ pools (4,194 depositors), 318 hits against 34 within 72 hours (chance share 0.12
 window (0.06), but the profile rests on different data than an address link. Since version 2.15 this is the
 `early_profile` signal (at least 10 notes, two or more pools, 72 hours); it makes
 a lead on its own. Being a stricter count match, it belongs to the amount+timing
-family, so with a count match it stays `moderate`.
+family; as one lead source it is `moderate`, and it reaches `strong` only together
+with a second lead source (a direct link or a shared deposit address).
+
+**Hold-out and sensitivity.** `tools/placebo_profile.py` takes `--period
+before|after` (split at the sanctions, 2022-08-08), `--notes`, `--hours` and
+`--out`; its default output is unchanged. The rule as used by the tool (10+ notes, 2+
+pools, 72 h) on each half:
+
+| Period | Depositors | Target / decoy hits | Chance share (95 % CI) |
+|---|---|---|---|
+| before 2022-08-08 | 1,448 | 142 / 5 | 0.04 (0.01-0.08) |
+| after 2022-08-08 | 2,746 | 176 / 29 | 0.19 (0.12-0.27) |
+| whole set | 4,194 | 318 / 34 | 0.12 |
+
+The rule is cleaner before the sanctions than after, but it holds in both halves.
+Sensitivity on the whole set (2+ pools, 72 h): 6+ notes 1,089 / 331 (0.34), 10+
+notes 318 / 34 (0.12), 15+ notes 112 / 7 (0.07); a 168 h window with 10+ notes
+gives 383 / 79 (0.22). The thresholds were chosen from the whole-set table above
+and are checked here on each half, so this is a consistency check rather than a
+fully independent hold-out; a lower note threshold admits many more chance
+matches, a higher one finds fewer exits.
+
+**Permutation control.** `tools/placebo_profile_perm.py` (output
+`profile_perm.json`) keeps the real 72 h windows and replaces the depositor's
+profile with that of another depositor with the same pool set. The own profile
+gives 319 hits; the other depositors' profiles give a mean of 45 (min 28, max 61)
+over 20 rounds, a ratio of 0.14. The hits therefore come from the depositor's own
+note counts, not from the pool set or the window alone.
+
+### Does a second family make a lead stronger?
+
+Before 2.16, a lead signal plus any other family was `strong`. `tools/placebo_strong.py`
+(output `strong.json`) checks this on the 152 depositor runs: among candidates
+with a lead signal, how often does a second family appear in real versus decoy
+windows?
+
+| Candidates with a lead signal and | 72 h target / decoy | 30 days target / decoy |
+|---|---|---|
+| amount+timing | 4 / 1 (chance share 0.30, 95 % CI 0-1.87) | 4 / 0 |
+| nothing else | 17 / 0 | 28 / 7 (0.27) |
+
+A count match next to a lead did not lower the chance share, and the counts are
+small. So amount+timing and gas price no longer raise the band; they are shown
+as context. Under the 2.16 rule these 152 runs give no `strong` lead: they predate
+`shared_deposit`, so `strong` could only have come from a direct link plus an early
+profile. `moderate` (one lead source) is 21 / 1 at 72 h (0.06, CI 0-0.23) and
+32 / 7 at 30 days (0.23, CI 0.07-0.53).
+
+### Does the discrimination gate remove chance matches?
+
+`tools/placebo_disc.py` (output `disc.json`) bins count matches (every recipient
+whose withdrawal count equals a voucher size) by discrimination, in real and decoy
+windows:
+
+| Bin | Window | Target / decoy | Chance share (95 % CI) |
+|---|---|---|---|
+| all count matches | 72 h | 8,966 / 7,640 | 1.01 |
+| gated in (disc ≥ 0.5) | 72 h | 717 / 591 | 0.98 (0.80-1.20) |
+| disc ≥ 0.95 | 72 h | 119 / 117 | 1.17 |
+| gated in | 30 days | 5,569 / 5,256 | 1.00 |
+
+The gate cuts the number of count matches about twelvefold, but the chance share
+stays near 1 in every bin: it reduces the field the analyst has to read and does
+not separate real count matches from chance ones.
 
 ### Shared exchange deposit addresses
 
@@ -437,25 +506,28 @@ attribution labels loaded) on every labelled depositor:
 
 | | strong | up to moderate | all bands |
 |---|---|---|---|
-| Pairs found (of 31; 21 inside the window) | 1 | 16 (76 % of those in the window) | 16 |
-| Precision, lower bound | 1 of 4 | 16 of 40 (40 %) | 16 of 2,811 |
+| Pairs found (of 31; 21 inside the window) | 2 | 16 (76 % of those in the window) | 16 |
+| Precision, lower bound | 2 of 2 | 16 of 40 (40 %) | 16 of 2,811 |
 | Pairs found without the `linked` signal | 0 | 2 | 3 |
 
 (Under the previous band rule, where a gas-price match or a self-relayed count
-match alone reached `moderate`, the lower bound was 16 of 85, 19 %.)
+match alone reached `moderate`, the lower bound was 16 of 85, 19 %. Before 2.16,
+`strong` was a lead signal plus any other family: 1 pair found, 1 of 4 candidates.)
 
 All 16 pairs are found through a direct transaction between the depositor and
 the recipient (`linked`). The ENS link and `linked` see the same relationship,
 so this confirms that careless users also transact directly; it does not
 measure the other signals. Two of the 16 pairs are also found by `shared_deposit`
-(version 2.15: depositor and recipient sent funds to the same deposit address of a
-labelled exchange), so they stay `moderate` without `linked`. Otherwise the other
+(depositor and recipient sent funds to the same deposit address of a
+labelled exchange); with the direct link that is two lead sources, so these two
+are the `strong` pairs, and without `linked` they stay `moderate`. Otherwise the other
 signals find almost nothing here, for a reason the
 method states in advance: 24 of the 31 pairs come from depositors whose only
 voucher in that pool is a single note, where the count match cannot narrow the
 field (discrimination 0.12-0.33 against the 0.5 threshold), and a gas-price
 match is rarely checkable after EIP-1559. The count match fires for one pair only
-(a two-note voucher), and that pair is found as `strong`. Ten pairs fall outside
+(a two-note voucher); with a direct link that is one lead source, so that pair is
+`moderate` (before 2.16 it was `strong`). Ten pairs fall outside
 the window (withdrawals 50-1,794 days after the deposit).
 
 The precision is a lower bound. The labels say nothing about the 24 other
@@ -508,7 +580,7 @@ Run on 2026-09-28 at the commit that added this section.
 
 | Check | Result |
 |---|---|
-| `pytest` (network blocked, incl. `getaddrinfo`) | 705 passed |
+| `pytest` (network blocked, incl. `getaddrinfo`) | 709 passed |
 | `pytest-randomly`, seeds 1, 2, 3 | all pass in every order |
 | Branch coverage (`--cov-branch`) | 93 % overall; `heuristics` 97 %, `demix` 93 %, `cli` 89 % |
 | Property-based tests (Hypothesis, 24) and edge-case tests (10) | pass; the four that documented defects now pin the fixes |

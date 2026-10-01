@@ -128,7 +128,10 @@ disc = 1 - (share - 1) / (unique - 1)
 where `unique` is the number of distinct recipients in the window and `share` the
 number of them with the same count. It is 0 when the whole field shares the count
 (every recipient of a single-note voucher window has count 1) and approaches 1 as
-the count becomes unique. A count match is a signal **only at
+the count becomes unique. The gate reduces the field: it removes about twelve of
+every thirteen count matches in the placebo test. It does not separate real from
+chance count matches, though: in every discrimination bin the chance share stays
+near 1 ([EVALUATION.md](EVALUATION.md)). A count match is a signal **only at
 `disc >= MIN_COUNT_DISCRIMINATION` (0.5)**; below that it neither adds to the
 score nor counts as an evidence family, and it admits no candidate. Above it, its
 weight scales with `disc`.
@@ -177,7 +180,7 @@ Given several wallets we compute:
 
 | Result | Definition | How much it says |
 |--------|-----------|----------|
-| **Profile match (exact, multi-pool)** | one address received a wallet's *entire* fingerprint, e.g. `6×0.1 + 4×1.0` | single-wallet signal (`profile_match`); it admits a candidate and belongs to the amount+timing family, so on its own it is `weak`, and with a linked address it makes `strong` |
+| **Profile match (exact, multi-pool)** | one address received a wallet's *entire* fingerprint, e.g. `6×0.1 + 4×1.0` | single-wallet signal (`profile_match`); it admits a candidate and belongs to the amount+timing family, so on its own it is `weak`, and with a linked address it is `moderate` (one lead source) |
 | **Cross consolidator** | one address is a full-fingerprint match for 2+ wallets | graded: `strong` with an independent gas-price/linked signal, `moderate` for distinct fingerprints of wallets that did not deposit together, `weak` (window-overlap artefact) otherwise |
 | **Synchronous deposits** | wallets whose deposits chain within `SYNC_GAP_HOURS` (6 h) | behavioural link in its own right |
 | **Shared funder** | wallets funded, before their first deposit, by the same plain native transfer sender that is neither labelled nor busy (`BUSY_FUNDER_TXS` = 200 transactions or more) | edge `shared funder` in the operator graph; in the 27 MixLaunder cases 90.1 % of laundering deposit addresses shared an immediate funder with another deposit address of the case |
@@ -280,15 +283,25 @@ gas-price gate and the contract check make bounded, memoised RPC calls.
 fall into evidence families: amount+timing (`count_match`, `self_relayed`,
 `early_profile`, `profile_match`), gas price, linked address (`linked`,
 `linked_sender`, `shared_deposit`). The **band** needs a lead signal — a linked
-address or an early multi-pool profile: `strong` for a lead signal plus another
-family, `moderate` for a lead signal alone, `weak` otherwise. The rule follows the
+address, a shared exchange deposit address or an early multi-pool profile. Lead
+signals come from three independent sources: a direct link (`linked`,
+`linked_sender`), a shared deposit address (`shared_deposit`) and an early
+multi-pool profile (`early_profile`). `strong` needs lead signals from two of
+these sources, `moderate` a lead signal from one, and `weak` is amount+timing
+and/or gas price only. Amount+timing and gas price never raise the band; they
+are shown as context. The rule follows the
 placebo test on real depositors ([EVALUATION.md](EVALUATION.md)): run on decoy
 windows that end before the wallet's first deposit, the pipeline found
 amount+timing and gas-price leads as often as in the real windows, and only
 linked-address leads clearly more often (30 against 7 over 30 days; 19 against 1
 within 72 hours); the early multi-pool profile was added in 2.15 on the same kind
-of evidence. Before version 2.13 a gas-price match or a self-relayed count match
-alone reached `moderate`, and two non-linked families reached `strong`. A
+of evidence. Version 2.16 added the two-source rule for `strong`: among
+candidates with a lead signal, a second amount+timing family did not lower the
+chance share (4 real against 1 decoy at 72 hours, 4 against 0 over 30 days;
+`tools/placebo_strong.py`). Before 2.16 a lead signal plus any other family was
+`strong`, so a direct link plus a count match was `strong`; before version 2.13 a
+gas-price match or a self-relayed count match alone reached `moderate`, and two
+non-linked families reached `strong`. A
 linked exit whose first withdrawal came within 72 hours of the deposit is marked
 as an **early exit**; like the fresh-address mark it is context and does not
 change the band or the score. Every candidate carries its **evidence**: each family, whether it
@@ -307,7 +320,7 @@ re-scoring the thesis cases with every weight scaled by a random factor in
 [0.5, 1.5] (and [0.1, 1.9]) never changed a band, and changed the order only
 between same-band candidates with different signals (`tools/sensitivity.py`).
 On generated data with a known exit, each family adds ranking power; on real
-depositors only the linked-address family stands above chance. Under the previous
+depositors only the lead signals stand above chance. Under the pre-2.13
 band rule `moderate` was common on unrelated addresses and false `strong` came from chance gas-price
 reuse ([EVALUATION.md](EVALUATION.md)).
 

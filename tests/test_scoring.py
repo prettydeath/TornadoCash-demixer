@@ -177,8 +177,16 @@ def test_a_barely_rare_count_plus_a_link_is_not_strong():
     [
         pytest.param({"count_match"}, "weak", id="bare count match"),
         pytest.param({"linked"}, "moderate", id="one structural tie"),
-        pytest.param({"count_match", "linked"}, "strong", id="amount+timing and linked"),
-        pytest.param({"gas_price", "linked"}, "strong", id="gas price and linked"),
+        pytest.param({"count_match", "linked"}, "moderate", id="amount+timing and linked"),
+        pytest.param({"gas_price", "linked"}, "moderate", id="gas price and linked"),
+        pytest.param({"linked", "linked_sender"}, "moderate", id="two links, one source"),
+        pytest.param({"linked", "shared_deposit"}, "strong", id="link and shared deposit"),
+        pytest.param(
+            {"early_profile", "shared_deposit"}, "strong", id="early profile and shared deposit"
+        ),
+        pytest.param(
+            {"count_match", "self_relayed", "gas_price"}, "weak", id="context signals only"
+        ),
     ],
 )
 def test_band_counts_independent_families(signals, band):
@@ -299,13 +307,14 @@ def test_the_band_follows_the_evidence_that_holds():
 
 
 def test_a_corroborated_lead_ranks_above_a_higher_scoring_single_family_lead():
-    """A moderate lead scoring 0.48 must not outrank a strong lead scoring 0.36."""
+    """A moderate lead scoring 0.48 must not outrank a strong lead (two lead
+    sources) scoring 0.36."""
     res = _pool_result(n_recipients=40, n_self_relayed=0, hits_each=3, target=[3])
     strong, moderate = "0x%040x" % 1, "0x%040x" % 2
     res["signals"] = {a: [] for a in res["detail"]}
     res["confidence"] = {a: 0.0 for a in res["detail"]}
     res["discrimination"] = {a: 0.0 for a in res["detail"]}
-    res["signals"][strong] = ["count_match", "linked"]
+    res["signals"][strong] = ["linked", "shared_deposit"]
     res["confidence"][strong] = 0.3625
     res["discrimination"][strong] = 0.5
     res["signals"][moderate] = ["linked"]

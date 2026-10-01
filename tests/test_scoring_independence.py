@@ -219,6 +219,7 @@ def test_a_profile_match_is_the_amount_timing_family():
     from tornado_demix.heuristics import confidence_band
 
     assert confidence_band({"profile_match", "count_match"}) == "weak"
-    # two families but no linked address: still weak (placebo test)
+    # no lead signal: still weak (placebo test)
     assert confidence_band({"profile_match", "gas_price"}) == "weak"
-    assert confidence_band({"profile_match", "linked"}) == "strong"
+    # a linked address is the lead; the profile match is context only
+    assert confidence_band({"profile_match", "linked"}) == "moderate"

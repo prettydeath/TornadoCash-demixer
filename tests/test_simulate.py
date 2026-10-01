@@ -18,7 +18,8 @@ def test_a_linked_exit_is_found_and_ranked_first():
     data, truth = sim.single_trial(rng, case, sim.Field(size=20))
     rows = sim.ranking(data, sim.FULL, rng)
     assert rows[0][0] in truth
-    assert rows[0][2] == "strong"
+    # one lead source (the link); gas reuse is context only
+    assert rows[0][2] == "moderate"
 
 
 def test_an_exit_outside_the_window_is_not_a_positive():

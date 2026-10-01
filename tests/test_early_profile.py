@@ -192,10 +192,10 @@ def test_the_window_end_is_inclusive_and_starts_at_the_first_deposit():
     assert data["heuristics"]["early_profiles"] == []
 
 
-def test_band_moderate_alone_strong_with_linked_moderate_with_count_match():
+def test_band_moderate_alone_strong_with_linked_moderate_with_context():
     assert confidence_band({"early_profile"}) == "moderate"
     assert confidence_band({"early_profile", "linked"}) == "strong"
-    assert confidence_band({"early_profile", "gas_price"}) == "strong"
+    assert confidence_band({"early_profile", "gas_price"}) == "moderate"
     assert confidence_band({"early_profile", "count_match"}) == "moderate"
     assert confidence_band({"early_profile", "count_match", "self_relayed"}) == "moderate"
     assert confidence_band({"count_match", "gas_price"}) == "weak"
@@ -209,8 +209,8 @@ def test_ranked_admission_band_and_rationale():
     assert row["band"] == "moderate"
     assert row["early_exit"] is False  # early_exit stays linked-only
     assert row["confidence"] == SIGNAL_WEIGHTS["early_profile"]
-    assert "early multi-pool profile match" in band_rationale("moderate", {"early_profile"})
-    assert "linked address" in band_rationale("moderate", {"linked"})
+    assert "early multi-pool profile" in band_rationale("moderate", {"early_profile"})
+    assert "direct link" in band_rationale("moderate", {"linked"})
     assert {r["address"] for r in ranked_candidates(data)} == {HIT}
 
 
@@ -261,7 +261,7 @@ def test_the_html_report_shows_it():
     html = build_html_report(data, fx.network())
     assert "full note profile within 72 h" in html
     assert "6×0.1 ETH + 4×1 ETH" in html
-    assert "an early multi-pool profile match on its own" in html
+    assert "one lead signal (early multi-pool profile)" in html
     plain = make(counts={"0.1 ETH": 6, "1 ETH": 3})
     apply_heuristics(plain, counterparties=set())
     assert "full note profile within 72 h" not in build_html_report(plain, fx.network())
