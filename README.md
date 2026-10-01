@@ -260,7 +260,7 @@ contract that paid nothing back, not moved on) and every edge with its attribute
 amount, swaps included; the HTML report, CSV and JSON can be downloaded.
 
 ![demix in the web UI with the evidence panel open](https://raw.githubusercontent.com/prettydeath/TornadoCash-demixer/main/docs/img/demix-evidence.png)
-*A demix run on Avalanche: two vouchers, a `moderate` candidate (count match plus a direct transaction with the depositor, one lead source) and the evidence panel listing every family that was checked.*
+*A demix run on Avalanche: two vouchers and the evidence panel listing every family that was checked. The top candidate transacts directly with the depositor, but its first withdrawal came 358 h after the deposit; since 2.17 such a late direct link is context, so the candidate stays `weak`.*
 
 The UI binds to localhost and has no authentication (forms carry a CSRF token); see
 [SECURITY.md](https://github.com/prettydeath/TornadoCash-demixer/blob/main/SECURITY.md).
