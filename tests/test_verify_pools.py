@@ -168,6 +168,21 @@ def test_five_hundred_denomination_is_plausible():
     assert result["denom"] == 500.0
 
 
+def test_hundredth_denomination_is_plausible():
+    """Base runs a real 0.01 ETH pool; PLAUSIBLE omitted it."""
+    client = FakeRpc(
+        uints={
+            SELECTORS["denomination"]: 10**16,
+            SELECTORS["levels"]: 20,
+            SELECTORS["nextIndex"]: 3,
+        },
+        addresses={SELECTORS["token"]: None},
+    )
+    result = verify_pools.verify_via_rpc(client, "0xa287c40411685438750a247ca67488debe56ee32")
+    assert result["ok"], result["reason"]
+    assert result["denom"] == 0.01
+
+
 def test_wrong_tree_depth_is_rejected():
     """levels() is 20 for every genuine deployment, so it must gate.
 

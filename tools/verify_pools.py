@@ -61,11 +61,12 @@ ERC20_SYMBOL = "0x95d89b41"  # symbol()
 API = "https://api.etherscan.io/v2/api"
 # Denominations considered plausible for a real pool (in whole asset units).
 # Tornado deployed two families: powers of ten, and a 5x10^n family used by the
-# Avalanche 500 pool and by every cDAI / cUSDC pool on mainnet. Every value here
+# Avalanche 500 pool and by every cDAI / cUSDC pool on mainnet; Base adds 0.01. Every value here
 # corresponds to a contract verified on-chain by denomination(), not to a guess.
 # This is a sanity filter against clones and unrelated protocols, not a security
 # boundary - the real evidence is denomination() + token() + levels().
 PLAUSIBLE = [
+    0.01,
     0.1,
     1.0,
     10.0,

@@ -15,9 +15,9 @@ optimism,10,ETH,ETH,0.1,0x84443CFd09A48AF6eF360C6976C5392aC5023a1F,18,,https://o
 optimism,10,ETH,ETH,1,0xd47438C816c9E7f2E2888E060936a499Af9582b3,18,,https://optimism.blockscout.com/api,compat,https://optimism-rpc.publicnode.com,,,0x0d5550d52428e7e3175bfc9550207e4ad3859b17
 optimism,10,ETH,ETH,10,0x330bdFADE01eE9bF63C209Ee33102DD334618e0a,18,,https://optimism.blockscout.com/api,compat,https://optimism-rpc.publicnode.com,,,0x0d5550d52428e7e3175bfc9550207e4ad3859b17
 optimism,10,ETH,ETH,100,0x1E34A77868E19A6647b1f2F47B51ed72dEDE95DD,18,,https://optimism.blockscout.com/api,compat,https://optimism-rpc.publicnode.com,,,0x0d5550d52428e7e3175bfc9550207e4ad3859b17
-polygon,137,MATIC,MATIC,100,0x1E34A77868E19A6647b1f2F47B51ed72dEDE95DD,18,,,,https://polygon-bor-rpc.publicnode.com,,,0x0d5550d52428e7e3175bfc9550207e4ad3859b17
-polygon,137,MATIC,MATIC,1000,0xdf231d99Ff8b6c6CBF4E9B9a945CBAcEF9339178,18,,,,https://polygon-bor-rpc.publicnode.com,,,0x0d5550d52428e7e3175bfc9550207e4ad3859b17
-polygon,137,MATIC,MATIC,10000,0xaf4c0B70B2Ea9FB7487C7CbB37aDa259579fe040,18,,,,https://polygon-bor-rpc.publicnode.com,,,0x0d5550d52428e7e3175bfc9550207e4ad3859b17
+polygon,137,MATIC,MATIC,100,0x1E34A77868E19A6647b1f2F47B51ed72dEDE95DD,18,,,,https://polygon.drpc.org,,,0x0d5550d52428e7e3175bfc9550207e4ad3859b17
+polygon,137,MATIC,MATIC,1000,0xdf231d99Ff8b6c6CBF4E9B9a945CBAcEF9339178,18,,,,https://polygon.drpc.org,,,0x0d5550d52428e7e3175bfc9550207e4ad3859b17
+polygon,137,MATIC,MATIC,10000,0xaf4c0B70B2Ea9FB7487C7CbB37aDa259579fe040,18,,,,https://polygon.drpc.org,,,0x0d5550d52428e7e3175bfc9550207e4ad3859b17
 gnosis,100,xDAI,xDAI,100,0x1E34A77868E19A6647b1f2F47B51ed72dEDE95DD,18,,,,https://gnosis-rpc.publicnode.com,,,0x0d5550d52428e7e3175bfc9550207e4ad3859b17
 gnosis,100,xDAI,xDAI,1000,0xdf231d99Ff8b6c6CBF4E9B9a945CBAcEF9339178,18,,,,https://gnosis-rpc.publicnode.com,,,0x0d5550d52428e7e3175bfc9550207e4ad3859b17
 gnosis,100,xDAI,xDAI,10000,0xaf4c0B70B2Ea9FB7487C7CbB37aDa259579fe040,18,,,,https://gnosis-rpc.publicnode.com,,,0x0d5550d52428e7e3175bfc9550207e4ad3859b17
