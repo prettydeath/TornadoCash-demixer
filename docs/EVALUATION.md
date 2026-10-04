@@ -512,6 +512,47 @@ every run.)
 The check is also available per case (`demix --placebo`, and the web UI option):
 the decoy window of the wallet under investigation, beside the real one.
 
+### Current rule (2.17) in one table
+
+`tools/review4_*.py` re-score the cached runs offline under the 2.17 rule. R is
+decoy leads per withdrawal searched over target leads per withdrawal searched;
+below 1 it estimates the chance share of target leads, near or above 1 the signal
+is chance level. Intervals: bootstrap over depositors, or exact (*) when a side
+has fewer than five leads.
+
+| Signal or class | Depositors | Window | Target / decoy | R (95 % CI) |
+|---|---:|---|---|---|
+| early direct link (lead) | 302 | 30 d | 26 / 1 | 0.04 (0.00–0.16) |
+| late direct link (context) | 302 | 30 d | 8 / 13 | 1.76 (0.69–6.4) |
+| linked sender (lead) | 302 | 30 d | 8 / 2 | 0.27 (0.03–1.36)* |
+| shared deposit, labelled exchange (lead) | 1,000 | 30 d | 27 / 4 | 0.16 (0.03–0.44) |
+| shared deposit, no labels (context) | 1,000 | 30 d | 16 / 12 | 0.80 (0.21–2.37) |
+| early multi-pool profile (lead) | 4,194 | 72 h | 318 / 34 | 0.12 (0.08–0.16) |
+| count match (context) | 302 | 30 d | 9,305 / 8,540 | 0.99 (0.92–1.07) |
+| gas price (context) | 302 | 30 d | 1 / 2 | too few |
+| moderate | 302 | 72 h | 30 / 1 | 0.04 (0.00–0.15) |
+| moderate | 302 | 30 d | 34 / 3 | 0.10 (0.00–0.29) |
+| strong | 302 | 30 d | 1 / 0 | too few |
+| strong + moderate | 302 | 72 h / 30 d | 31 / 1, 35 / 3 | 0.04, 0.09 |
+
+The first 152 runs predate the shared-deposit signal; adding its later-computed
+labelled hits gives 33 / 1 and 38 / 3 for strong + moderate and 2 / 0 for strong.
+
+**`strong` is structural, not measured.** It appeared only in target windows (one
+or two cases, each an early direct link plus a labelled shared deposit — the same
+combination as both `strong` candidates of the ENS set). On the 1,000 depositors an
+early profile never coincided with a labelled shared deposit in either window; a
+direct link plus shared deposit cannot be counted there (no counterparty history
+was fetched). Only `moderate` has a measured chance share, so the tool suggests the
+same independent check for both classes.
+
+The 72 h split of the direct link was decided on these data (the 72 h bound itself
+came from the earlier early-exit flag) and the 150 post-2022 depositors were part
+of that analysis, so the 2.17 rule is exploratory until checked on new depositors.
+The early profile differs between periods (0.04 before the 2022 sanctions, 0.19
+after; the intervals do not overlap) and fires for 4,194 of the 64,681 depositors
+in the universe (about 6.5 %).
+
 ## Two public laundering cases
 
 `tools/real_cases.py` runs the tool on the depositors of two cases attributed to the
@@ -666,15 +707,22 @@ withdrawals in the 30-day window after the deposit.
 
 ## Do the signals move together?
 
-The families are assumed independent. Across the real runs behind the two
-evaluations above (27 ENS-labelled depositors and 4 depositors of the KuCoin and
-Harmony cases: 43,424 recipient-pool rows), every pair of signals fired together
-about as often as independence predicts: count match and self-relay 4 times
-(6.97 expected), count match and gas price 3 (2.68), count match and linked 4
-(2.56), every other pair 0 against expectations below 0.4; the phi coefficient
-stays within -0.006 and 0.004. The signals are rare (gas price 42, linked 40,
-linked sender 6), so this describes the background rather than true pairs, where
-signals are meant to coincide.
+On the placebo runs under the current signal set (302 depositors, 30-day window:
+283,383 recipient-pool rows in target windows, 254,263 in decoy windows;
+`tools/review4_analyze.py`), only one pair has enough expected co-occurrences to
+test: count match and self-relay (555 together against 252 expected in target
+windows, 526 against 263 in decoy windows; phi 0.037 and 0.033). Both read the same
+withdrawals and belong to one family, which is why the score takes only the larger
+weight. Every other pair has an expected count below one. Cross-source
+co-occurrences of lead signals appear only in target windows (twice: early direct
+link plus shared deposit) and never in decoy windows. The early profile coincides
+with a count match by construction (2 against 0.07), but a count match is not a
+lead source. Independence of the lead sources is therefore an assumption of the
+model, not a measurement.
+
+(An earlier check on the ENS, KuCoin and Harmony runs, made before the
+shared-deposit and early-profile signals and the gas-price restriction, found every
+pair within three co-occurrences of independence on 43,424 rows.)
 
 ## Checks of the code itself
 
