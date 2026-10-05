@@ -734,7 +734,7 @@ Run on 2026-09-28; tests, coverage and the live check re-run on 2026-10-02.
 | `pytest-randomly`, seeds 1, 2, 3 | all pass in every order |
 | Branch coverage (`--cov-branch`) | 93 % overall; `heuristics` 97 %, `demix` 93 %, `cli` 89 % |
 | Property-based tests (Hypothesis, 24) and edge-case tests (10) | pass; the four that documented defects now pin the fixes |
-| Mutation testing (`mutmut` 3.8 on `heuristics.py` and `demix.py`, 2952 mutants, version 2.16) | 2189 killed (74 %), 761 survived, 2 not reached |
+| Mutation testing (`mutmut` 3.8 on `heuristics.py` and `demix.py`, 3061 mutants, version 2.17.0; the static encoding check deselected) | 2305 killed (75 %), 754 survived, 2 not reached (2.16: 74 % of 2952) |
 | `pip-audit -r requirements-lock.txt` | no known vulnerabilities |
 | `pytest -m live` (every shipped pool re-verified on chain) | 56 pools on 8 networks verified (Polygon via drpc.org: publicnode returns empty `eth_call` results there) |
 | README cases re-run (Ronin, Wintermute, Beanstalk) | same figures: 12,595.3 ETH hop; one 9.9435 ETH inflow; 271 deposits in 2.97 h, one `weak` candidate |
