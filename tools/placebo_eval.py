@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -61,11 +62,19 @@ MAX_SPAN_DAYS = 60  # longer deposit histories would push the decoy too far back
 END_TS = 1785542400  # 2026-08-01: target windows must be complete
 
 
-def sample_depositors(n, seed, window_days, after_ts=0):
-    """Random depositors whose deposits span at most MAX_SPAN_DAYS and whose decoy
+def universe_file(network="ethereum"):
+    """Universe cache file name: universe.json for ethereum, universe_<network>.json otherwise."""
+    return "universe.json" if network == "ethereum" else f"universe_{network}.json"
+
+
+def eligible_depositors(window_days, after_ts=0, network="ethereum", end_ts=None):
+    """Sorted depositors whose deposits span at most MAX_SPAN_DAYS and whose decoy
     windows fall after the pool's first withdrawal; with ``after_ts``, only those
     whose first deposit is at or after it."""
-    uni = _load("universe.json")
+    end_ts = END_TS if end_ts is None else end_ts
+    uni = _load(universe_file(network))
+    if uni is None:
+        raise SystemExit(f"missing universe file {universe_file(network)} in {CACHE}")
     first_w = {}
     for pool, _addr, ts, _h in uni["withdrawals"]:
         first_w[pool] = min(first_w.get(pool, ts), ts)
@@ -76,7 +85,7 @@ def sample_depositors(n, seed, window_days, after_ts=0):
     for addr, deps in by_dep.items():
         ts = [t for _p, t in deps]
         span = max(ts) - min(ts)
-        if span > MAX_SPAN_DAYS * DAY or max(ts) + window_days * DAY > END_TS:
+        if span > MAX_SPAN_DAYS * DAY or max(ts) + window_days * DAY > end_ts:
             continue
         if min(ts) < after_ts:
             continue
@@ -84,7 +93,59 @@ def sample_depositors(n, seed, window_days, after_ts=0):
         if all(t - offset > first_w.get(p, 1 << 62) + DAY for p, t in deps):
             ok.append(addr)
     ok.sort()
-    return sorted(random.Random(seed).sample(ok, min(n, len(ok))))
+    return ok
+
+
+def _is_addr(stem):
+    return (
+        len(stem) == 42
+        and stem.startswith("0x")
+        and all(c in "0123456789abcdefABCDEF" for c in stem[2:])
+    )
+
+
+def wallets_in_dir(base, sub):
+    """Wallets that have a run in ``base/sub``: files in ``target/`` if it exists, else
+    wallet-named ``<wallet>.json`` directly in the directory ('.' = the top-level sample)."""
+    d = os.path.normpath(os.path.join(base, sub))
+    t = os.path.join(d, "target")
+    src = t if os.path.isdir(t) else d
+    if not os.path.isdir(src):
+        raise SystemExit(f"exclude dir not found: {src}")
+    return {f[:-5].lower() for f in os.listdir(src) if f.endswith(".json") and _is_addr(f[:-5])}
+
+
+def wallets_in_file(path):
+    with open(path, encoding="utf-8") as fh:
+        return {ln.strip().lower() for ln in fh if ln.strip() and not ln.startswith("#")}
+
+
+def sample_hash(addresses):
+    """sha256 over the sorted, newline-joined lower-case address list."""
+    return hashlib.sha256("\n".join(sorted(a.lower() for a in addresses)).encode()).hexdigest()
+
+
+def draw_sample(n, seed, window_days, after_ts=0, network="ethereum", end_ts=None, exclude=()):
+    """(sample, stats): stats has eligible (before exclusion), excluded, pool, sampled, hash."""
+    eligible = eligible_depositors(window_days, after_ts, network, end_ts)
+    ex = {a.lower() for a in exclude}
+    pool = [a for a in eligible if a.lower() not in ex]
+    sample = sorted(random.Random(seed).sample(pool, min(n, len(pool))))
+    stats = {
+        "eligible": len(eligible),
+        "excluded": len(eligible) - len(pool),
+        "pool_after_exclusion": len(pool),
+        "sampled": len(sample),
+        "sample_sha256": sample_hash(sample),
+    }
+    return sample, stats
+
+
+def sample_depositors(
+    n, seed, window_days, after_ts=0, network="ethereum", end_ts=None, exclude=()
+):
+    """Random depositors (see ``eligible_depositors``), minus ``exclude``."""
+    return draw_sample(n, seed, window_days, after_ts, network, end_ts, exclude)[0]
 
 
 def _run(client, network, wallet, kind, window_days, labels, target=None):
@@ -190,17 +251,64 @@ def main(argv=None):
         default="",
         help="sub-directory of the placebo cache for the runs and the summary (keeps samples apart)",
     )
+    ap.add_argument("--network", choices=("ethereum", "polygon", "arbitrum"), default="ethereum")
+    ap.add_argument(
+        "--exclude-dir",
+        action="append",
+        default=[],
+        help="exclude wallets with runs in placebo/<DIR> (repeatable; '.' = the top-level sample)",
+    )
+    ap.add_argument(
+        "--exclude-file", default=None, help="file with one address per line to exclude"
+    )
+    ap.add_argument(
+        "--end-date", default=None, help="YYYY-MM-DD, replaces the default END_TS (2026-08-01)"
+    )
+    ap.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print eligible/excluded/sampled counts and hash only",
+    )
     args = ap.parse_args(argv)
     global OUT
+    base = OUT
     OUT = os.path.join(OUT, args.dir) if args.dir else OUT
+    end_ts = (
+        int(datetime.fromisoformat(args.end_date).replace(tzinfo=timezone.utc).timestamp())
+        if args.end_date
+        else END_TS
+    )
+    exclude = set()
+    for sub in args.exclude_dir:
+        exclude |= wallets_in_dir(base, sub)
+    if args.exclude_file:
+        exclude |= wallets_in_file(args.exclude_file)
     after_ts = (
         int(datetime.fromisoformat(args.after).replace(tzinfo=timezone.utc).timestamp())
         if args.after
         else 0
     )
 
-    depositors = sample_depositors(args.sample, args.seed, args.window_days, after_ts)
-    network = get_network("ethereum")
+    depositors, stats = draw_sample(
+        args.sample, args.seed, args.window_days, after_ts, args.network, end_ts, exclude
+    )
+    stats.update(
+        network=args.network,
+        seed=args.seed,
+        window_days=args.window_days,
+        end_ts=end_ts,
+        exclude_dirs=args.exclude_dir,
+        exclude_file=args.exclude_file,
+        exclude_list_size=len(exclude),
+    )
+    _log(
+        f"[*] eligible {stats['eligible']}, excluded {stats['excluded']}, "
+        f"sampled {stats['sampled']}, sha256 {stats['sample_sha256']}"
+    )
+    if args.dry_run:
+        print(json.dumps(stats, indent=1))
+        return stats
+    network = get_network(args.network)
     results = {}
     if args.report_only:
         for w in depositors:
@@ -212,7 +320,7 @@ def main(argv=None):
                 }
     else:
         clients = [EtherscanClient(k, pause=0.36, **network.client_kwargs()) for k in api_keys()]
-        labels = load_attribution("ethereum")
+        labels = load_attribution(args.network)
         _log(f"[*] {len(depositors)} depositors, {len(clients)} key(s)")
         failed = []
 
@@ -235,6 +343,8 @@ def main(argv=None):
         if failed:
             _log(f"[!] {len(failed)} failed: {failed[:5]}")
     summary = report(results)
+    summary["sampling"] = stats
+    os.makedirs(OUT, exist_ok=True)
     with open(os.path.join(OUT, "summary.json"), "w", encoding="utf-8") as fh:
         json.dump(summary, fh, indent=1)
     print(json.dumps(summary, indent=1))
