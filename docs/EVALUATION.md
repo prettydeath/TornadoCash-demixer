@@ -225,7 +225,7 @@ deposits (target), and on the same deposits shifted back so that every window
 ends a day before its first real deposit (decoy). A withdrawal in a decoy window
 cannot spend one of the wallet's notes, so every decoy lead is a false note link;
 everything else — history, counterparties, deposit gas prices — is the wallet's
-own. The share of target leads that chance explains (a false-discovery rate) is
+own. The share of target leads that chance explains (the ratio R below) is
 estimated as decoy leads per withdrawal searched over target leads per
 withdrawal searched; 95 % intervals come from a bootstrap over depositors.
 `tools/placebo_windows.py` re-scores the cached runs offline for narrower exit

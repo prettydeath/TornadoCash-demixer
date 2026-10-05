@@ -355,7 +355,7 @@ With `--placebo` the same analysis also runs on a decoy window that ends a day
 before the first deposit, where no withdrawal can spend this depositor's notes:
 
 ![Placebo check on the KuCoin depositor](https://raw.githubusercontent.com/prettydeath/TornadoCash-demixer/main/docs/img/case-kucoin-placebo.png)
-*The placebo check: six `moderate` leads in the real window, none in the decoy window; the one decoy candidate is `weak`.*
+*The placebo check: six `moderate` leads in the real window, none in the decoy window, and no `weak` leads in either.*
 
 ### 5. Harmony Bridge hack (2022)
 
