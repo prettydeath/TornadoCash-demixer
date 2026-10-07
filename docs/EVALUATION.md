@@ -790,11 +790,11 @@ pair within three co-occurrences of independence on 43,424 rows.)
 
 ## Checks of the code itself
 
-Run on 2026-09-28; tests, coverage and the live check re-run on 2026-10-02.
+Run on 2026-09-28; tests, coverage and the live check re-run on 2026-10-02, tests and coverage again on 2026-10-07 (2.18.0).
 
 | Check | Result |
 |---|---|
-| `pytest` (network blocked, incl. `getaddrinfo`) | 755 passed |
+| `pytest` (network blocked, incl. `getaddrinfo`) | 811 passed |
 | `pytest-randomly`, seeds 1, 2, 3 | all pass in every order |
 | Branch coverage (`--cov-branch`) | 93 % overall; `heuristics` 97 %, `demix` 93 %, `cli` 89 % |
 | Property-based tests (Hypothesis, 24) and edge-case tests (10) | pass; the four that documented defects now pin the fixes |
