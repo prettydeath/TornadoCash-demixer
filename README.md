@@ -417,6 +417,12 @@ The method on both public cases, with the numbers behind each claim, is in
   depositors, against 26 to 1 within 72 hours), so since 2.17 it is context; and so did a multi-pool profile of 10+ notes within 72 hours
   (318 against 34 on 4,194 such depositors); only these make a `moderate` or `strong`
   band, and `strong` needs two independent ones ([details](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/EVALUATION.md#placebo-test-on-real-depositors)).
+- The 2.17 rule was then frozen, pre-registered and run on new depositors (591 on
+  Ethereum, 300 on Polygon): early direct links 84 against 2 and 59 against 1,
+  `moderate` within 72 hours 103 against 7 and 71 against 1, count match at chance
+  level on both chains. A labelled shared deposit on Polygon (5 against 0) was too
+  rare to beat chance there; `strong` stayed rare (3 against 0)
+  ([details](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/HOLDOUT_RESULTS.md)).
 - On 31 depositor/exit pairs labelled through ENS (2019-2026), demix found 16 of
   the 21 pairs inside its window (measured before 2.17, when a direct link counted
   at any delay), all through a direct transaction between the two addresses,

@@ -31,6 +31,12 @@ Denominations are per chain and per asset: `0.1 / 1 / 10 / 100 ETH` on Ethereum,
 `100 / 1000 (×2) / 10000 / 100000 DAI` and five more ERC-20 denomination sets on Ethereum, and so
 on.
 
+> **Twin token pools.** Ethereum runs two contracts for 1000 DAI, 50000 cDAI and 500000
+> cDAI. A deposit through the router names only the router, so since 2.18 the pool is read
+> from the contract that emitted the Deposit event in the receipt; a deposit whose receipt
+> cannot be read is marked `pool_ambiguous`. Before 2.18 such a deposit went to one twin by
+> registry order, whichever contract received it.
+
 > **Detection gap: undeclared routers.** The router path only fires for an address the
 > network declares in its `router_address` column. Ethereum, Polygon, Avalanche,
 > Arbitrum, Optimism, Gnosis and Base ship verified routers (the Tornado proxy
