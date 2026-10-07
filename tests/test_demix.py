@@ -851,3 +851,77 @@ def test_immediate_funders_are_plain_senders_before_the_first_deposit():
         incoming(late, 5000),  # after the first deposit
     ]
     assert immediate_funders(wallet, txs, 1000, [fx.POOL_1_ETH]) == [funder]
+
+
+# Twin token pools: the registry has two pools with the same token and amount
+# (1000 DAI and 1000 DAI#2, 50000 / 500000 cDAI and their #2). A router deposit
+# names only the router, so (token, amount) cannot tell the twins apart; the
+# pool is the contract that emitted the Deposit event in the receipt.
+
+DAI_TWIN = "0x" + "d2" * 20
+
+
+def _twin_network():
+    from tornado_demix.networks import Network
+    from tornado_demix.pools import Pool
+
+    return Network(
+        "ethereum",
+        1,
+        "ETH",
+        [Pool(DAI_POOL, 100, "DAI", 18, DAI_TOKEN), Pool(DAI_TWIN, 100, "DAI", 18, DAI_TOKEN)],
+        routers=[ROUTER],
+    )
+
+
+class _ReceiptClient:
+    def __init__(self, emitters):
+        self.emitters = emitters
+        self.asked = []
+
+    def deposit_emitters(self, tx_hash):
+        self.asked.append(tx_hash)
+        return self.emitters.get(tx_hash)
+
+
+def test_twin_pool_router_deposit_is_resolved_from_the_receipt():
+    net = _twin_network()
+    token_txs = [
+        _ttx(ROUTER, 100 * 10**18, 1000, "0xt1", DAI_TOKEN),
+        _ttx(ROUTER, 100 * 10**18, 1100, "0xt2", DAI_TOKEN),
+    ]
+    client = _ReceiptClient({"0xt1": {DAI_TWIN}, "0xt2": {DAI_POOL}})
+    deposits = detect_deposits(
+        client, fx.WALLET, network=net, txs=[], token_txs=token_txs, internal_txs=[]
+    )
+    key = {p.address: p.key for p in net.pools}
+    assert [d["pool_key"] for d in deposits] == [key[DAI_TWIN], key[DAI_POOL]]
+    assert key[DAI_TWIN] != key[DAI_POOL]
+    assert all("pool_ambiguous" not in d for d in deposits)
+
+
+def test_twin_pool_unresolved_is_flagged_not_guessed_silently():
+    net = _twin_network()
+    token_txs = [_ttx(ROUTER, 100 * 10**18, 1000, "0xt1", DAI_TOKEN)]
+    deposits = detect_deposits(None, fx.WALLET, network=net, txs=[], token_txs=token_txs)
+    assert len(deposits) == 1
+    assert deposits[0]["pool_ambiguous"] == sorted(p.key for p in net.pools)
+
+
+def test_unique_router_pool_needs_no_receipt():
+    net = _token_network_router()
+    client = _ReceiptClient({})
+    token_txs = [_ttx(ROUTER, 100 * 10**18, 1000, "0xt1", DAI_TOKEN)]
+    detect_deposits(client, fx.WALLET, network=net, txs=[], token_txs=token_txs, internal_txs=[])
+    assert client.asked == []
+
+
+def test_shipped_ethereum_twin_pools_exist():
+    """The registry really carries twins; if they go away this fix is moot."""
+    from collections import Counter
+
+    from tornado_demix.networks import get_network
+
+    net = get_network("ethereum")
+    pairs = Counter((p.token, p.raw_denom) for p in net.pools if not p.is_native)
+    assert sum(1 for n in pairs.values() if n > 1) >= 3

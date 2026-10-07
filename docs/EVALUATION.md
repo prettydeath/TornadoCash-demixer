@@ -1,7 +1,7 @@
 # Evaluation
 
 Deposit → withdrawal pairs with a known answer are not publicly available. This
-document combines four checks, each with its own limits:
+document combines five checks, each with its own limits:
 
 1. a **synthetic benchmark** (`tools/simulate.py`): generated data with a known
    exit, to see what each component contributes and how the method fails;
@@ -10,7 +10,9 @@ document combines four checks, each with its own limits:
    hold the wallet's notes, which estimates the share of chance leads per evidence
    family without any labels;
 3. **two public laundering cases** (KuCoin, Harmony);
-4. an **ENS-labelled set**, also scored under the protocol of Wang et al. (2023).
+4. an **ENS-labelled set**, also scored under the protocol of Wang et al. (2023);
+5. a **pre-registered hold-out** of the frozen rule on new Ethereum and Polygon
+   depositors, with published heuristics and a semi-synthetic benchmark beside it.
 
 The placebo test is the only one that measures the signals on real withdrawals at
 scale. It found amount+timing and gas-price leads as frequent in decoy windows as
@@ -548,10 +550,72 @@ same independent check for both classes.
 
 The 72 h split of the direct link was decided on these data (the 72 h bound itself
 came from the earlier early-exit flag) and the 150 post-2022 depositors were part
-of that analysis, so the 2.17 rule is exploratory until checked on new depositors.
+of that analysis, so the 2.17 rule was exploratory until checked on new depositors
+(done below).
 The early profile differs between periods (0.04 before the 2022 sanctions, 0.19
 after; the intervals do not overlap) and fires for 4,194 of the 64,681 depositors
 in the universe (about 6.5 %).
+
+### Pre-registered hold-out and a second chain
+
+The rule above was frozen (file hashes, labels, samples and four hypotheses in
+[PREREG_HOLDOUT.md](PREREG_HOLDOUT.md), tag `prereg-holdout-v1`) and then run on 600
+new Ethereum depositors (591 completed) and 300 Polygon depositors. Full tables and
+deviations: [HOLDOUT_RESULTS.md](HOLDOUT_RESULTS.md).
+
+| | Ethereum | Polygon |
+|---|---|---|
+| early direct link, 30 d | 84 / 2, R 0.025 (0.003–0.094) | 59 / 1, R 0.017 (0–0.098) |
+| labelled shared deposit, 30 d | 12 / 2, R 0.18 (0.02–0.80) | 5 / 0, R 0 (0–1.09) |
+| count match, 30 d | R 0.97 (0.90–1.05) | R 1.03 (0.95–1.10) |
+| moderate, 72 h | 103 / 7, R 0.08 (0–0.23) | 71 / 1, R 0.016 (0–0.091) |
+| strong, 30 d | 3 / 0 | 0 / 0 |
+
+H1 (early direct link above chance), H2 (count match at chance level) and H3
+(moderate chance share below 0.25) held. H4 held for the direct link on Polygon but
+not for the labelled shared deposit: five target leads and no decoy lead cannot
+exclude chance. `linked_sender` stayed at chance level on Ethereum (R 0.84) and
+remains an expert decision. One deviation: a pool-assignment bug for twin token
+pools was fixed after collection and six runs redone; only count-match totals moved.
+
+### Published heuristics under the same design
+
+`tools/tutela_baseline.py` re-implements the heuristics of Béres et al. (2021) and
+Tutela (2022) and scores them on the same target / decoy windows (302 depositors,
+pooled):
+
+| heuristic | target / decoy | R (95 % CI) |
+|---|---|---|
+| address match (Tutela 6.1, Béres H1) | 3 / 3 | 1.08 (0.15–8.1)* |
+| gas price (Tutela 6.2, Béres H2) | 0 / 0 | – |
+| Béres H3 (linked addresses) | 36 / 11 | 0.33 (0.14–0.65) |
+| Tutela 6.3 (linked) | 9 / 2 | 0.24 (0.03–1.16)* |
+| Tutela 6.4 (multi-denomination) | 716 / 706 | 1.07 (0.88–1.29) |
+| any Tutela heuristic | 728 / 711 | 1.06 (0.88–1.27) |
+
+Only the linked-address heuristics stand above chance; the multi-denomination
+heuristic, which dominates Tutela's counts, fires as often in windows that cannot
+hold the wallet's notes. TORN anonymity mining (Tutela 6.5) is left out: the decoy
+shifts time, not the mining blocks.
+
+### Semi-synthetic benchmark
+
+`tools/semisynthetic.py` plants depositors with a known exit into the real
+withdrawal background of the 302 placebo depositors (12 per background run and
+scenario; errors none / rare / model / frequent, three delay laws, single or spread
+withdrawals). In decoy windows, where every inherited link is chance:
+
+| errors | precision ≥ moderate | recall ≥ moderate | false strong |
+|---|---|---|---|
+| none | 0.00–0.79 (few leads) | 0.00–0.03 | 0 |
+| rare | 0.81–0.89 | 0.02–0.06 | 0 |
+| as modelled | 0.97–0.98 | 0.20–0.35 | 0 |
+| frequent | 0.99 | 0.60–0.84 | 0 |
+
+In target windows precision is a lower bound (0.73–0.95 at modelled or higher
+error rates), because some "false" leads are the real wallet's own exits. Recall
+follows the depositor's error rate, not the tool: a careful depositor is rarely
+found. Count match alone has a precision of 0.03 on the real background.
 
 ## Two public laundering cases
 

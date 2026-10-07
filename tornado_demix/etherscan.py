@@ -12,7 +12,7 @@ from typing import Any
 
 import requests
 
-from .constants import CHAIN_ID, ETHERSCAN_API_URL, WEI
+from .constants import CHAIN_ID, ETHERSCAN_API_URL, TOPIC_DEPOSIT, WEI
 from .errors import ApiError, ApiKeyError, BlockLookupError
 
 _fetch = urllib.request.urlopen  # module-level so tests can replace it
@@ -420,6 +420,22 @@ class EtherscanClient:
             sender = result.get("from")
             return sender.lower() if sender else None
         return None
+
+    def deposit_emitters(self, tx_hash: str) -> set[str] | None:
+        """Addresses that emitted a Tornado Deposit event in the transaction; None when
+        neither the proxy module nor the RPC returns the receipt."""
+        receipt = self._proxy(
+            {"module": "proxy", "action": "eth_getTransactionReceipt", "txhash": tx_hash}
+        )
+        if not isinstance(receipt, dict):
+            receipt = self._rpc("eth_getTransactionReceipt", [tx_hash])
+        if not isinstance(receipt, dict):
+            return None
+        return {
+            (log.get("address") or "").lower()
+            for log in receipt.get("logs") or []
+            if (log.get("topics") or [None])[0] == TOPIC_DEPOSIT
+        }
 
     def first_activity(self, address: str) -> int | None:
         """Timestamp of the earliest normal or internal transaction of ``address``.

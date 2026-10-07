@@ -78,6 +78,7 @@ def detect_deposits(
         if token_txs is None:
             token_txs = client.token_transfers(wallet) if client is not None else []
         deposits.extend(_token_deposits(wallet, token_txs, token_pools, network.routers))
+        _resolve_twin_pools(client, deposits, token_pools)
 
     deposits.sort(key=lambda d: d["ts"])
     return deposits
@@ -137,10 +138,14 @@ def _token_deposits(wallet, token_txs, token_pools, routers=()):
       amount). The token must be checked too: a USDC transfer to the DAI pool is
       not a DAI deposit.
     * via a router: tokentx lists the router as ``to``, so the pool is inferred
-      from (token contract, exact raw amount), which is unique among token pools.
+      from (token contract, exact raw amount). Twin pools share that pair; such a
+      deposit carries ``pool_ambiguous`` (the twins' keys) until
+      :func:`_resolve_twin_pools` reads the receipt.
     """
     by_address = {p.address: p for p in token_pools}
-    by_token_amount = {(p.token, p.raw_denom): p for p in token_pools}
+    by_token_amount = {}
+    for p in sorted(token_pools, key=lambda p: p.key):
+        by_token_amount.setdefault((p.token, p.raw_denom), []).append(p)
     routers = {r.lower() for r in routers}
     found = []
     for tx in token_txs:
@@ -160,15 +165,39 @@ def _token_deposits(wallet, token_txs, token_pools, routers=()):
                 continue
             via = "token"
         elif to in routers:
-            pool = by_token_amount.get((contract, raw))
-            if pool is None:
+            twins = by_token_amount.get((contract, raw))
+            if not twins:
                 continue
+            pool = twins[0]
             via = "token-router"
         else:
             continue
 
-        found.append(_deposit(pool, tx, to, via))
+        deposit = _deposit(pool, tx, to, via)
+        if via == "token-router" and len(twins) > 1:
+            deposit["pool_ambiguous"] = [p.key for p in twins]
+        found.append(deposit)
     return found
+
+
+def _resolve_twin_pools(client, deposits, token_pools):
+    """Pick the right twin for router deposits from the Deposit event's emitter.
+
+    One receipt per ambiguous deposit; twins are rare (three pairs on Ethereum).
+    A deposit the receipt cannot settle keeps ``pool_ambiguous`` and the first
+    twin's key, so a report can say the pool is uncertain.
+    """
+    by_key = {p.key: p for p in token_pools}
+    for deposit in deposits:
+        keys = deposit.get("pool_ambiguous")
+        if not keys or client is None or not hasattr(client, "deposit_emitters"):
+            continue
+        emitters = client.deposit_emitters(deposit["hash"]) or set()
+        hit = [k for k in keys if by_key[k].address in emitters]
+        if len(hit) == 1:
+            pool = by_key[hit[0]]
+            deposit.update(pool_key=pool.key, denom=pool.denom, asset=pool.asset)
+            del deposit["pool_ambiguous"]
 
 
 def _deposit(pool, tx, to, via):
