@@ -655,7 +655,8 @@ def confidence_band(signals):
     exchange deposit address, an early multi-pool profile match); moderate: a
     lead signal from one source; weak: amount+timing and/or gas price only.
     Amount+timing and gas price never raise the band: on real depositors they
-    are chance-level, also next to a lead signal.
+    are chance-level; next to a lead signal there are too few cases to judge,
+    so they are not counted.
     """
     sources = {LEAD_SOURCE[s] for s in signals if s in LEAD_SOURCE}
     if len(sources) >= 2:
