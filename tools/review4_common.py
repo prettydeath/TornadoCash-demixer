@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from placebo_dar import DAR  # noqa: E402
-from placebo_windows import OUT  # noqa: E402
+from placebo_windows import OUT, narrow  # noqa: E402, F401
 
 from tornado_demix.deposit_addresses import shared_deposit_hits  # noqa: E402
 
