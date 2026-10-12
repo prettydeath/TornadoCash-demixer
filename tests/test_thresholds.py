@@ -37,7 +37,6 @@ def test_the_documented_thresholds_and_weights():
         "self_relayed": 0.25,
         "gas_price": 0.25,
         "linked": 0.40,
-        "linked_sender": 0.40,
         "shared_deposit": 0.40,
         "profile_match": 0.35,
         "early_profile": 0.35,

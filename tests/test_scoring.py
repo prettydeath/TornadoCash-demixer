@@ -398,7 +398,9 @@ def test_the_summary_lists_facts_and_counts_one_family_for_count_and_self_relay(
     assert "strongest" not in conclusion(data).lower()
 
 
-def test_a_withdrawal_sent_by_a_counterparty_links_its_recipient():
+def test_a_withdrawal_sent_by_a_counterparty_is_context_only():
+    """Since 2.19 a withdrawal sent by the depositor's side is shown, but it is not
+    a lead: in no placebo sample did it separate from chance."""
     res = _pool_result(n_recipients=40, n_self_relayed=0, hits_each=1)
     exit_ = "0x%040x" % 7
     res["detail"][exit_] = res["detail"][exit_] * 17  # 17 notes, no voucher of that size
@@ -408,7 +410,8 @@ def test_a_withdrawal_sent_by_a_counterparty_links_its_recipient():
     apply_heuristics(data, counterparties=set(), withdrawal_senders={tx.lower(): "0xcaller"})
     row = next(r for r in ranked_candidates(data) if r["address"] == exit_)
     assert "linked_sender" in row["signals"]
-    assert row["band"] == "moderate"
+    assert row["band"] == "weak"
+    assert "context only" in band_rationale(row["band"], set(row["signals"]))
     held = {e["signal"] for e in row["evidence"] if e["holds"]}
     assert held == {"linked_sender"}
 

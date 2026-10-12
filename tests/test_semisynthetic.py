@@ -136,7 +136,8 @@ def test_link_errors_reach_the_heuristics(fast_and_late, rates, signal):
     (exit_addr,) = planted_exits(positives)
     sig = set(data["denoms"][POOL]["signals"][exit_addr])
     assert signal in sig
-    assert confidence_band(sig) == "moderate"
+    # since 2.19 a linked withdrawal sender is context only
+    assert confidence_band(sig) == ("weak" if signal == "linked_sender" else "moderate")
 
 
 def test_a_late_direct_link_is_context_only(fast_and_late):
