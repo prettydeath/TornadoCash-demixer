@@ -516,6 +516,8 @@ the decoy window of the wallet under investigation, beside the real one.
 
 ### Current rule (2.17) in one table
 
+Since 2.19 the "linked sender (lead)" row below is context only (see [Rule 2.19](#rule-219)).
+
 `tools/review4_*.py` re-score the cached runs offline under the 2.17 rule. R is
 decoy leads per withdrawal searched over target leads per withdrawal searched;
 below 1 it estimates the chance share of target leads, near or above 1 the signal
@@ -577,6 +579,30 @@ not for the labelled shared deposit: five target leads and no decoy lead cannot
 exclude chance. `linked_sender` stayed at chance level on Ethereum (R 0.84) and
 remains an expert decision. One deviation: a pool-assignment bug for twin token
 pools was fixed after collection and six runs redone; only count-match totals moved.
+
+### Rule 2.19
+
+Version 2.19 makes `linked_sender` (a withdrawal sent by the depositor or one of its
+direct counterparties) context only: it is shown as evidence, has no weight, never
+raises the band and is not an independent family, like `linked_late` since 2.17.
+Lead sources are now the early direct link, the labelled shared deposit and the
+early multi-pool profile.
+
+Reason: in no placebo sample did `linked_sender` separate from chance. On the 302
+depositors it was 8 target against 2 decoy leads (R 0.27, interval 0.03–1.36); in
+the 2026 Ethereum hold-out 14 / 11 (R 0.84); on Polygon 9 / 2 (R 0.22, 0.02–1.07).
+In the Ethereum hold-out it was 11 of the 15 decoy `moderate` leads. Without it,
+`moderate` there is 101 / 4, R 0.042 (exact 0.011–0.111).
+
+Trade-off: in the KuCoin 2020 case the linked withdrawal sender found 6 of the
+attacker's 35 exits. They are now shown as context, not as `moderate` leads.
+
+The change was decided after seeing the hold-out numbers, so it is exploratory. A
+second hold-out that tests 2.19 is pre-registered in
+[PREREG_HOLDOUT2.md](PREREG_HOLDOUT2.md) (tag `prereg-holdout2-v1`); until it is
+reported the rule has not been confirmed on new data. The tables above are
+historical and were not rewritten: they describe the rule in force when each was
+measured.
 
 ### Published heuristics under the same design
 

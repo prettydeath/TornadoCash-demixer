@@ -8,8 +8,8 @@ The toolkit links a depositor wallet to likely withdrawal addresses and reports
 each candidate with an evidence band and the evidence behind it. A band needs a
 lead signal that stood above chance on real depositors: a linked address (a direct
 counterparty whose first withdrawal came within 72 hours of the deposit, a
-withdrawal sent by the depositor's side, a deposit address swept to a labelled
-exchange) or an early multi-pool profile match; two independent
+deposit address swept to a labelled exchange) or an early multi-pool profile
+match; two independent
 lead sources make a band `strong`. Amount+timing and gas-price matches turn up as
 often by chance as for real exits, so they are shown as context and never raise
 a band. It also groups exits paid out together, links wallets of one operator
@@ -63,7 +63,9 @@ traces users leave around it.
   a direct link first withdrawn within 72 hours was a lead 26 times in real
   windows against once in decoy windows, a later one 8 against 13, chance level.
   A later direct link is listed as context and never raises the band or the
-  score; the withdrawal-sender and shared-deposit signals are unchanged.
+  score; the shared-deposit signal is unchanged. Since 2.19 a withdrawal sent by
+  the depositor's side (`linked_sender`) is context too: it did not separate from
+  chance in any placebo sample.
 - Optionally runs a placebo check (`--placebo`, or the web UI option): the same
   analysis on a decoy window that ends before the wallet's first deposit, so the
   report shows how many leads chance alone produces for this wallet.
@@ -281,7 +283,7 @@ search windows are clamped to the current block.
 | 1 | Ronin Bridge 2022 | `characterize` | OFAC-labelled exploiter, bridge and USDC calls, 12,595 ETH to a second sanctioned address | [OFAC, 14 Apr 2022](https://ofac.treasury.gov/recent-actions/20220414) |
 | 2 | Wintermute 2022 | `characterize` | one 9.9435 ETH inflow from the 10 ETH pool; a disposable address | [Merkle Science](https://www.merklescience.com/blog/hack-track-analysis-of-wintermute-attack) |
 | 3 | Beanstalk 2022 | `demix --exit-window 24` | 271 deposits in three hours; no candidate above `weak` | [Merkle Science](https://www.merklescience.com/blog/hack-track-analysis-of-beanstalk-flash-loan-attack) |
-| 4 | KuCoin 2020 | `demix` | 6 of the attacker's 35 exits in the window found through the linked withdrawal sender | [tayvano/lazarus-bluenoroff-research](https://github.com/tayvano/lazarus-bluenoroff-research) |
+| 4 | KuCoin 2020 | `demix` | 6 of the attacker's 35 exits in the window found through the linked withdrawal sender (context only since 2.19) | [tayvano/lazarus-bluenoroff-research](https://github.com/tayvano/lazarus-bluenoroff-research) |
 | 5 | Harmony 2022 | `demix --known-exit`, `multi`, `trace` | an exit group from one known exit; 14 depositors in 5 funder clusters; a three-hop trace | [tayvano/lazarus-bluenoroff-research](https://github.com/tayvano/lazarus-bluenoroff-research) |
 
 Attributing the Ronin, KuCoin and Harmony thefts to Lazarus is the conclusion of
@@ -340,7 +342,8 @@ The attacker called `withdraw()` itself from two addresses (Koh, 2020): 451
 withdrawals to 36 exits. No exit received a voucher-sized count, so the count
 match finds nothing. The depositor had transacted with one of the callers,
 `0x82e6...`, so every withdrawal it sent marks its recipient (`linked_sender`): 6
-candidates, all true exits. The 30 exits of the other caller, which is not a
+true exits. Before 2.19 they were `moderate` leads; since 2.19 they are listed as
+context and the band stays `weak`. The 30 exits of the other caller, which is not a
 counterparty of the depositor, are not found; how many of them carry this
 depositor's notes rather than the attacker's other deposits is unknown. The report opens with
 a flow diagram from the depositor through the pool to the candidates.
@@ -409,9 +412,9 @@ The method on both public cases, with the numbers behind each claim, is in
   chance: a placebo test on 152 random Ethereum depositors found as many such
   leads in decoy windows before the first deposit as in the real windows, at every
   window from 6 hours to 30 days; gas-price matches were almost all on withdrawals
-  whose gas price a relayer chose. A linked address (a direct counterparty, a
-  withdrawal sent by the depositor's side, or a deposit address swept to a
-  labelled exchange) stood above chance (30 against 7 over 30 days, 19 against 1
+  whose gas price a relayer chose. A linked address (a direct counterparty or a
+  deposit address swept to a labelled exchange; before 2.19 also a
+  withdrawal sent by the depositor's side) stood above chance (30 against 7 over 30 days, 19 against 1
   within 72 hours, measured before 2.17). The pooled 30-day number hid that a
   direct link withdrawn later than 72 hours is chance-level (8 against 13 on 302
   depositors, against 26 to 1 within 72 hours), so since 2.17 it is context; and so did a multi-pool profile of 10+ notes within 72 hours
@@ -443,7 +446,7 @@ The method on both public cases, with the numbers behind each claim, is in
   addresses that happen to share the voucher count, never a `moderate` or `strong` one.
   On the public KuCoin and Harmony laundering cases the count match found no exit
   (every exit collected notes of several deposits); in KuCoin the linked withdrawal
-  sender found 6 of the attacker's 35 exits in one depositor's window ([docs/EVALUATION.md](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/EVALUATION.md)).
+  sender found 6 of the attacker's 35 exits in one depositor's window; since 2.19 these are context, not leads ([docs/EVALUATION.md](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/EVALUATION.md)).
 - Only Tornado Cash pools in the registry are covered. Bridges, other mixers and
   cross-chain hops are not followed; `cluster` follows one hop only, and `trace`
   follows funds by FIFO attribution, a convention that does not hold when an

@@ -253,17 +253,26 @@ gas-price gate and the contract check make bounded, memoised RPC calls.
   within 72 hours was a lead 26 times in real windows against once in decoy
   windows (before 2022-08-08 15 against 0, after it 11 against 1); a later one 8
   against 13 (5 against 4, 3 against 9), chance level ([EVALUATION.md](EVALUATION.md#direct-links-early-versus-late)).
-  The rule applies to the depositor's own address as well. `linked_sender` and
-  `shared_deposit` are unchanged.
+  The rule applies to the depositor's own address as well. `shared_deposit` is
+  unchanged.
 - **Linked withdrawal sender.** `withdraw()` may be called by anyone, and the
   caller is recorded as the transaction sender. If the depositor, or one of its
   direct non-contract counterparties, sent a withdrawal transaction, its recipient
-  is flagged `linked_sender` (linked-address family). The tool reads the outgoing
+  is flagged `linked_sender`. Since 2.19 this is **context only**: it is shown in
+  the evidence but has no weight, never raises the band and is not an independent
+  family (like `linked_late`). It did not separate from chance in any placebo
+  sample: 8 target against 2 decoy leads on 302 depositors (R 0.27, interval
+  0.03–1.36), 14 / 11 in the 2026 Ethereum hold-out (R 0.84), 9 / 2 on Polygon
+  (R 0.22, 0.02–1.07). In the Ethereum hold-out it was 11 of the 15 decoy
+  `moderate` leads; without it `moderate` there is 101 / 4, R 0.042 (exact
+  0.011–0.111). The tool reads the outgoing
   transactions of at most 25 counterparties, busiest first, within the searched
   blocks only. It catches an operator that relays its own withdrawals when the
   relaying address is a counterparty of the depositor: in the KuCoin case it listed
   the 6 exits of that caller, and nothing else, but none of the 30 exits of the
-  attacker's second caller, which the depositor never transacted with ([EVALUATION.md](EVALUATION.md)).
+  attacker's second caller, which the depositor never transacted with. Since 2.19
+  those 6 are shown as context, not as `moderate` leads: the price of the rule
+  ([EVALUATION.md](EVALUATION.md#rule-219)).
 - **Shared exchange deposit address.** An exchange gives each customer their own
   deposit address and sweeps what arrives there to its hot wallets, so two
   addresses that sent funds to the same deposit address are, with few exceptions,
@@ -298,14 +307,14 @@ gas-price gate and the contract check make bounded, memoised RPC calls.
 
 **Band, evidence and score.** Each recipient accumulates a signal set
 (`count_match`, `self_relayed`, `early_profile`, `gas_price`, `linked`,
-`linked_sender`, `shared_deposit`, and `profile_match` on `multi` runs), and
-possibly `linked_late`, which is context only: no family, no weight, no band. The signals
+`shared_deposit`, and `profile_match` on `multi` runs), and
+possibly `linked_late` and `linked_sender`, which are context only (since 2.19 for
+the sender): no family, no weight, no band. The signals
 fall into evidence families: amount+timing (`count_match`, `self_relayed`,
 `early_profile`, `profile_match`), gas price, linked address (`linked`,
-`linked_sender`, `shared_deposit`). The **band** needs a lead signal — a linked
-address, a shared exchange deposit address or an early multi-pool profile. Lead
-signals come from three independent sources: a direct link (`linked`,
-`linked_sender`), a shared deposit address (`shared_deposit`) and an early
+`shared_deposit`). The **band** needs a lead signal — an early direct link, a
+shared exchange deposit address or an early multi-pool profile. Lead
+signals come from three independent sources: an early direct link (`linked`), a shared deposit address (`shared_deposit`) and an early
 multi-pool profile (`early_profile`). `strong` needs lead signals from two of
 these sources, `moderate` a lead signal from one, and `weak` is amount+timing
 and/or gas price only. Amount+timing and gas price never raise the band; they
@@ -314,7 +323,7 @@ placebo test on real depositors ([EVALUATION.md](EVALUATION.md)): run on decoy
 windows that end before the wallet's first deposit, the pipeline found
 amount+timing and gas-price leads as often as in the real windows, and only
 linked-address leads clearly more often (30 against 7 over 30 days; 19 against 1
-within 72 hours, measured before 2.17); the early multi-pool profile was added in 2.15 on the same kind
+within 72 hours, measured before 2.17, and counting the withdrawal sender, which 2.19 removed); the early multi-pool profile was added in 2.15 on the same kind
 of evidence. Version 2.16 added the two-source rule for `strong`: among
 candidates with a lead signal, a second amount+timing family did not lower the
 chance share (4 real against 1 decoy at 72 hours, 4 against 0 over 30 days;
@@ -323,11 +332,12 @@ chance share (4 real against 1 decoy at 72 hours, 4 against 0 over 30 days;
 gas-price match or a self-relayed count match alone reached `moderate`, and two
 non-linked families reached `strong`. Since 2.17 a direct link counts as a lead
 only within 72 hours (see above); the pooled 30-day number hid that a later one
-is chance-level. Before 2.17 a direct link at any delay was `linked`. A
+is chance-level. Before 2.17 a direct link at any delay was `linked`. Before 2.19 a
+`linked_sender` was a lead (the second source with the direct link). A
 linked exit whose first withdrawal came within 72 hours of the deposit is marked
 as an **early exit**; like the fresh-address mark it does not change the band or
 the score by itself (an early direct link is `linked` by definition; for
-`linked_sender` and `shared_deposit` the mark is context). Every candidate carries its **evidence**: each family, whether it
+`shared_deposit` and the context-only `linked_sender` the mark is context). Every candidate carries its **evidence**: each family, whether it
 holds, and the numbers behind it (share of the field with the same count, `disc`,
 gas price, number of relayer-free withdrawals).
 
