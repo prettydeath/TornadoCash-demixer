@@ -624,6 +624,12 @@ heuristic, which dominates Tutela's counts, fires as often in windows that canno
 hold the wallet's notes. TORN anonymity mining (Tutela 6.5) is left out: the decoy
 shifts time, not the mining blocks.
 
+On the four hold-out samples (1,889 depositors, pooled; `.cache/labels/placebo/tutela_holdout/`)
+the result held out of sample: multi-denomination 2,890 / 2,632 (R 0.96, 0.90–1.03), any Tutela
+heuristic R 0.94 (0.88–1.00), gas price (Béres H2, Polygon) 98 / 98 (R 1.06); Béres H3 386 / 110
+(R 0.30, 0.23–0.38), Tutela 6.3 37 / 6 (R 0.17, 0.05–0.34), address reuse 94 / 57 (R 0.64,
+0.45–0.89). The early direct link (H3 restricted to 72 h) gave 320 / 13 (R 0.04) on the same samples.
+
 ### Semi-synthetic benchmark
 
 `tools/semisynthetic.py` plants depositors with a known exit into the real
