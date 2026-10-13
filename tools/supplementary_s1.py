@@ -43,7 +43,10 @@ def exact_ci(t, d, nt, nd):
     lo = 0.0 if d == 0 else beta.ppf(0.025, d, n - d + 1)
     hi = 1.0 if d == n else beta.ppf(0.975, d + 1, n - d)
     k = nt / nd
-    to_r = lambda p: float("inf") if p >= 1 else p / (1 - p) * k
+
+    def to_r(p):
+        return float("inf") if p >= 1 else p / (1 - p) * k
+
     return [to_r(lo), to_r(hi)]
 
 
@@ -167,10 +170,34 @@ def rows():
                     )
                 )
     # Early versus late direct link on P1 + P2 (re-scored, review4 compact.json; source of the 72 h cut).
-    out.append(("direct link by delay", "early (<= 72 h after last deposit), 30 d", 302, 27, 1, 0.040,
-                None, True, 483224, 446004))
-    out.append(("direct link by delay", "late (> 72 h), 30 d", 302, 8, 13, 1.76, [0.69, 6.4], False,
-                483224, 446004))
+    out.append(
+        (
+            "direct link by delay",
+            "early (<= 72 h after last deposit), 30 d",
+            302,
+            27,
+            1,
+            0.040,
+            None,
+            True,
+            483224,
+            446004,
+        )
+    )
+    out.append(
+        (
+            "direct link by delay",
+            "late (> 72 h), 30 d",
+            302,
+            8,
+            13,
+            1.76,
+            [0.69, 6.4],
+            False,
+            483224,
+            446004,
+        )
+    )
     for fname, label in (
         ("dar_summary.json", "label or activity"),
         ("dar_summary_labels_only.json", "exchange label"),

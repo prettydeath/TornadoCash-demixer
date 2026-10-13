@@ -9,6 +9,7 @@ pattern). Writes ZERO_VALUE_LINKS.md next to the dirs.
 
     python tools/zero_value_links.py holdout1 polygon1 holdout2 polygon2
 """
+
 from __future__ import annotations
 
 import json
@@ -48,17 +49,25 @@ def classify(client, wallet, cands, memo):
         memo[wallet] = txs
     out = {}
     for c in cands:
-        vals = [int(t.get("value") or 0) for t in memo[wallet]
-                if {(t.get("from") or "").lower(), (t.get("to") or "").lower()} == {wallet, c}]
+        vals = [
+            int(t.get("value") or 0)
+            for t in memo[wallet]
+            if {(t.get("from") or "").lower(), (t.get("to") or "").lower()} == {wallet, c}
+        ]
         out[c] = "value" if any(v > 0 for v in vals) else ("zero" if vals else "unseen")
     return out
 
 
 def main(dirs):
-    lines = ["# Zero-value direct links", "",
-             "Leads (pool, recipient) whose every depositor-candidate transfer moved a zero amount "
-             "(value / zero / not found in the re-read history).", "",
-             "| sample | signal | target: value / zero / unseen | decoy: value / zero / unseen |", "|---|---|---|---|"]
+    lines = [
+        "# Zero-value direct links",
+        "",
+        "Leads (pool, recipient) whose every depositor-candidate transfer moved a zero amount "
+        "(value / zero / not found in the re-read history).",
+        "",
+        "| sample | signal | target: value / zero / unseen | decoy: value / zero / unseen |",
+        "|---|---|---|---|",
+    ]
     tot = {}
     clients = {}
     for name in dirs:
@@ -72,7 +81,9 @@ def main(dirs):
                 if not any(sigs.values()):
                     continue
                 if net not in clients:
-                    clients[net] = EtherscanClient(api_keys()[0], pause=0.36, **get_network(net).client_kwargs())
+                    clients[net] = EtherscanClient(
+                        api_keys()[0], pause=0.36, **get_network(net).client_kwargs()
+                    )
                 for sig, keys in sigs.items():
                     if not keys:
                         continue
@@ -81,13 +92,25 @@ def main(dirs):
                         tally.setdefault((sig, side), Counter())[kinds[a]] += 1
                         tot.setdefault((sig, side), Counter())[kinds[a]] += 1
         for sig in ("linked", "linked_late"):
-            cells = ["{value} / {zero} / {unseen}".format(**{k: tally.get((sig, sd), Counter())[k] for k in ("value", "zero", "unseen")}) for sd in ("target", "decoy")]
+            cells = [
+                "{value} / {zero} / {unseen}".format(
+                    **{k: tally.get((sig, sd), Counter())[k] for k in ("value", "zero", "unseen")}
+                )
+                for sd in ("target", "decoy")
+            ]
             lines.append(f"| {name} | {sig} | {cells[0]} | {cells[1]} |")
         print(lines[-2], lines[-1], sep="\n", flush=True)
     for sig in ("linked", "linked_late"):
-        cells = ["{value} / {zero} / {unseen}".format(**{k: tot.get((sig, sd), Counter())[k] for k in ("value", "zero", "unseen")}) for sd in ("target", "decoy")]
+        cells = [
+            "{value} / {zero} / {unseen}".format(
+                **{k: tot.get((sig, sd), Counter())[k] for k in ("value", "zero", "unseen")}
+            )
+            for sd in ("target", "decoy")
+        ]
         lines.append(f"| pooled | {sig} | {cells[0]} | {cells[1]} |")
-    open(os.path.join(OUT, "ZERO_VALUE_LINKS.md"), "w", encoding="utf-8").write("\n".join(lines) + "\n")
+    open(os.path.join(OUT, "ZERO_VALUE_LINKS.md"), "w", encoding="utf-8").write(
+        "\n".join(lines) + "\n"
+    )
     print("\n".join(lines))
 
 
