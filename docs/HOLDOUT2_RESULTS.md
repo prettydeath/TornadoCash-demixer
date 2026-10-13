@@ -69,7 +69,7 @@ None from the registered procedure. As registered, the rule is not revised on th
   this is a hypothesis for a future registered test, not a result.
 
 - **Same-time decoy** (`tools/placebo_sametime.py`: real windows, nearest-denomination ETH pool the
-  depositor never used; 547 of H1 and 559 of H2 depositors, the rest had used every ETH pool).
+  depositor never used, mapped one to one; 547 of H1 and 559 of H2 depositors, the rest had used three or more of the four ETH pools).
   30 days, target / decoy, R: early direct link 72 / 6, 0.09 (0.03–0.17) and 71 / 6, 0.09
   (0.03–0.18); labelled shared deposit 12 / 1, 0.09 and 18 / 3, 0.19 (0.04–0.63); late direct link
   41 / 8, 0.21 (0.08–0.42) and 30 / 16, 0.59 (0.27–1.13); class moderate 80 / 7, 0.09 (0.03–0.17)

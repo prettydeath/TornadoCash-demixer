@@ -147,7 +147,7 @@ def main():
             shutil.copyfile(ft, os.path.join(dst, "target", w))
     json.dump(
         {"skipped_no_free_pool": skipped, "failed": failed},
-        open(os.path.join(dst, "sametime_meta.json"), "w"),
+        open(os.path.join(dst, "sametime_meta.json"), "w", encoding="utf-8"),
         indent=1,
     )
     _log(f"[*] done; skipped (no free pool) {len(skipped)}, failed {len(failed)}")

@@ -23,7 +23,6 @@ SELECTED = {
     ("window sweep", "linked address", "72h"),
     ("discrimination bins", "gated in (disc >= 0.5)", "720h"),
     ("early profile", "notes>=10, pools>=2, 72h"),
-    ("shared deposit address", "exchange label"),
 }
 
 
@@ -34,6 +33,29 @@ def load(name):
 
 def ci(c):
     return "" if not c else f"{c[0]:.3f}–{c[1]:.3f}"
+
+
+def exact_ci(t, d, nt, nd):
+    """Clopper-Pearson interval of d given t + d, mapped to R (the paper's policy for < 5 leads)."""
+    from scipy.stats import beta
+
+    n = t + d
+    lo = 0.0 if d == 0 else beta.ppf(0.025, d, n - d + 1)
+    hi = 1.0 if d == n else beta.ppf(0.975, d + 1, n - d)
+    k = nt / nd
+    to_r = lambda p: float("inf") if p >= 1 else p / (1 - p) * k
+    return [to_r(lo), to_r(hi)]
+
+
+def policy(t, d, stored, nt=None, nd=None):
+    """Bootstrap as stored when both sides have >= 5 leads, otherwise exact (needs exposures)."""
+    if t is None or d is None or t + d == 0:
+        return "", ""
+    if min(t, d) >= 5:
+        return ci(stored), ""
+    if nt and nd:
+        return ci(exact_ci(t, d, nt, nd)), "ᵉ"
+    return "", "ⁿ"
 
 
 def r(x):
@@ -57,6 +79,8 @@ def rows():
                             v.get("fdr"),
                             v.get("fdr_95ci"),
                             ("window sweep", fam, win) in SELECTED,
+                            v.get("target_withdrawals"),
+                            v.get("decoy_withdrawals"),
                         )
                     )
     d = load("disc.json")
@@ -119,6 +143,35 @@ def rows():
                 )
             )
     for fname, label in (
+        ("dar_universe.json", "S (1,000): labels or activity"),
+        ("dar_universe_labels_only.json", "S (1,000): labels only"),
+        ("dar_universe_nolabels.json", "S (1,000): no labels (activity only)"),
+    ):
+        s = load(fname)
+        if not s:
+            continue
+        for var, v in s["summary"].items():
+            if isinstance(v, dict) and "target_hits" in v:
+                out.append(
+                    (
+                        "shared deposit address",
+                        f"{label}, {var}",
+                        s["summary"].get("depositors"),
+                        v["target_hits"],
+                        v["decoy_hits"],
+                        v.get("fdr"),
+                        v.get("fdr_95ci"),
+                        fname == "dar_universe.json" and var == "evidence",
+                        v.get("target_withdrawals"),
+                        v.get("decoy_withdrawals"),
+                    )
+                )
+    # Early versus late direct link on P1 + P2 (re-scored, review4 compact.json; source of the 72 h cut).
+    out.append(("direct link by delay", "early (<= 72 h after last deposit), 30 d", 302, 27, 1, 0.040,
+                None, True, 483224, 446004))
+    out.append(("direct link by delay", "late (> 72 h), 30 d", 302, 8, 13, 1.76, [0.69, 6.4], False,
+                483224, 446004))
+    for fname, label in (
         ("dar_summary.json", "label or activity"),
         ("dar_summary_labels_only.json", "exchange label"),
     ):
@@ -139,21 +192,21 @@ def rows():
             )
     t = load(os.path.join("tutela", "summary.json"))
     if t:
-        for sample, hs in t.items():
-            if not isinstance(hs, dict):
-                continue
+        for sample, hs in t.get("sets", {}).items():
             for h, v in hs.items():
-                if isinstance(v, dict) and "target" in v:
+                if isinstance(v, dict) and "target_leads" in v:
                     out.append(
                         (
                             "published heuristics",
                             f"{h}, {sample}",
                             v.get("depositors"),
-                            v["target"],
-                            v["decoy"],
+                            v["target_leads"],
+                            v["decoy_leads"],
                             v.get("R"),
-                            v.get("boot_ci") or v.get("exact_ci"),
+                            v.get("R_boot95"),
                             False,
+                            v.get("target_withdrawals"),
+                            v.get("decoy_withdrawals"),
                         )
                     )
     return out
@@ -166,7 +219,8 @@ def main():
     rs = rows()
     os.makedirs(os.path.dirname(a.out), exist_ok=True)
     md = [
-        "# Supplementary Table S1. Exploratory cells examined before the rule was frozen",
+        "# Supplementary Table S1. Exploratory cells from the window, discrimination, period, profile, "
+        "shared-deposit, delay and published-heuristic analyses",
         "",
         "R = (decoy leads / decoy withdrawals) / (target leads / target withdrawals) as stored by each analysis "
         "(named `fdr` in older outputs). ★ = cell that entered the rule. Values are those of the rule version in "
@@ -175,14 +229,22 @@ def main():
         "| Analysis | Cell | Depositors | Target | Decoy | R | 95% interval | |",
         "|---|---|---|---|---|---|---|---|",
     ]
-    for an, cell, n, tt, dd, rr, cc, sel in rs:
+    rs = [tuple(x) + (None,) * (10 - len(x)) for x in rs]
+    for an, cell, n, tt, dd, rr, cc, sel, nt, nd in rs:
+        iv, mark = policy(tt, dd, cc, nt, nd)
         md.append(
-            f"| {an} | {cell} | {n or ''} | {tt} | {dd} | {r(rr)} | {ci(cc)} | {'★' if sel else ''} |"
+            f"| {an} | {cell} | {n or ''} | {tt} | {dd} | {r(rr)} | {iv}{mark} | {'★' if sel else ''} |"
         )
     md.append("")
-    md.append(f"Cells: {len(rs)}.")
+    md.append(
+        f"Cells: {len(rs)}. Interval policy as in the paper: bootstrap over depositors (as stored) when both "
+        "sides have at least five leads; ᵉ exact (Clopper–Pearson, mapped to R) otherwise; ⁿ fewer than five "
+        "leads and the analysis did not store withdrawal counts, so no interval is given. Not tabulated here "
+        "but documented in docs/EVALUATION.md: the priority-tip rarity rules, the gas-price band variants and "
+        "the count-match/strong conditional (k2_conditional.json)."
+    )
     open(a.out, "w", encoding="utf-8").write("\n".join(md))
-    print(a.out, len(rs), "cells;", sum(x[-1] for x in rs), "selected")
+    print(a.out, len(rs), "cells;", sum(bool(x[7]) for x in rs), "selected")
 
 
 if __name__ == "__main__":
