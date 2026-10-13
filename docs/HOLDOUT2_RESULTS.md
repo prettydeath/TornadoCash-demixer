@@ -68,6 +68,15 @@ None from the registered procedure. As registered, the rule is not revised on th
   most 5, 3 / 0, 1 / 0, 3 / 0 and 2 / 0. A cap removes most false leads but also most true ones;
   this is a hypothesis for a future registered test, not a result.
 
+- **Same-time decoy** (`tools/placebo_sametime.py`: real windows, nearest-denomination ETH pool the
+  depositor never used; 547 of H1 and 559 of H2 depositors, the rest had used every ETH pool).
+  30 days, target / decoy, R: early direct link 72 / 6, 0.09 (0.03–0.17) and 71 / 6, 0.09
+  (0.03–0.18); labelled shared deposit 12 / 1, 0.09 and 18 / 3, 0.19 (0.04–0.63); late direct link
+  41 / 8, 0.21 (0.08–0.42) and 30 / 16, 0.59 (0.27–1.13); class moderate 80 / 7, 0.09 (0.03–0.17)
+  and 93 / 11, 0.13 (0.05–0.23); per-wallet decoy rate 1.3 % (upper 2.6 %) and 1.8 % (3.3 %).
+  The two decoys agree on the early direct link and the per-wallet rate and disagree on the shared
+  deposit and the late direct link.
+
 ## Reproduce
 
 ```bash
@@ -77,4 +86,5 @@ python tools/holdout_report.py .cache/labels/placebo/holdout2
 python tools/holdout_report.py .cache/labels/placebo/polygon2
 python tools/decoy_rates.py holdout2 polygon2
 python tools/shared_deposit_cap.py holdout1 polygon1 holdout2 polygon2
+python tools/placebo_sametime.py holdout2 && python tools/holdout_report.py .cache/labels/placebo/holdout2_st
 ```
