@@ -42,7 +42,7 @@ traces users leave around it.
   among direct link, shared exchange deposit address and early multi-pool
   profile), `moderate` (a lead signal from one source), `weak` (amount+timing
   and/or gas price only, which never raise the band — chance-level on
-  real depositors, see the placebo test in [EVALUATION.md](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/EVALUATION.md)), with the evidence behind it: every family, whether it holds,
+  real depositors, see the [placebo test in EVALUATION.md](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/EVALUATION.md) for details), with the evidence behind it: every family, whether it holds,
   and the numbers (share of the recipient field with the same count, `disc`,
   gas price). Candidates are ordered by band, then by an uncalibrated noisy-OR
   score taken across evidence families (within a family only the strongest
@@ -102,11 +102,11 @@ The method, thresholds and the reasoning behind them are in
 | `tools/verify_pools.py` | on-chain verification of registry entries |
 | `tools/calibrate.py` | precision/recall against confirmed cases (needs private data) |
 | `tools/sensitivity.py` | ranking stability of saved results under perturbed weights |
-| `tools/simulate.py` | synthetic benchmark: ablation, negative controls, counter-measures ([results](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/EVALUATION.md)) |
+| `tools/simulate.py` | synthetic benchmark: ablation, negative controls, counter-measures — [results](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/EVALUATION.md) |
 | `tools/real_cases.py` | the method on two public laundering cases (KuCoin, Harmony) |
-| `tools/ens_labels.py`, `tools/evaluate_labels.py` | an ENS-labelled set of depositor/exit pairs and the evaluation on it ([results](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/EVALUATION.md#a-labelled-set-from-ens)) |
+| `tools/ens_labels.py`, `tools/evaluate_labels.py` | an ENS-labelled set of depositor/exit pairs and the evaluation on it — [results](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/EVALUATION.md#a-labelled-set-from-ens) |
 | `tools/wang_baseline.py` | the ENS set scored under the Wang et al. (2023) protocol, with their H2/H3/H5 re-implemented |
-| `tools/placebo_eval.py`, `tools/placebo_windows.py` | placebo (target-decoy) test on random real depositors, per evidence family and exit window ([results](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/EVALUATION.md#placebo-test-on-real-depositors)) |
+| `tools/placebo_eval.py`, `tools/placebo_windows.py` | placebo (target-decoy) test on random real depositors, per evidence family and exit window — [results](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/EVALUATION.md#placebo-test-on-real-depositors) |
 | `tools/placebo_dar.py`, `tools/placebo_dar_universe.py` | placebo test of the shared exchange-deposit-address signal on the cached runs and on 1,000 depositors read from the ENS universe |
 | `tools/review_sample.py` | a blinded manual-review sheet of leads and hidden controls, and its scoring |
 
@@ -419,7 +419,7 @@ The method on both public cases, with the numbers behind each claim, is in
   direct link withdrawn later than 72 hours is chance-level (8 against 13 on 302
   depositors, against 26 to 1 within 72 hours), so since 2.17 it is context; and so did a multi-pool profile of 10+ notes within 72 hours
   (318 against 34 on 4,194 such depositors); only these make a `moderate` or `strong`
-  band, and `strong` needs two independent ones ([details](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/EVALUATION.md#placebo-test-on-real-depositors)).
+  band, and `strong` needs two independent ones. Details: [EVALUATION.md](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/EVALUATION.md#placebo-test-on-real-depositors)
 - The 2.17 rule was then frozen, pre-registered and run on new depositors (591 on
   Ethereum, 300 on Polygon): early direct links 84 against 2 and 59 against 1,
   `moderate` within 72 hours 103 against 7 and 71 against 1, count match at chance
@@ -432,7 +432,7 @@ The method on both public cases, with the numbers behind each claim, is in
   which the label sees as well; without that signal it found two
   (through a shared exchange deposit address, again an address link).
   Most labelled depositors made single-note deposits, which the count match
-  cannot narrow ([details](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/EVALUATION.md#a-labelled-set-from-ens)).
+  cannot narrow. Details: [EVALUATION.md](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/EVALUATION.md#a-labelled-set-from-ens)
 - The discrimination gate (`disc >= 0.5`) cuts the count matches about twelvefold
   but does not remove chance ones: in the placebo test the chance share stays near
   1 in every discrimination bin (717 against 591 gated in, 72 hours). A count match
@@ -446,7 +446,7 @@ The method on both public cases, with the numbers behind each claim, is in
   addresses that happen to share the voucher count, never a `moderate` or `strong` one.
   On the public KuCoin and Harmony laundering cases the count match found no exit
   (every exit collected notes of several deposits); in KuCoin the linked withdrawal
-  sender found 6 of the attacker's 35 exits in one depositor's window; since 2.19 these are context, not leads ([docs/EVALUATION.md](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/EVALUATION.md)).
+  sender found 6 of the attacker's 35 exits in one depositor's window; since 2.19 these are context, not leads. Details: [docs/EVALUATION.md](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/EVALUATION.md)
 - Only Tornado Cash pools in the registry are covered. Bridges, other mixers and
   cross-chain hops are not followed; `cluster` follows one hop only, and `trace`
   follows funds by FIFO attribution, a convention that does not hold when an
