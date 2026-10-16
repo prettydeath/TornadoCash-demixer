@@ -424,8 +424,8 @@ The method on both public cases, with the numbers behind each claim, is in
   Ethereum, 300 on Polygon): early direct links 84 against 2 and 59 against 1,
   `moderate` within 72 hours 103 against 7 and 71 against 1, count match at chance
   level on both chains. A labelled shared deposit on Polygon (5 against 0) was too
-  rare to beat chance there; `strong` stayed rare (3 against 0)
-  ([details](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/HOLDOUT_RESULTS.md)).
+  rare to beat chance there; `strong` stayed rare (3 against 0). Details:
+  [HOLDOUT_RESULTS.md](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/HOLDOUT_RESULTS.md)
 - On 31 depositor/exit pairs labelled through ENS (2019-2026), demix found 16 of
   the 21 pairs inside its window (measured before 2.17, when a direct link counted
   at any delay), all through a direct transaction between the two addresses,
