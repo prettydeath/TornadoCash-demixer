@@ -19,7 +19,12 @@ from .errors import ApiError, ApiKeyError, BlockLookupError
 from .etherscan import EtherscanClient
 from .events import fetch_withdrawals
 from .groups import exit_groups
-from .heuristics import apply_heuristics, count_is_evidence, ranked_candidates
+from .heuristics import (
+    apply_heuristics,
+    count_in_voucher_order,
+    count_is_evidence,
+    ranked_candidates,
+)
 from .networks import Network, load_networks
 from .pools import Pool
 from .rpc import make_contract_check, make_gas_price_gate
@@ -766,6 +771,7 @@ def run_demix(
             _log("  [{}] SKIPPED - {}".format(pool_key, exc))
             unresolved.append({"pool_key": pool_key, "reason": str(exc)})
 
+    order_params = {"window_days": window_days, "exit_window_hours": exit_window_hours}
     # Candidates: recipients whose count equals a voucher size. The gate is
     # applied once, here, so every consumer sees the same candidate set.
     for pool_key, res in results.items():
@@ -774,9 +780,21 @@ def run_demix(
         # sum of the vouchers, not as any single voucher size.
         target_counts = sorted(set(sizes) | ({sum(sizes)} if len(sizes) > 1 else set()))
         res["target_counts"] = target_counts
+        # A count only fits a voucher when the withdrawals fall in that voucher's
+        # own window (a pool's windows are merged into one field).
         res["candidates_by_count"] = {
             n: (
-                [addr for addr, c in res["counts"].items() if c == n]
+                [
+                    addr
+                    for addr, c in res["counts"].items()
+                    if c == n
+                    and count_in_voucher_order(
+                        vouchers,
+                        order_params,
+                        pool_key,
+                        [r["ts"] for r in res["detail"].get(addr, [])],
+                    )
+                ]
                 if count_is_evidence(res, n)
                 else []
             )
@@ -797,6 +815,8 @@ def run_demix(
             "currency": network.currency,
             "exit_window_hours": exit_window_hours,
             "deposit_shift_seconds": deposit_shift_seconds,
+            # Count matches are checked against each voucher's own window.
+            "voucher_order": True,
         },
         "deposits": deposits,
         "vouchers": vouchers,

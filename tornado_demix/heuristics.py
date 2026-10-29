@@ -78,6 +78,52 @@ def count_is_evidence(res: dict, hits: int) -> bool:
     return field >= MIN_FIELD_SIZE and count_discrimination(res, hits) >= MIN_COUNT_DISCRIMINATION
 
 
+def voucher_forward_seconds(params: dict) -> float:
+    """Length of a voucher's search window after its last deposit, in seconds."""
+    hours = params.get("exit_window_hours")
+    if hours and hours > 0:
+        return hours * 3600
+    return params.get("window_days", 30) * 86400
+
+
+def count_in_voucher_order(vouchers: list[dict], params: dict, pool_key: str, times: list) -> bool:
+    """True when withdrawals at ``times`` can be the notes of a voucher by time.
+
+    A pool's windows are merged into one field, so a recipient's count is taken
+    over all of them. A count equal to a voucher's size only fits that voucher
+    when every withdrawal falls inside that voucher's own window; a count equal
+    to the sum of the pool's vouchers fits when no withdrawal precedes the
+    pool's first deposit. Without this, withdrawals made before a voucher's
+    deposits could match it.
+    """
+    own = [v for v in vouchers if v.get("pool_key") == pool_key]
+    if not own or not times:
+        return True
+    hits, forward = len(times), voucher_forward_seconds(params)
+    for v in own:
+        if v["count"] == hits and all(v["first_ts"] <= t <= v["last_ts"] + forward for t in times):
+            return True
+    return (
+        len(own) > 1
+        and hits == sum(v["count"] for v in own)
+        and min(times) >= min(v["first_ts"] for v in own)
+    )
+
+
+def count_match_in_order(data: dict, pool_key: str, recs: list[dict]) -> bool:
+    """:func:`count_in_voucher_order` for one recipient's withdrawals.
+
+    Applied only to runs made with the check (``params.voucher_order``), so cached
+    runs from the evaluation re-score as they were measured.
+    """
+    params = data.get("params", {})
+    if not params.get("voucher_order"):
+        return True
+    return count_in_voucher_order(
+        data.get("vouchers", []), params, pool_key, [r["ts"] for r in recs]
+    )
+
+
 def wallet_profile(data: dict) -> dict[str, int]:
     """Notes deposited per pool over all of the wallet's deposits: {pool_key: count}."""
     return dict(Counter(d["pool_key"] for d in data.get("deposits", []) if d.get("pool_key")))
@@ -169,7 +215,11 @@ def apply_heuristics(
             hits = res["counts"][addr]
 
             discrimination = count_discrimination(res, hits)
-            if hits in target_counts and count_is_evidence(res, hits):
+            if (
+                hits in target_counts
+                and count_is_evidence(res, hits)
+                and count_match_in_order(data, pool_key, recs)
+            ):
                 sig.add("count_match")
             discriminations[(pool_key, addr)] = discrimination
             if any(r.get("self_relayed") for r in recs):
@@ -492,6 +542,11 @@ def candidate_evidence(data: dict, pool_key: str, address: str) -> list[dict]:
             count_detail += f"; first withdrawal {delay:.0f} h after the last deposit"
         if field < MIN_FIELD_SIZE:
             count_detail += f"; a field of {field} is too small to count (needs {MIN_FIELD_SIZE})"
+        if not count_match_in_order(data, pool_key, recs):
+            count_detail += (
+                "; not counted: the withdrawals fall outside the window of every voucher of "
+                "this size (some precede its deposits)"
+            )
     else:
         count_detail = (
             f"{hits} withdrawal(s); voucher size(s) {', '.join(map(str, targets)) or '-'}"
