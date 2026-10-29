@@ -36,6 +36,10 @@ from .placebo import BANDS, run_placebo
 from .relayer import (
     analyze_relayers,
     collect_withdrawals,
+    fee_key,
+    fee_label,
+    fingerprint_context,
+    record_fee_profiles,
     self_relayed_candidates,
     verify_broadcaster,
 )
@@ -307,6 +311,9 @@ def cmd_demix(args: argparse.Namespace) -> None:
         relayer_stats = analyze_relayers(withdrawals)
         leads = self_relayed_candidates(data)
         verify_broadcaster(client, leads)
+        context = fingerprint_context(data, leads)
+        verify_broadcaster(client, context)
+        fingerprints = record_fee_profiles(data, leads + context)
         print(
             f"\n[relayers] {relayer_stats['unique_relayers']} relayer(s) | "
             f"{len(relayer_stats['self_relayed'])} self-relayed withdrawal(s)"
@@ -320,7 +327,19 @@ def cmd_demix(args: argparse.Namespace) -> None:
                     "other": "broadcast by {}".format(lead.get("broadcaster")),
                     "unverified": "broadcaster NOT verified",
                 }[status]
-                print(f"     {lead['to']}  {lead['pool_key']}  {lead['tx_hash']}  [{note}]")
+                fee = fee_label(fee_key(lead.get("fee_profile")))
+                print(
+                    f"     {lead['to']}  {lead['pool_key']}  {lead['tx_hash']}  [{note}; fee {fee}]"
+                )
+            shared = [g for g in fingerprints if g["shared"]]
+            if shared:
+                print("  SHARED FEE FINGERPRINTS (one tool or operator? context, not scored):")
+                for g in shared:
+                    print(
+                        f"     {g['label']}: {g['withdrawals']} withdrawal(s) to {len(g['recipients'])} recipients"
+                    )
+                    for r in g["recipients"]:
+                        print(f"        {r}")
 
     if args.out_dir:
         files = write_demix_csv(data, args.out_dir, net)

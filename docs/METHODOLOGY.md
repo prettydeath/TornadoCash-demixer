@@ -104,6 +104,23 @@ exit candidate.
   | `unverified` | the provider could not serve the transaction. **Not** a confirmation |
 * **Relayer concentration**: a relayer serving few distinct recipients narrows
   the candidate set; a heavily used one does not.
+* **Fee fingerprint (since 2.20, context only).** The transaction read to verify
+  the broadcaster also carries its fee settings: transaction type, priority fee
+  (`maxPriorityFeePerGas`), max fee and gas limit. These are chosen by the sender's
+  wallet or script. Each self-relayed lead reports them, and leads to *different*
+  recipients with the same priority fee (or legacy gas price) and the same gas
+  limit to the nearest 1,000 are listed as a **shared fee fingerprint** (`fee_profiles`
+  and `fee_fingerprints` in the JSON export). A shared fingerprint hints at one tool
+  or operator behind several exits; many users share wallet defaults, so it is
+  **context: it never admits a candidate, never enters the score and never raises
+  the band**. The leads' own settings cost no extra explorer calls; to compare them,
+  up to three self-relayed withdrawals of each other recipient with two or more
+  notes in the windows are read as well (larger pools first, at most 150 lookups),
+  and only fingerprints that include a lead are listed. Example (case 0x303d0a, 2026): the
+  eight self-relayed exits to 0xd71dd9b6e634412713c47fe7ae02c628e338c384 all used a
+  3 gwei priority fee and gas limits 428,274–428,318, the same as two exits to
+  0x0d7c00bfec641157efb7edd4121e52dd917ac142, while 0xd8b356356d7b143d7ece9f5876fe4b954e93b745
+  used 0.15 gwei and ~535,400.
 
 > Note: this toolkit deliberately does **not** report "nullifier double-spends".
 > The pool contract enforces nullifier uniqueness at the consensus level, so a
@@ -153,6 +170,19 @@ The count is compared with each voucher's size and, when a pool holds several
 vouchers, with their sum: an address that collected every note of two sessions in
 one pool (2 + 3 = 5 withdrawals) is a candidate, and its evidence line says "all 5
 notes of the pool's vouchers". The same gate applies.
+
+**Voucher order (since 2.20).** A pool's windows are searched together, so a
+recipient's count is taken over all of them. A count equal to a voucher's size is
+only a count match when every one of those withdrawals falls inside *that*
+voucher's own window (first deposit to last deposit plus the window); a count equal
+to the sum of the pool's vouchers needs no withdrawal before the pool's first
+deposit. Before 2.20 a recipient with seven withdrawals in June could match a
+seven-note voucher deposited in August, because a one-note June voucher of the same
+pool had opened a window then. Runs record `params.voucher_order = true`; cached
+runs without the flag (the evaluation and placebo runs in
+[EVALUATION.md](EVALUATION.md)) are re-scored unchanged, so the published numbers
+stay reproducible. The evidence line of a voucher-sized count that fails the check
+says "not counted".
 
 ## Search windows
 

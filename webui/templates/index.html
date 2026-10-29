@@ -317,8 +317,8 @@
                 controlled. <b>unverified</b> means the broadcaster was not checked, not that it was
                 confirmed.</div>
               <table>
-                <colgroup><col style="width:28%"><col style="width:8%"><col style="width:14%"><col style="width:24%"><col></colgroup>
-                <tr><th>Recipient</th><th>Pool</th><th>Time</th><th>Broadcast by</th><th>Withdrawal tx</th></tr>
+                <colgroup><col style="width:24%"><col style="width:7%"><col style="width:12%"><col style="width:17%"><col style="width:14%"><col></colgroup>
+                <tr><th>Recipient</th><th>Pool</th><th>Time</th><th>Broadcast by</th><th>Fee settings</th><th>Withdrawal tx</th></tr>
                 {% for l in b.leads[:8] %}
                 <tr>
                   <td class="mono flag"><a href="{{ l.url }}" target="_blank" rel="noopener">{{ l.address }}</a></td>
@@ -328,7 +328,23 @@
                     {%- elif l.broadcaster_status == "other" %}{{ l.broadcaster }}
                     {%- else %}<span style="opacity:.6">unverified</span>{% endif -%}
                   </td>
+                  <td class="mono">{{ l.fee }}</td>
                   <td class="mono"><a href="{{ l.tx_url }}" target="_blank" rel="noopener">{{ l.tx }}</a></td>
+                </tr>
+                {% endfor %}
+              </table>
+            {% endif %}
+            {% if b.fingerprints %}
+              <div class="note" style="margin:.7rem 0 .3rem;"><span class="flag">Shared fee fingerprints</span> —
+                self-relayed withdrawals to different recipients sent with identical fee settings
+                (priority fee and gas-limit range). A hint at one tool or operator; many users share
+                wallet defaults, so it is context, not scored.</div>
+              <table>
+                <tr><th>Fee settings</th><th>Withdrawals</th><th>Recipients</th></tr>
+                {% for g in b.fingerprints %}
+                <tr>
+                  <td class="mono">{{ g.label }}</td><td class="num">{{ g.withdrawals }}</td>
+                  <td class="mono">{% for r in g.links %}<a href="{{ r.url }}" target="_blank" rel="noopener">{{ r.address }}</a>{% if not loop.last %}<br>{% endif %}{% endfor %}</td>
                 </tr>
                 {% endfor %}
               </table>

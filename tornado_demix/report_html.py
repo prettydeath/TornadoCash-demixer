@@ -19,7 +19,13 @@ from .heuristics import (
 from .multi import SYNC_MAX_SPAN_HOURS
 from .networks import Network
 from .placebo import BANDS
-from .relayer import analyze_relayers, collect_withdrawals, self_relayed_candidates
+from .relayer import (
+    analyze_relayers,
+    collect_withdrawals,
+    fee_key,
+    fee_label,
+    self_relayed_candidates,
+)
 from .report_csv import (
     _fmt_hours,
     _ts,
@@ -756,11 +762,12 @@ def build_html_report(
                 "is read from the transaction where the data provider allows; "
                 "<b>unverified</b> means it was not checked, not that it was "
                 "confirmed.</div>"
-                '<table><colgroup><col style="width:28%"><col style="width:8%">'
-                '<col style="width:14%"><col style="width:24%"><col></colgroup>'
+                '<table><colgroup><col style="width:24%"><col style="width:7%">'
+                '<col style="width:12%"><col style="width:17%"><col style="width:14%"><col></colgroup>'
                 "<tr><th>Recipient</th><th>Pool</th><th>Time (UTC)</th>"
-                "<th>Broadcast by</th><th>Withdrawal tx</th></tr>"
+                "<th>Broadcast by</th><th>Fee settings</th><th>Withdrawal tx</th></tr>"
             )
+            profiles = data.get("fee_profiles", {})
             for lead in leads[:40]:
                 status = lead.get("broadcaster_status", "unverified")
                 if status == "self":
@@ -773,9 +780,28 @@ def build_html_report(
                     f'<tr class="lead"><td class="mono flag wrap">{_addr_link(network, lead["to"])}</td>'
                     f'<td class="num">{_e(lead["pool_key"])}</td><td class="num">{_ts(lead["ts"])}</td>'
                     f'<td class="mono wrap">{who}</td>'
+                    f'<td class="mono wrap">{_e(fee_label(fee_key(profiles.get(lead["tx_hash"]))))}</td>'
                     f'<td class="mono wrap">{_tx_link(network, lead["tx_hash"])}</td></tr>'
                 )
             p.append("</table>")
+            shared = [g for g in data.get("fee_fingerprints", []) if g.get("shared")]
+            if shared:
+                p.append(
+                    "<h3>Shared fee fingerprints</h3>"
+                    '<div class="meta">Self-relayed withdrawals to different recipients sent '
+                    "with identical fee settings (priority fee and gas-limit range). This "
+                    "hints at one tool or operator; many users share wallet defaults, so it "
+                    "is <b>context, not scored</b>.</div>"
+                    "<table><tr><th>Fee settings</th><th>Withdrawals</th><th>Recipients</th></tr>"
+                )
+                for g in shared:
+                    recips = "<br>".join(_addr_link(network, r) for r in g["recipients"])
+                    p.append(
+                        f'<tr><td class="mono">{_e(g["label"])}</td>'
+                        f'<td class="num">{g["withdrawals"]}</td>'
+                        f'<td class="mono wrap">{recips}</td></tr>'
+                    )
+                p.append("</table>")
 
     p.append('<h2>Summary<span class="rule"></span></h2>')
     p.append(

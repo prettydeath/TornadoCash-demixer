@@ -411,15 +411,23 @@ class EtherscanClient:
         proxy module (the node in ``rpc_url`` is tried next), so the caller
         records the lead as unverified rather than failing the run.
         """
+        result = self.tx_info(tx_hash)
+        if isinstance(result, dict):
+            sender = result.get("from")
+            return sender.lower() if sender else None
+        return None
+
+    def tx_info(self, tx_hash: str) -> dict | None:
+        """Return the transaction object for ``tx_hash`` (sender, fees, gas limit), or None.
+
+        Tries the explorer's proxy module first, then the node in ``rpc_url``.
+        """
         result = self._proxy(
             {"module": "proxy", "action": "eth_getTransactionByHash", "txhash": tx_hash}
         )
         if not isinstance(result, dict):
             result = self._rpc("eth_getTransactionByHash", [tx_hash])
-        if isinstance(result, dict):
-            sender = result.get("from")
-            return sender.lower() if sender else None
-        return None
+        return result if isinstance(result, dict) else None
 
     def deposit_emitters(self, tx_hash: str) -> set[str] | None:
         """Addresses that emitted a Tornado Deposit event in the transaction; None when

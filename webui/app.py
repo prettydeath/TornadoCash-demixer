@@ -55,6 +55,10 @@ from tornado_demix.placebo import BANDS, run_placebo  # noqa: E402
 from tornado_demix.relayer import (  # noqa: E402
     analyze_relayers,
     collect_withdrawals,
+    fee_key,
+    fee_label,
+    fingerprint_context,
+    record_fee_profiles,
     self_relayed_candidates,
     verify_broadcaster,
 )
@@ -296,7 +300,7 @@ def _run_demix(
                     "candidates": candidates,
                 }
             )
-        relayers, leads = None, []
+        relayers, leads, fingerprints = None, [], []
         if mode == "events":
             stats = analyze_relayers(collect_withdrawals(data))
             relayers = {
@@ -306,6 +310,13 @@ def _run_demix(
             }
             found = self_relayed_candidates(data)
             verify_broadcaster(client, found)
+            context = fingerprint_context(data, found)
+            verify_broadcaster(client, context)
+            fingerprints = [
+                dict(g, links=[{"address": r, "url": net.addr_url(r)} for r in g["recipients"]])
+                for g in record_fee_profiles(data, found + context)
+                if g["shared"]
+            ]
             leads = [
                 {
                     "address": lead["to"],
@@ -316,6 +327,7 @@ def _run_demix(
                     "broadcaster": lead.get("broadcaster") or "",
                     "broadcaster_status": lead.get("broadcaster_status", "unverified"),
                     "time": _fmt_ts(lead["ts"]),
+                    "fee": fee_label(fee_key(lead.get("fee_profile"))),
                 }
                 for lead in found
             ]
@@ -370,6 +382,7 @@ def _run_demix(
                 "denoms": denoms,
                 "relayers": relayers,
                 "leads": leads,
+                "fingerprints": fingerprints,
                 "ranked": ranked,
                 "show_attr": show_attr,
                 "methods": methods,
