@@ -18,7 +18,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        # ubuntu-latest (26.04) ships no Python 3.9 build; 24.04 still does.
+        os: [ubuntu-24.04, windows-latest]
         python-version: ["3.9", "3.13"]
     steps:
       - uses: actions/checkout@v5
