@@ -104,7 +104,7 @@ exit candidate.
   | `unverified` | the provider could not serve the transaction. **Not** a confirmation |
 * **Relayer concentration**: a relayer serving few distinct recipients narrows
   the candidate set; a heavily used one does not.
-* **Fee fingerprint (after 2.19.0, context only).** The transaction read to verify
+* **Fee fingerprint (since 2.20.0, context only).** The transaction read to verify
   the broadcaster also carries its fee settings: transaction type, priority fee
   (`maxPriorityFeePerGas`), max fee and gas limit. These are chosen by the sender's
   wallet or script. Each self-relayed lead reports them, and leads to *different*
@@ -171,7 +171,7 @@ vouchers, with their sum: an address that collected every note of two sessions i
 one pool (2 + 3 = 5 withdrawals) is a candidate, and its evidence line says "all 5
 notes of the pool's vouchers". The same gate applies.
 
-**Voucher order (after 2.19.0).** A pool's windows are searched together, so a
+**Voucher order (since 2.20.0).** A pool's windows are searched together, so a
 recipient's count is taken over all of them. A count equal to a voucher's size is
 only a count match when every one of those withdrawals falls inside *that*
 voucher's own window (first deposit to last deposit plus the window); a count equal
