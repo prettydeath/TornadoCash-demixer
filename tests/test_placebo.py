@@ -252,3 +252,88 @@ def test_web_placebo_view_and_template(monkeypatch):
 
     blocks, _t, _r = webapp._run_demix(object(), [fx.WALLET], fx.network(), 30, "transfers")
     assert blocks[0]["placebo"] is None
+
+
+# direct-link observability (power check)
+
+BLIND = {"detectable": False, "reason": "no_counterparty", "recipient": None, "pool_key": None}
+SEEN = {"detectable": True, "reason": "detected", "recipient": "0xc", "pool_key": "1 ETH"}
+
+
+def test_summarize_marks_a_wallet_whose_direct_link_cannot_be_observed():
+    out = summarize(_side([_row("moderate")], 100), _side([], 100), direct_link=BLIND)
+    assert out["decoy_detectable"] is False and out["direct_link_observable"] is False
+    assert out["direct_link_reason"] == "no_counterparty"
+    assert "decoy window cannot show a planted lead" in out["direct_link_verdict"]
+    assert "no chance estimate for this wallet" in out["direct_link_verdict"]
+    # counts stay (early-profile leads are reported normally); the verdict carries the caveat
+    assert out["target"]["moderate"] == 1
+    assert "no direct link to a third-party address" in out["verdicts"]["moderate"]
+    assert "no direct link to a third-party address" in out["verdicts"]["strong"]
+    assert "no direct link to a third-party address" not in out["verdicts"]["weak"]
+    assert "does occur" in out["direct_link_verdict"]
+
+
+def test_summarize_with_an_observable_or_unchecked_wallet_has_no_direct_link_verdict():
+    seen = summarize(_side([], 10), _side([], 10), direct_link=SEEN)
+    assert seen["decoy_detectable"] is True and seen["direct_link_verdict"] is None
+    unchecked = summarize(_side([], 10), _side([], 10))
+    assert unchecked["decoy_detectable"] is None and unchecked["direct_link_verdict"] is None
+
+
+def test_run_placebo_checks_detectability_on_the_decoy_run(monkeypatch):
+    decoy = {"deposits": [], "denoms": {}, "params": {}, "counterparty_addresses": ["0xc"]}
+    monkeypatch.setattr(placebo, "run_demix", lambda *a, **k: decoy)
+    seen = {}
+
+    def fake(data, wallet, counterparties=None, is_contract=None, **kw):
+        seen.update(wallet=wallet, parties=set(counterparties), has_check=is_contract is not None)
+        return BLIND
+
+    monkeypatch.setattr(placebo, "window_detectability", fake)
+    out = run_placebo(None, "0xw", {"deposits": []}, network=fx.network())
+    assert seen["wallet"] == "0xw" and seen["parties"] == {"0xc"}
+    assert out["decoy_detectable"] is False
+
+
+def test_blind_wallet_is_shown_in_cli_html_and_web():
+    pb = summarize(_side([_row("moderate", fx.ALICE)], 100), _side([], 100), direct_link=BLIND)
+    data = fx.two_pool_result()
+    data["placebo"] = pb
+    assert "cannot show a planted lead" in build_html_report(data, fx.network())
+    assert "cannot show a planted lead" in webapp._placebo_view(pb, fx.network())["direct_link"]
+
+
+def test_blind_wallet_verdict_is_printed_by_the_cli(monkeypatch, stubbed_cli, capsys):
+    pb = summarize(_side([], 100), _side([], 100), direct_link=BLIND)
+    monkeypatch.setattr(cli, "run_placebo", lambda *a, **kw: pb)
+    cli.cmd_demix(_cli_args(stubbed_cli))
+    assert "Direct links: decoy window cannot show a planted lead" in capsys.readouterr().out
+
+
+def test_no_voucher_has_its_own_verdict():
+    nv = {"detectable": False, "reason": "no_voucher", "recipient": None, "pool_key": None}
+    out = summarize(_side([], 10), _side([], 10), direct_link=nv)
+    assert "no deposit" in out["direct_link_verdict"]
+    assert "not rated moderate" not in out["direct_link_verdict"]
+
+
+def test_blind_suffix_only_for_no_counterparty():
+    for reason in ("missed", "no_voucher", "contract_unknown"):
+        dl = {"detectable": False, "reason": reason, "recipient": None, "pool_key": None}
+        out = summarize(_side([_row("moderate")], 10), _side([], 10), direct_link=dl)
+        assert "no direct link to a third-party address" not in out["verdicts"]["moderate"]
+    out = summarize(_side([_row("moderate")], 10), _side([], 10), direct_link=BLIND)
+    assert "no direct link to a third-party address" in out["verdicts"]["moderate"]
+
+
+def test_run_placebo_without_a_network_is_not_detectable_contract_unknown(monkeypatch):
+    decoy = {"deposits": [], "denoms": {}, "params": {}, "counterparty_addresses": ["0xc"]}
+    monkeypatch.setattr(placebo, "run_demix", lambda *a, **k: decoy)
+    monkeypatch.setattr(
+        placebo, "window_detectability", lambda *a, **k: pytest.fail("must not be asked")
+    )
+    out = run_placebo(None, "0xw", {"deposits": []}, network=None)
+    assert out["decoy_detectable"] is False
+    assert out["direct_link_reason"] == "contract_unknown"
+    assert "contract status unknown" in out["direct_link_verdict"]

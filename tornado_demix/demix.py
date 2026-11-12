@@ -27,6 +27,7 @@ from .heuristics import (
 )
 from .networks import Network, load_networks
 from .pools import Pool
+from .root_exclusion import apply_root_check
 from .rpc import make_contract_check, make_gas_price_gate
 
 # Direct counterparties whose own transactions are read for Tornado withdrawal
@@ -664,6 +665,53 @@ def analyze_denom_events(
     }
 
 
+def _set_count_candidates(res, vouchers, order_params, pool_key):
+    """Set ``target_counts`` and ``candidates_by_count`` of one pool result."""
+    sizes = [v["count"] for v in vouchers if v["pool_key"] == pool_key]
+    # Several sessions into one pool consolidated to one address show up as the
+    # sum of the vouchers, not as any single voucher size.
+    target_counts = sorted(set(sizes) | ({sum(sizes)} if len(sizes) > 1 else set()))
+    res["target_counts"] = target_counts
+    # A count only fits a voucher when the withdrawals fall in that voucher's
+    # own window (a pool's windows are merged into one field).
+    res["candidates_by_count"] = {
+        n: (
+            [
+                addr
+                for addr, c in res["counts"].items()
+                if c == n
+                and count_in_voucher_order(
+                    vouchers,
+                    order_params,
+                    pool_key,
+                    [r["ts"] for r in res["detail"].get(addr, [])],
+                )
+            ]
+            if count_is_evidence(res, n)
+            else []
+        )
+        for n in target_counts
+    }
+
+
+def score_collected(result: dict, counterparties: set[str], heuristics_args: dict | None = None):
+    """Re-score an already collected run: the count-candidate gate, then every signal.
+
+    Works on the data alone (no explorer calls), so it is the point where a run whose
+    withdrawals changed (root exclusion, a planted lead in tools/power) is recomputed
+    by the same code that scored it. ``heuristics_args`` are the keyword arguments
+    of :func:`apply_heuristics` (gas gate, contract check, senders, shared deposits).
+    """
+    params = result.get("params", {})
+    order_params = {
+        "window_days": params.get("window_days", 30),
+        "exit_window_hours": params.get("exit_window_hours"),
+    }
+    for pool_key, res in result.get("denoms", {}).items():
+        _set_count_candidates(res, result.get("vouchers", []), order_params, pool_key)
+    return apply_heuristics(result, counterparties, **(heuristics_args or {}))
+
+
 def run_demix(
     client: EtherscanClient,
     wallet: str,
@@ -679,6 +727,8 @@ def run_demix(
     labels: dict[str, dict] | None = None,
     deposit_shift_seconds: int = 0,
     deposit_addresses: bool = True,
+    root_check: bool = False,
+    root_cache_dir: str | None = None,
 ) -> dict:
     """Full single-wallet demix. Returns a structured result dict.
 
@@ -693,6 +743,11 @@ def run_demix(
     ``deposit_addresses`` switches the exchange-deposit-address lookup on or off (it
     costs up to ~50 explorer calls, see :mod:`tornado_demix.deposit_addresses`);
     off, ``result['deposit_addresses']`` is empty and the signal never fires.
+    ``root_check`` reads the Merkle root of each candidate withdrawal and drops those
+    whose root predates every one of the wallet's notes in the pool (see
+    :mod:`tornado_demix.root_exclusion`); off by default. ``root_cache_dir`` holds the
+    per-pool root indexes (default ``.cache/merkle``; the first build of a large pool
+    takes about half an hour).
     """
     network = network or _default_network()
     wallet = wallet.lower()
@@ -775,34 +830,12 @@ def run_demix(
     # Candidates: recipients whose count equals a voucher size. The gate is
     # applied once, here, so every consumer sees the same candidate set.
     for pool_key, res in results.items():
-        sizes = [v["count"] for v in vouchers if v["pool_key"] == pool_key]
-        # Several sessions into one pool consolidated to one address show up as the
-        # sum of the vouchers, not as any single voucher size.
-        target_counts = sorted(set(sizes) | ({sum(sizes)} if len(sizes) > 1 else set()))
-        res["target_counts"] = target_counts
-        # A count only fits a voucher when the withdrawals fall in that voucher's
-        # own window (a pool's windows are merged into one field).
-        res["candidates_by_count"] = {
-            n: (
-                [
-                    addr
-                    for addr, c in res["counts"].items()
-                    if c == n
-                    and count_in_voucher_order(
-                        vouchers,
-                        order_params,
-                        pool_key,
-                        [r["ts"] for r in res["detail"].get(addr, [])],
-                    )
-                ]
-                if count_is_evidence(res, n)
-                else []
-            )
-            for n in target_counts
-        }
+        _set_count_candidates(res, vouchers, order_params, pool_key)
 
     result = {
         "wallet": wallet,
+        # Read by the power check (tornado_demix.power) to plant a link in a decoy run.
+        "counterparty_addresses": sorted(counterparties),
         "funders": immediate_funders(
             wallet, all_txs, min(d["ts"] for d in deposits), [p.address for p in network.pools]
         ),
@@ -851,16 +884,21 @@ def run_demix(
                 evidence_only=False,
             ).items()
         }
-    apply_heuristics(
-        result,
-        counterparties,
-        gas_gate=make_gas_price_gate(network.rpc_url, log=_log),
-        is_contract=is_contract,
-        withdrawal_senders=withdrawal_senders(
+    heuristics_args = {
+        "gas_gate": make_gas_price_gate(network.rpc_url, log=_log),
+        "is_contract": is_contract,
+        "withdrawal_senders": withdrawal_senders(
             client, wallet, all_txs + internal_txs, results, network, is_contract, labels
         ),
-        shared_deposits=deposit_hits,
-    )
+        "shared_deposits": deposit_hits,
+    }
+    apply_heuristics(result, counterparties, **heuristics_args)
+
+    def refresh():
+        score_collected(result, counterparties, heuristics_args)
+
+    if root_check:
+        apply_root_check(client, result, network, refresh, root_cache_dir)
     result["deposit_addresses"] = deposit_rows
     result["deposit_context_hits"] = context_hits
     result["fresh_addresses"] = fresh_addresses(client, result)

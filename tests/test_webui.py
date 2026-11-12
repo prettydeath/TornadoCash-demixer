@@ -405,6 +405,9 @@ _TRACE = {
             "asset": "ETH",
             "value": 3.0,
             "attributed": 2.0,
+            "lower": 0.5,
+            "upper": 2.0,
+            "history_incomplete": False,
             "kind": "swap",
             "swapped_to": "DAI",
         }
@@ -431,6 +434,7 @@ _TRACE = {
         ({"trace_amount": "1", "trace_max_hops": "99"}, "hops between 1 and"),
         ({"trace_amount": "1", "trace_start_block": "x"}, "whole numbers"),
         ({"trace_amount": "1", "trace_token": "DAI"}, "0x contract address"),
+        ({"trace_amount": "1", "trace_arrival_tx": "0x12"}, "arrival transaction"),
     ],
 )
 def test_trace_fields_are_validated_before_any_call(client, form, message):
@@ -464,6 +468,9 @@ def test_trace_runs_renders_and_serves_its_report_and_json(client, monkeypatch):
     assert client.get(f"/result/{WALLET}.json").get_json()["nodes_expanded"] == 2
     csv_text = client.get("/download.csv").get_data(as_text=True)
     assert csv_text.startswith("hop,from,to,asset,attributed,value,kind,tx_hash")
+    assert "FIFO 2.0 [0.5 – 2.0]" in body and "certain at least 0.5" in body
+    assert "FIFO 2.0 [0.5 – 2.0]" in report
+    assert csv_text.splitlines()[0].endswith("tx_hash,chain,lower,upper,bounds_available")
 
 
 def test_known_exits_must_be_addresses(client):
@@ -482,3 +489,109 @@ def test_known_exits_reach_the_demix_run(client, monkeypatch):
     monkeypatch.setattr(webapp, "run_demix", spy)
     _post(client, analysis="demix", known_exits="0x" + "c" * 40)
     assert seen["known_exits"] == ["0x" + "c" * 40]
+
+
+def test_trace_passes_an_explicit_arrival_transaction(client, monkeypatch):
+    seen = {}
+
+    def fake_trace(*a, **kw):
+        seen.update(kw)
+        return {**_TRACE, "arrival_tx": "0x" + "c" * 64, "arrival_matched": "exact"}
+
+    monkeypatch.setattr(webapp, "trace_funds", fake_trace)
+    monkeypatch.setattr(webapp, "load_attribution", lambda *a, **k: {})
+    tx = "0x" + "C" * 64
+    _, body = _post(client, analysis="trace", trace_amount="2", trace_arrival_tx=tx)
+    assert seen["arrival_tx"] == tx.lower() and "arrival transaction 0x" + "c" * 64 in body
+
+
+# Blockscout labels: shared checkbox, multi, cache fill route
+
+
+def test_the_blockscout_checkbox_sits_in_the_shared_row_not_in_the_demix_fields(client):
+    body = client.get("/").get_data(as_text=True)
+    demix_fields = body[body.index('id="demixFields"') : body.index('id="traceFields"')]
+    assert 'id="labels_blockscout"' not in demix_fields
+    assert 'id="labels_blockscout"' in body
+    assert body.index('id="labels_blockscout"') < body.index('id="demixFields"')
+    assert ">Deposit addresses</label>" in body and "Exchange deposit addresses" not in body
+
+
+def test_multi_honours_the_blockscout_labels(client, monkeypatch):
+    seen = {}
+
+    def fake_correlate(client_, wallets, window_days, **kw):
+        seen.update(kw)
+        return {
+            "strong": [],
+            "profile_matches": {},
+            "fingerprints": {},
+            "consolidators": [],
+            "clusters": [],
+        }
+
+    monkeypatch.setattr(webapp, "correlate", fake_correlate)
+    monkeypatch.setattr(webapp, "build_multi_report", lambda corr, net: "<html></html>")
+    sentinel = {"0x" + "9" * 40: {"category": "exchange", "entity": "x"}}
+    monkeypatch.setattr(webapp, "_labels", lambda net: sentinel)
+    response = client.post(
+        "/",
+        data={
+            "wallets": WALLET + chr(10) + "0x" + "b" * 40,
+            "analysis": "multi",
+            "labels_blockscout": "1",
+        },
+    )
+    assert response.status_code == 200
+    assert seen.get("labels") is sentinel
+
+
+def test_blockscout_fetch_route_needs_csrf_and_known_network(client):
+    assert client.post("/labels/blockscout", data={"csrf": "wrong"}).status_code == 400
+    r = client.post("/labels/blockscout", data={"network": "nowhere"})
+    assert r.status_code == 302
+    with client.session_transaction() as sess:
+        assert sess["labels_msg"]["ok"] is False
+
+
+def test_blockscout_fetch_route_uses_pasted_or_result_addresses(client, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    calls = []
+
+    def fake_fetch(chain_id, addresses, directory=None, **kw):
+        calls.append((chain_id, list(addresses), directory))
+        return {a: {} for a in addresses}
+
+    monkeypatch.setattr(webapp, "fetch_and_cache", fake_fetch)
+    pasted = "0x" + "C" * 40
+    client.post("/labels/blockscout", data={"network": "ethereum", "addresses": pasted})
+    assert calls[-1][0] == 1 and calls[-1][1] == ["0x" + "c" * 40]
+    assert calls[-1][2].replace("\\", "/").endswith(".cache/labels/blockscout")
+    # nothing pasted and no result yet: nothing is sent
+    n = len(calls)
+    client.post("/labels/blockscout", data={"network": "ethereum"})
+    assert len(calls) == n
+    # a malformed paste is refused before any request
+    client.post("/labels/blockscout", data={"network": "ethereum", "addresses": "0xzz"})
+    assert len(calls) == n
+    # from the last result table
+    token = webapp._store_put(
+        {
+            "csv": {
+                "header": ["a"],
+                "rows": [["x", "0x" + "D" * 40], ["0x" + "e" * 40, "0x" + "d" * 40]],
+            }
+        }
+    )
+    with client.session_transaction() as sess:
+        sess["token"] = token
+    client.post("/labels/blockscout", data={"network": "ethereum"})
+    assert calls[-1][1] == ["0x" + "d" * 40, "0x" + "e" * 40]
+
+
+def test_blockscout_fetch_route_caps_the_address_count(client, monkeypatch):
+    monkeypatch.setattr(webapp, "fetch_and_cache", lambda *a, **k: pytest.fail("sent"))
+    many = "\n".join("0x{:040x}".format(i) for i in range(webapp.BLOCKSCOUT_MAX_ADDRESSES + 1))
+    client.post("/labels/blockscout", data={"network": "ethereum", "addresses": many})
+    with client.session_transaction() as sess:
+        assert "at most" in sess["labels_msg"]["lines"][0]

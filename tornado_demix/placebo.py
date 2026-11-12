@@ -15,6 +15,8 @@ from __future__ import annotations
 
 from .demix import run_demix
 from .heuristics import ranked_candidates
+from .power import window_detectability
+from .rpc import make_contract_check
 
 BANDS = ("strong", "moderate", "weak")
 DAY = 86400
@@ -74,9 +76,64 @@ def _decoy_window(decoy: dict) -> list[int] | None:
     return [min(w["first_ts"] for w in spans), max(w["end_ts"] for w in spans)]
 
 
-def summarize(target: dict, decoy: dict) -> dict:
+BLIND_VERDICT = (
+    "decoy window cannot show a planted lead; no chance estimate for this wallet's direct "
+    "links to third-party addresses (it has no non-contract counterparty, so none can be "
+    "observed in the real window either). A withdrawal back to the depositor itself can be "
+    "observed and does occur; early-profile leads are reported normally."
+)
+BLIND_SUFFIX = " (no direct link to a third-party address can be observed for this wallet)"
+MISSED_VERDICT = (
+    "decoy window cannot show a planted lead; no chance estimate for this wallet's direct "
+    "links (a link planted at a counterparty was not rated moderate). "
+    "Early-profile leads are reported normally."
+)
+NO_VOUCHER_VERDICT = (
+    "decoy window holds no deposit to plant a lead after; no chance estimate for this "
+    "wallet's direct links. Early-profile leads are reported normally."
+)
+UNKNOWN_CONTRACT_VERDICT = (
+    "decoy window cannot show a planted lead; no chance estimate for this wallet's direct "
+    "links (contract status unknown: no network to tell a contract counterparty from an "
+    "ordinary address). Early-profile leads are reported normally."
+)
+VERDICTS = {
+    "contract_unknown": UNKNOWN_CONTRACT_VERDICT,
+    "no_counterparty": BLIND_VERDICT,
+    "no_voucher": NO_VOUCHER_VERDICT,
+    "missed": MISSED_VERDICT,
+}
+
+
+def _direct_link(direct_link: dict | None) -> dict:
+    """Observability fields of the summary from a :func:`window_detectability` result."""
+    if direct_link is None:
+        return {
+            "decoy_detectable": None,
+            "direct_link_observable": None,
+            "direct_link_reason": None,
+            "direct_link_verdict": None,
+        }
+    ok = bool(direct_link["detectable"])
+    reason = direct_link["reason"]
+    verdict = None if ok else VERDICTS.get(reason, MISSED_VERDICT)
+    return {
+        "decoy_detectable": ok,
+        "direct_link_observable": ok,
+        "direct_link_reason": reason,
+        "direct_link_verdict": verdict,
+    }
+
+
+def summarize(target: dict, decoy: dict, direct_link: dict | None = None) -> dict:
     """Compare a real run with its decoy run: leads per band, leads per 1000
-    withdrawals searched, and a plain-English verdict per band."""
+    withdrawals searched, and a plain-English verdict per band.
+
+    ``direct_link`` is the :func:`tornado_demix.power.window_detectability` result for
+    the wallet. When a planted direct link would not be seen, the wallet's decoy count
+    says nothing about chance for direct links (its real window is blind to them as
+    well): the summary then carries ``direct_link_verdict`` and the moderate and
+    strong verdicts say so. Counts stay, since early-profile leads still fire."""
     t_rows, d_rows = ranked_candidates(target), ranked_candidates(decoy)
     t_counts, d_counts = _band_counts(t_rows), _band_counts(d_rows)
     t_w, d_w = _withdrawals(target), _withdrawals(decoy)
@@ -99,6 +156,7 @@ def summarize(target: dict, decoy: dict) -> dict:
             "Some pools could not be searched in the decoy window (block lookup failed)."
         )
 
+    flags = _direct_link(direct_link)
     per_1000 = {
         "decoy_per_1000": {b: _per_1000(d_counts[b], d_w) for b in BANDS},
         "target_per_1000": {b: _per_1000(t_counts[b], t_w) for b in BANDS},
@@ -111,6 +169,7 @@ def summarize(target: dict, decoy: dict) -> dict:
         "target_withdrawals": t_w,
         "decoy_withdrawals": d_w,
         **per_1000,
+        **flags,
         "verdicts": {
             b: _verdict(
                 b,
@@ -118,6 +177,11 @@ def summarize(target: dict, decoy: dict) -> dict:
                 d_counts[b],
                 per_1000["target_per_1000"][b],
                 per_1000["decoy_per_1000"][b],
+            )
+            + (
+                BLIND_SUFFIX
+                if flags["direct_link_reason"] == "no_counterparty" and b != "weak"
+                else ""
             )
             for b in BANDS
         },
@@ -160,4 +224,23 @@ def run_placebo(
         deposit_shift_seconds=offset,
         **kwargs,
     )
-    return summarize(target, decoy)
+    # The wallet's counterparties are the same in its real and decoy windows.
+    check = make_contract_check(network.rpc_url) if network is not None else None
+    if check is None:
+        # Without a contract check a contract counterparty could be taken for an ordinary
+        # address and a planted link counted as detected: unknown is not detectable.
+        direct_link = {
+            "detectable": False,
+            "reason": "contract_unknown",
+            "recipient": None,
+            "pool_key": None,
+            "self_detectable": None,
+        }
+    else:
+        direct_link = window_detectability(
+            decoy,
+            wallet,
+            counterparties=decoy.get("counterparty_addresses", ()),
+            is_contract=check,
+        )
+    return summarize(target, decoy, direct_link)

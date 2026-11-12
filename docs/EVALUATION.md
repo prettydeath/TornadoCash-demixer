@@ -647,6 +647,111 @@ The same release fixes five defects in the deposit-address classifier
 The fixes change which addresses are listed as deposit addresses; they were not re-run on the
 cached hold-out data, so no number above reflects them.
 
+### Deposit-address kinds (unreleased)
+
+An external read-only review and a follow-up check ran the classifier on 10 addresses.
+With an exchange label set, the Binance, Crypto.com, Bybit and Coinbase deposit addresses
+were found and swept to a labelled exchange (evidence; context since 2.21). Without labels, the Bybit and Coinbase ones were found by activity
+and shown unscored; the Binance one was missed because its hot wallet is a proxy
+contract, and the Crypto.com one because its hot wallet has fewer than 10,000
+transactions. These two are limits, not tuned away. The same check showed a Polygon
+address that sweeps like a per-customer deposit address to a sweep target that no available public label set names, and
+three Polygon addresses that the review called forwarders, whose outflows are executed by
+an operator and were dropped only by the poisoning filter. The classifier now reports a `kind`
+(`exchange_deposit`, `service_deposit`, `forwarder`, `smart_account`; see
+[METHODOLOGY.md](METHODOLOGY.md)) and a context-only `gas_funder`. Re-run on the 10
+addresses after the change, the three Polygon addresses are all executed through the
+ERC-4337 EntryPoint v0.8 (`0x4337084d9e255ff0702461cf8895ce9e3b5ff108`, with different
+bundlers as sender) and are classified `smart_account`, not `forwarder`; the Polygon
+address that sweeps to that unnamed target stays `exchange_deposit` by activity,
+because no label set available to the run names its sweep target. The service,
+forwarder and smart-account kinds were added after seeing those 10 addresses, so they are exploratory and
+have not been tested on new data; they are never scored and never link two addresses.
+
+### Decoy rates without blind wallets (exploratory)
+
+The detectability check (`tools/power_measure.py`, `.cache/labels/placebo/power/RESULTS.md`) planted one
+early direct link in each cached decoy window of the second hold-out. In 14 of 599 Ethereum
+windows (2.34 %) and 31 of 400 Polygon windows (7.75 %) there was nowhere to plant it: every
+counterparty of the wallet is a contract. Planted but missed: 0. This measures counterparty
+availability, not the power of the pipeline. A withdrawal back to the depositor itself is rated
+moderate in all 45 cases and does occur (self leads are 12 of 95 target leads on Ethereum and 17
+of 103 on Polygon in the real windows). What these wallets cannot show is a direct link to a
+third-party address, in the real window as in the decoy one, so they are blind to it on both sides and are dropped from target and decoy
+together (`tools/decoy_rates.py`, never from the decoy only), and reported as a stratum of their own.
+
+| sample | stratum | wallets | moderate+strong target / decoy leads | wallets with a decoy lead (upper 95 %) |
+|---|---|---|---|---|
+| Ethereum hold-out 2 | all | 599 | 95 / 5 | 5 (1.94 %) |
+| | without blind | 585 | 95 / 5 | 5 (1.98 %) |
+| | blind only | 14 | 0 / 0 | 0 (23.2 %) |
+| Polygon 2 | all | 400 | 103 / 5 | 5 (2.89 %) |
+| | without blind | 369 | 103 / 4 | 4 (2.75 %) |
+| | blind only | 31 | 0 / 1 | 1 (16.7 %) |
+
+Dropping blind wallets leaves the picture unchanged: all target leads sit in the observable
+stratum and the decoy rate per wallet moves from 0.83 to 0.85 % (Ethereum) and from 1.25 to 1.08 %
+(Polygon); the plain ratio of decoy to target lead rates is 0.056 before and after on Ethereum and goes from 0.050 to 0.040 on Polygon.
+Early-profile leads: 10 / 0 and 11 / 0 in both samples, none among blind wallets. The one Polygon
+decoy lead of a blind wallet (0x8330936aa55d45a89913a42a9ebb6811b5af50fd, pool 1000 MATIC) is a
+self `linked` lead, a withdrawal to the depositor itself; it lies outside the observable stratum
+by definition and is shown only in the blind one.
+Both strata are a post-hoc split of data already seen; not pre-registered, not a new test.
+`--placebo` carries the same flag per wallet (`decoy_detectable`,
+`direct_link_observable`). Numbers: `.cache/labels/placebo/decoy_rates_2_2/`.
+
+### Merkle-root exclusion (exploratory)
+
+`demix --root-check` excludes a candidate's withdrawal when the Merkle root it proves against
+held none of the depositor's notes in the pool (rule in [METHODOLOGY.md](METHODOLOGY.md) 4c).
+It is not a lead and not scored. Feasibility came first (`tools/root_ceiling.py`, root history
+100 on Ethereum and 30 on Polygon pools): at most 11.01 % of the Ethereum and 10.94 % of the
+Polygon withdrawals in the hold-out windows could be excluded at all (upper bound, all
+withdrawals of the pool in the window, newest note only).
+
+Measurement: `tools/root_exclusion_eval.py`, offline on the cached second hold-out runs
+(`holdout2` Ethereum, `polygon2` Polygon, target and decoy), read in full in
+`.cache/labels/placebo/root_exclusion/RESULTS.md`. The runs were not re-run or re-scored.
+Samples: every moderate candidate (no strong ones exist in these runs) and the weak candidates of
+the first 10 (Ethereum) or 40 (Polygon) depositors in sorted file order; the Ethereum weak sample
+was cut from 40 to 10 for time (explorer rate limit, one transaction lookup per withdrawal).
+Candidate rows lost to a failed explorer lookup: Ethereum target/moderate 5 (so 90 of 95 read);
+Polygon none in the final run.
+
+Decoy windows. With the real leaf indices every decoy withdrawal is excluded (1,277 of 1,277
+on Ethereum, 1,095 of 1,095 on Polygon), so the decoy note's leaf is emulated: the number of
+pool insertions up to the shifted deposit's block, `L`. A first version excluded any decoy
+withdrawal with `n_root <= L`. That is biased: between the shifted block and the pool's real
+insertion number `L` the newest root holds exactly `L` leaves, so every decoy withdrawal mined
+in that gap is excluded by construction, whereas in a real window the note is inserted at the
+deposit itself. Checked on the cached runs, this is what the first version's decoy exclusions
+were: of the 17 decoy withdrawals it excluded (9 Ethereum, 8 Polygon) all 17 had `n_root`
+equal to the emulated leaf and 16 were mined before insertion `L` (all 8 on Polygon, 8 of 9
+on Ethereum). The rule now treats the emulated note as inserted at the block of insertion `L`
+and does not check a withdrawal mined before it ("decoy gap, not checked": 8 on each chain).
+
+| | Ethereum target | Ethereum decoy | Polygon target | Polygon decoy |
+|---|---|---|---|---|
+| moderate candidates read | 90 | 5 | 103 | 5 |
+| weak candidates read | 568 | 545 | 335 | 407 |
+| candidate withdrawals checked | 1,527 | 1,277 | 1,266 | 1,095 |
+| decoy gap, not checked | 0 | 8 | 0 | 8 |
+| roots found / not found | 1,527 / 0 | 1,277 / 0 | 1,266 / 0 | 1,095 / 0 |
+| withdrawals excluded | 0 | 1 | 0 | 0 |
+| candidates fully excluded (any band) | 0 | 0 | 0 | 0 |
+| candidates partly excluded (weak) | 0 | 1 | 0 | 0 |
+| note-partial withdrawals (context) | 436 | 316 | 200 | 76 |
+
+Every root was found in the recomputed index (5,165 of 5,165), so the tree reconstruction and
+the calldata parsing agree with the chain. In the real windows nothing was excluded: none of 193
+moderate and 903 weak candidates lost a withdrawal. In the decoy windows, with the gap
+withdrawals set aside, one withdrawal of 2,372 was excluded (one weak Ethereum candidate, partly)
+and no lead of any band disappeared. The numbers are small and do not support a rate or a claim
+that the check removes chance leads; they say it removed none of the 193 real-window moderate
+leads read and almost none of the decoy candidates. The ceiling is for all withdrawals of a
+pool; candidates' withdrawals, which come after the deposit, are excluded far less often.
+This was not pre-registered; it is a description of two cached samples.
+
 ### Published heuristics under the same design
 
 `tools/tutela_baseline.py` re-implements the heuristics of Béres et al. (2021) and
@@ -691,6 +796,48 @@ In target windows precision is a lower bound (0.73–0.95 at modelled or higher
 error rates), because some "false" leads are the real wallet's own exits. Recall
 follows the depositor's error rate, not the tool: a careful depositor is rarely
 found. Count match alone has a precision of 0.03 on the real background.
+
+### Bridge exits after Tornado (exploratory)
+
+Do exits go on through a bridge within two hops? Measured with `tools/bridge_exits.py` on
+the moderate/strong candidate exits of the cached hold-out 1 and 2 target runs
+(Ethereum): 190 address-pool rows, 157 distinct addresses (no strong candidates exist in
+either run). For each address the transactions it sent in the 30 days after its first
+withdrawal were classified against `tornado_demix/data/bridges.csv` (55 Ethereum
+addresses from Etherscan-verified contract names, including aggregators, plus 3
+destination SpokePools); the recipients of plain transfers of at least 1 % of the
+received amount (five largest) were read the same way. Calls that bring funds in (Polygon
+`exit`, Wormhole redeem) are not counted. Numbers: `.cache/bridge_exits/RESULTS.md`.
+
+| protocol | kind | exit addresses (n = 157 exits) |
+|---|---|---:|
+| Polygon PoS | contract | 9 |
+| Across | contract | 3 |
+| Relay | contract | 3 |
+| Arbitrum | contract | 1 |
+| Celer | contract | 1 |
+| Hop | contract | 1 |
+| Optimism | contract | 1 |
+| Rango | aggregator | 1 |
+| Socket | aggregator | 1 |
+| THORChain | contract | 1 |
+| Wormhole | contract | 1 |
+
+22 of 157 addresses called a listed bridge or aggregator within two hops. Counts are
+tiny: the Polygon PoS figure is 9 addresses, and the address
+0xe1822d5939b8cfa1eb7412c3d53efbf8ccc0e076 appears in 3 pool rows and is counted once.
+Bridge calls are not amount-attributed, so these are lower bounds and leads, not rates with
+intervals. Unrecognised recipients are listed in RESULTS.md: 130 of 157 exits called some
+contract outside the table, the most common being tokens and DEX routers (USDT, Uniswap,
+USDC, WETH, the Tornado router); no further bridge appears among the top 15. The gate (a
+protocol with at least 5 % of the exits that hit a bridge) passed. The trace continuation was
+built for Across, not for the top protocol: the Polygon PoS deposit carries a state-sync id,
+but the destination mint is a Bor state-sync transaction that the Etherscan-family APIs do
+not index (no `StateCommitted` log, no receipt), so the only join left is by recipient, token
+and amount, which is not an on-chain id. Across repeats the origin chain id and the deposit
+id as indexed topics of the fill, and its destination chains are in the networks registry.
+The extended table did not change which protocol is the top joinable one. Live check on one
+real pair (Ethereum deposit 3888199, Arbitrum fill) in `tests/test_bridges.py -m live`.
 
 ## Two public laundering cases
 
@@ -863,13 +1010,31 @@ model, not a measurement.
 shared-deposit and early-profile signals and the gas-price restriction, found every
 pair within three co-occurrences of independence on 43,424 rows.)
 
+## Test register
+
+The seven evaluation tools wired to the register (`tools/holdout_report.py`, `tools/decoy_rates.py`,
+`tools/placebo_eval.py`, `tools/power_measure.py`, `tools/root_exclusion_eval.py`,
+`tools/root_ceiling.py`, `tools/bridge_exits.py`) append every statistical test they compute (hold-out ratios, decoy rates, placebo
+FDR, detectability, root exclusion, root ceiling, bridge-exit gate) as one JSON line to
+`.cache/registry/tests.jsonl` (override with `TORNADO_DEMIX_REGISTRY`); other tools do not write to it. Each line carries
+the SHA-256 of the script that produced it and the hash of the previous line, so an edited
+or deleted line is detected. `python tools/registry_report.py` verifies the chain and counts
+tests per family, per script and per status; the count, exploratory sweeps included, is the
+number of comparisons a multiple-testing correction has to account for.
+
+A record is `confirmatory` only when `docs/PROTOCOL.lock` lists the SHA-256 of its script
+(`registry_report.py --lock SCRIPT... --out docs/PROTOCOL.lock`); with no lock file every
+record is `exploratory`. No lock exists yet: nothing is registered as confirmatory until a
+hold-out 3 is. The register cannot show that its tail was cut off; keep a witness
+(`registry_report.py --witness OUT`, last seq and hash) outside the register directory.
+
 ## Checks of the code itself
 
-Run on 2026-09-28; tests, coverage and the live check re-run on 2026-10-02, tests and coverage again on 2026-10-07 (2.18.0).
+Run on 2026-09-28; tests, coverage and the live check re-run on 2026-10-02, tests and coverage again on 2026-10-07 (2.18.0). The `pytest` row was re-run on 2026-11-12 on this branch (unreleased); the other rows are from the earlier runs and were not repeated.
 
 | Check | Result |
 |---|---|
-| `pytest` (network blocked, incl. `getaddrinfo`) | 811 passed |
+| `pytest` (network blocked, incl. `getaddrinfo`) | 1064 passed, 6 deselected (live; 2026-11-12, this branch) |
 | `pytest-randomly`, seeds 1, 2, 3 | all pass in every order |
 | Branch coverage (`--cov-branch`) | 93 % overall; `heuristics` 97 %, `demix` 93 %, `cli` 89 % |
 | Property-based tests (Hypothesis, 24) and edge-case tests (10) | pass; the four that documented defects now pin the fixes |

@@ -61,7 +61,8 @@ def count_discrimination(res, hits):
     unique = res.get("unique_recipients") or len(res.get("counts", {}))
     if unique <= 1:
         return 0.0
-    sharing = sum(1 for c in res["counts"].values() if c == hits)
+    # The field as it was before a Merkle-root removal (root_exclusion.py), when there was one.
+    sharing = sum(1 for c in res.get("field_counts", res["counts"]).values() if c == hits)
     if sharing >= unique:
         return 0.0
     if sharing <= 0:
@@ -203,7 +204,8 @@ def apply_heuristics(
 
     for pool_key, res in data.get("denoms", {}).items():
         gp_counts = Counter()
-        for recs in res["detail"].values():
+        removed = res.get("root_excluded_detail", {}).values()
+        for recs in [*res["detail"].values(), *removed]:
             for r in recs:
                 if r.get("gas_price"):
                     gp_counts[r["gas_price"]] += 1
@@ -313,6 +315,8 @@ SIGNAL_LABEL = {
     "shared_deposit": "Shared exchange deposit address",
     "profile_match": "Denomination-profile match",
     "early_profile": "Early multi-pool profile match",
+    "root_excluded": "Withdrawal excluded by Merkle root (context)",
+    "root_partial": "Some notes not yet in the Merkle tree (context)",
 }
 
 
@@ -350,7 +354,7 @@ def _score(signals, discrimination):
         family = METHOD_FAMILY.get(signal, signal)
         strongest[family] = max(strongest.get(family, 0.0), weight)
     product = 1.0
-    for weight in strongest.values():
+    for _family, weight in sorted(strongest.items()):
         product *= 1 - weight
     return round(1 - product, 4)
 
@@ -375,6 +379,16 @@ def candidate_reason(row: dict) -> str:
             "transacts directly with the depositor, but first withdrew more than "
             f"{EARLY_EXIT_HOURS} h after the last deposit (context only)"
         )
+    if "root_excluded" in row["signals"]:
+        bits.append(
+            "some withdrawals to it were excluded by their Merkle root and are not counted "
+            "(context only)"
+        )
+    if "root_partial" in row["signals"]:
+        bits.append(
+            "some of the wallet's notes were not yet in the tree at the root of a withdrawal "
+            "to it; nothing was removed (context only)"
+        )
     if "linked_sender" in row["signals"]:
         bits.append("a withdrawal to it was sent by the depositor or its direct counterparty")
     if "shared_deposit" in row["signals"]:
@@ -398,6 +412,8 @@ EVIDENCE_LABEL = {
     "shared_deposit": "shared exchange deposit address",
     "profile_match": "denomination profile",
     "early_profile": "early multi-pool profile (same family as amount + timing)",
+    "root_excluded": "Merkle-root exclusion (context)",
+    "root_partial": "Merkle-root partial overlap (context)",
 }
 
 
@@ -482,6 +498,24 @@ def _profile_text(data, profile):
     return " + ".join(f"{n}×{pk}" for pk, n in ordered)
 
 
+def _root_detail(data, pool_key, address, kind):
+    h = data.get("heuristics", {})
+    gone = [e for e in h.get("root_excluded", []) if e[0] == pool_key and e[1] == address]
+    part = [e for e in h.get("root_partial", []) if e[0] == pool_key and e[1] == address]
+    if kind == "root_excluded" and gone:
+        return (
+            f"{len(gone)} withdrawal(s) excluded by their Merkle root (the tree held none of "
+            "the wallet's notes in this pool) and not counted"
+        )
+    if kind == "root_partial" and part:
+        n_root = min(e[3] for e in part)
+        return (
+            f"{len(part)} withdrawal(s) prove against a root that was missing some of the "
+            f"wallet's notes (leaf >= {n_root}) at that time; nothing removed, all still counted"
+        )
+    return ""
+
+
 def _early_profile_detail(data, signals):
     profile = wallet_profile(data)
     if not early_profile_applies(profile):
@@ -525,7 +559,7 @@ def candidate_evidence(data: dict, pool_key: str, address: str) -> list[dict]:
     hits = res["counts"][address]
     targets = sorted(res.get("target_counts", []))
     field = res.get("unique_recipients") or len(res.get("counts", {}))
-    sharing = sum(1 for c in res["counts"].values() if c == hits)
+    sharing = sum(1 for c in res.get("field_counts", res["counts"]).values() if c == hits)
     disc = res.get("discrimination", {}).get(address, 0.0)
 
     sizes = [v["count"] for v in data.get("vouchers", []) if v["pool_key"] == pool_key]
@@ -580,6 +614,9 @@ def candidate_evidence(data: dict, pool_key: str, address: str) -> list[dict]:
         lines.insert(4, ("linked_late", _late_detail(data, pool_key, address)))
     if "profile_match" in signals:
         lines.append(("profile_match", "received the wallet's full multi-pool fingerprint"))
+    for kind in ("root_excluded", "root_partial"):
+        if kind in signals:
+            lines.append((kind, _root_detail(data, pool_key, address, kind)))
     return [
         {
             "signal": signal,
@@ -662,6 +699,8 @@ METHOD_FAMILY = {
     "linked_late": "context",
     "linked_sender": "context",
     "shared_deposit": "context",
+    "root_excluded": "context",
+    "root_partial": "context",
 }
 
 # Shown as evidence, never scored, never a lead, never an independent family:
@@ -673,6 +712,11 @@ METHOD_FAMILY = {
 # were 18 target against 30 decoy leads on Ethereum, R 1.77 (0.16-3.91), and 23
 # against 13 on Polygon, R 0.58 (0.00-3.16); not above chance).
 CONTEXT_SIGNALS = frozenset({"linked_late", "linked_sender", "shared_deposit"})
+
+# A note on a candidate, not evidence for it: some of its withdrawals were excluded by
+# their Merkle root (tornado_demix.root_exclusion). Never scored, never a lead, never
+# admits a candidate by itself.
+NOTE_SIGNALS = frozenset({"root_excluded", "root_partial"})
 
 
 # The score is uncalibrated and a percentage reads as a probability, so results
@@ -819,7 +863,11 @@ def conclusion(data: dict) -> str:
     if cands:
         top = cands[0]
         families = sorted(
-            {METHOD_FAMILY.get(s, s) for s in top["signals"] if s not in CONTEXT_SIGNALS}
+            {
+                METHOD_FAMILY.get(s, s)
+                for s in top["signals"]
+                if s not in CONTEXT_SIGNALS | NOTE_SIGNALS
+            }
         )
         lines.append(
             f"Top candidate: {top['address']} ({top['pool_key']}), band {top['band']}, "

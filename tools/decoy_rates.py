@@ -12,6 +12,12 @@ current rule (tornado_demix.heuristics.ranked_candidates):
 * decomposition of leads: the candidate is the depositor itself, one of its funders, or other;
 * overlap with the early-profile universe U (depositors with >= 10 notes in >= 2 pools).
 
+Wallets whose direct link to a third-party address cannot be observed (no non-contract counterparty, see
+tornado_demix.power and power/summary_<dir>.json) are blind in the real window as well as in
+the decoy one. Besides the full sample the tool therefore reports the sample without them,
+removed from target and decoy alike, and the blind wallets as a separate stratum. Samples
+without a power summary are not stratified.
+
 Usage: python tools/decoy_rates.py holdout1 polygon1 [. post2022 ...] [--out article]
 """
 
@@ -33,6 +39,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from placebo_windows import narrow  # noqa: E402
 
 from tornado_demix.heuristics import ranked_candidates  # noqa: E402
+from tornado_demix.registry import record_safe as record  # noqa: E402
 
 BASE = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".cache", "labels", "placebo"
@@ -122,7 +129,18 @@ def cluster_rr(rows):
         return {"error": str(exc)}
 
 
-def analyse(sub):
+def blind_wallets(sub):
+    """Wallets with reason no_counterparty in power/summary_<sub>.json (None: not measured)."""
+    path = os.path.join(BASE, "power", f"summary_{sub}.json")
+    if not os.path.exists(path):
+        return None
+    with open(path, encoding="utf-8") as fh:
+        wallets = json.load(fh)["wallets"]
+    return {w.lower() for w, got in wallets.items() if got["reason"] == "no_counterparty"}
+
+
+def analyse(sub, keep=None, stratum="full"):
+    """``keep(wallet) -> bool`` selects the depositors; the same set is used for target and decoy."""
     d0 = os.path.join(BASE, sub) if sub != "." else BASE
     rows, per_kind = [], {k: {"t": 0, "d": 0, "wal_t": 0, "wal_d": 0} for k in KINDS}
     exp_t = exp_d = rec_d = 0
@@ -134,6 +152,8 @@ def analyse(sub):
             continue
         # re-apply the current heuristics over the full 30-day window (as tools/review4_*.py)
         t, d = (narrow(json.load(open(f, encoding="utf-8")), 720) for f in (ft, fd))
+        if keep is not None and not keep((t.get("wallet") or d.get("wallet") or "").lower()):
+            continue
         n += 1
         u_overlap += profile_universe_member(t)
         lt, dt = leads(t)
@@ -175,7 +195,27 @@ def analyse(sub):
             "R_plain": r_plain,
             "R_cluster_poisson": cluster_rr([(a, b, y[k], e) for a, b, y, e in rows]),
         }
+        record(
+            f"decoy_rates.{k}",
+            __file__,
+            {"sample": sub, "stratum": stratum},
+            res["kinds"][k],
+        )
     return res
+
+
+def stratified(sub):
+    """Full sample, sample without blind wallets, blind stratum (None when not measured)."""
+    full = analyse(sub)
+    blind = blind_wallets(sub)
+    if blind is None:
+        return {"full": full, "observable": None, "blind": None, "blind_wallets": None}
+    return {
+        "full": full,
+        "observable": analyse(sub, lambda w: w not in blind, "observable"),
+        "blind": analyse(sub, lambda w: w in blind, "blind"),
+        "blind_wallets": len(blind),
+    }
 
 
 def fmt(x, nd=3):
@@ -189,8 +229,12 @@ def main():
     a = ap.parse_args()
     out = os.path.join(BASE, a.out)
     os.makedirs(out, exist_ok=True)
-    allres = [analyse(s) for s in a.dirs]
+    strata = [stratified(s) for s in a.dirs]
+    allres = [x["full"] for x in strata]
     json.dump(allres, open(os.path.join(out, "decoy_rates.json"), "w", encoding="utf-8"), indent=1)
+    json.dump(
+        strata, open(os.path.join(out, "decoy_rates_strata.json"), "w", encoding="utf-8"), indent=1
+    )
     md = [
         "# Decoy rates (current rule)",
         "",

@@ -7,6 +7,7 @@ from collections import Counter
 from datetime import datetime, timezone
 
 from .attribution import format_label
+from .deposit_addresses import kind_label, target_label
 from .heuristics import (
     BAND_ORDER,
     band_rationale,
@@ -37,6 +38,7 @@ from .report_csv import (
 from .report_json import (
     analysis_assumptions,
 )
+from .trace import arrival_text, share_status, share_text
 
 
 def _e(x):
@@ -315,17 +317,19 @@ def _deposit_addresses_html(data: dict, network: Network) -> str:
         for dep in addrs:
             hits.setdefault(dep, []).append((pool_key, addr))
     parts = [
-        '<h2>Exchange deposit addresses<span class="rule"></span></h2>',
+        '<h2>Deposit addresses<span class="rule"></span></h2>',
         '<div class="meta">Addresses the depositor sent funds to that behave like a per-customer '
         "exchange deposit address: few senders, quiet, and what arrives is swept to a hot "
         "wallet. A recipient of the searched withdrawals that sent funds to the same address "
         "shares a deposit address with the depositor (the address-reuse idea of Tutela, through "
         "an intermediary). Context only since 2.21: in the second hold-out this did not beat "
         "chance, so it never raises the band. An exchange address can be shared by mistake or "
-        "by a service.</div>",
-        '<table><colgroup><col style="width:34%"><col style="width:26%">'
-        '<col style="width:10%"><col></colgroup>'
-        "<tr><th>Deposit address</th><th>Swept to</th><th>Senders</th>"
+        "by a service. A <i>service deposit</i> sweeps to a labelled non-exchange wallet and a "
+        "<i>forwarder</i> moves tokens through an operator; neither is ever linked to a "
+        "candidate.</div>",
+        '<table><colgroup><col style="width:30%"><col style="width:18%"><col style="width:22%">'
+        '<col style="width:8%"><col></colgroup>'
+        "<tr><th>Deposit address</th><th>Kind</th><th>Swept to</th><th>Senders</th>"
         "<th>Also used by a candidate</th></tr>",
     ]
     for d in rows:
@@ -340,16 +344,69 @@ def _deposit_addresses_html(data: dict, network: Network) -> str:
                 for addr, addrs in data.get("deposit_context_hits", {}).items()
                 if d["address"] in addrs
             )
-        target = (
-            d.get("exchange")
-            if d.get("evidence", True)
-            else "an unlabelled busy address (context, not scored)"
-        ) or "a hot wallet"
         parts.append(
             f'<tr><td class="mono wrap">{_addr_link(network, d["address"])}</td>'
-            f"<td>{_e(target)}</td>"
+            f'<td><span class="pill">{_e(kind_label(d))}</span></td>'
+            f"<td>{_e(target_label(d))}</td>"
             f'<td class="num">{len(d.get("senders", []))}</td>'
             f"<td>{who or '-'}</td></tr>"
+        )
+    parts.append("</table>")
+    return "".join(parts)
+
+
+def _root_check_html(data: dict, network: Network) -> str:
+    """Candidates removed by the Merkle-root check (root_exclusion.py); only when it ran."""
+    rc = data.get("root_check")
+    if not rc:
+        return ""
+    parts = [
+        '<h2>Excluded by Merkle root<span class="rule"></span></h2>',
+        '<div class="meta">Exploratory. A withdrawal proof names the Merkle root it was built '
+        "against; a root that held none of the depositor's notes in the pool cannot belong to "
+        "this depositor. Only the withdrawals of ranked candidates were read. A candidate whose "
+        "every withdrawal in a pool is excluded is removed from the ranking and listed here; a "
+        "partly excluded one stays with a lower count and a context note, or, if the recount "
+        "costs it its count match, is listed as dropped after recount. This is not a lead "
+        f"and is not scored. Read: {rc['withdrawals_checked']} withdrawal(s), "
+        f"roots found {rc['roots_found']}, not found {rc['roots_not_found']}, "
+        f"{rc['tx_info_calls']} transaction lookup(s).</div>",
+    ]
+    if rc.get("incomplete"):
+        parts.append(
+            '<div class="meta flag">The check is incomplete (call limit reached or a pool could '
+            "not be checked"
+            + (f": {_e(', '.join(rc['unchecked_pools']))}" if rc.get("unchecked_pools") else "")
+            + "): some candidates were not checked.</div>"
+        )
+    dropped = rc.get("dropped_after_recount") or []
+    if not rc["excluded_candidates"]:
+        parts.append('<div class="meta">No candidate was excluded in full.</div>')
+    else:
+        parts.append(_root_table(rc["excluded_candidates"], network))
+    if dropped:
+        parts.append(
+            '<h3>Dropped after recount</h3><div class="meta">Partly excluded candidates that '
+            "no longer qualify once the excluded withdrawals are not counted (the count match "
+            "was lost).</div>" + _root_table(dropped, network)
+        )
+    return "".join(parts)
+
+
+def _root_table(rows: list[dict], network: Network) -> str:
+    parts = [
+        '<table><colgroup><col style="width:10%"><col style="width:38%"><col></colgroup>'
+        "<tr><th>Pool</th><th>Candidate</th><th>Withdrawal (root leaves)</th></tr>"
+    ]
+    for c in rows:
+        txs = "<br>".join(
+            f'<span class="mono wrap">{_tx_link(network, w["tx_hash"])}</span> '
+            f"(root holds {w['n_root']} leaves)"
+            for w in c["withdrawals"]
+        )
+        parts.append(
+            f'<tr><td class="num">{_e(c["pool_key"])}</td>'
+            f'<td class="mono wrap">{_addr_link(network, c["address"])}</td><td>{txs}</td></tr>'
         )
     parts.append("</table>")
     return "".join(parts)
@@ -385,6 +442,10 @@ def _placebo_html(pb: dict | None, network: Network) -> str:
         "<th>Per 1000 withdrawals (real / decoy)</th><th>Verdict</th></tr>" + rows + "</table>",
         f'<div class="callout">{_e(pb["note"])}</div>',
     ]
+    if pb.get("direct_link_verdict"):
+        parts.append(
+            f'<div class="callout"><b>Direct links:</b> {_e(pb["direct_link_verdict"])}</div>'
+        )
     for caveat in pb.get("caveats", []):
         parts.append(f'<div class="callout">{_e(caveat)}</div>')
     for lead in pb.get("decoy_leads", []):
@@ -559,6 +620,7 @@ def build_html_report(
         )
     p.append(_deposit_addresses_html(data, network))
     p.append(_groups_html(data.get("exit_groups", []), network))
+    p.append(_root_check_html(data, network))
     p.append(_placebo_html(data.get("placebo"), network))
 
     # A pool whose block lookup failed was never searched; that must not read
@@ -1330,8 +1392,49 @@ def write_characterize_report(info: dict, path: str, network: Network) -> str:
     return path
 
 
-def build_trace_report(result: dict, network: Network) -> str:
-    """Render a multi-hop FIFO trace (see trace.py) as a self-contained HTML string."""
+def _bridge_note(info, network, destinations):
+    """Under a bridge edge: protocol, destination chain, deposit id and fill link."""
+    dest = destinations.network(info["dest_chain_id"]) if destinations is not None else None
+    name = dest.name if dest else f"chain {info['dest_chain_id']}"
+    text = f"bridge {info['protocol']} → {name}, deposit id {info['deposit_id']}"
+    if info.get("fill_tx") and dest is not None:
+        fill = '<a class="wrap" href="{}" target="_blank" rel="noopener">fill</a>'.format(
+            _e(dest.tx_url(info["fill_tx"]))
+        )
+        return f'<div class="meta">{_e(text)} · {fill}</div>'
+    suffix = "" if info.get("fill_tx") else " · fill not found"
+    return f'<div class="meta">{_e(text + suffix)}</div>'
+
+
+def _share_note(edge):
+    status = share_status(edge)
+    if not status:
+        return ""
+    more = " · history incomplete" if edge.get("history_incomplete") else ""
+    return f'<div class="meta">{_e(status + more)}</div>'
+
+
+def _chain_net(network, destinations, chain_id):
+    """Registry entry of the chain an edge is on (the trace's own network by default)."""
+    if chain_id is None or chain_id == network.chain_id or destinations is None:
+        return network
+    return destinations.network(chain_id) or network
+
+
+def _chain_tag(network, destinations, chain_id):
+    """Pill naming the chain, for edges and end points off the starting chain."""
+    if chain_id is None or chain_id == network.chain_id:
+        return ""
+    net = destinations.network(chain_id) if destinations is not None else None
+    return ' <span class="pill">{}</span>'.format(_e(net.name if net else f"chain {chain_id}"))
+
+
+def build_trace_report(result: dict, network: Network, destinations=None) -> str:
+    """Render a multi-hop FIFO trace (see trace.py) as a self-contained HTML string.
+
+    ``destinations`` (see bridges.Destinations) names the chains a bridge trace
+    continued on and supplies their explorer links.
+    """
     p, generated = _report_head(
         "Multi-hop trace of withdrawn funds", "FIFO attribution · research use"
     )
@@ -1340,13 +1443,16 @@ def build_trace_report(result: dict, network: Network) -> str:
         f"{_e(result['amount'])} {_e(result['asset'])} · network <b>{_e(network.name)}</b> · "
         f"generated <b>{generated}</b></div>"
     )
+    if arrival_text(result):
+        p.append(f'<div class="meta">{_e(arrival_text(result))}</div>')
     p.append("</div></div>")
     p.append('<div class="sheet">')
     edges, terminals = result["edges"], result["terminals"]
     swaps = sum(1 for e in edges if e["kind"] == "swap")
+    bridged = sum(1 for e in edges if e["kind"] == "bridge")
     p.append('<div class="metrics">')
     for k, v, s in (
-        ("Edges", len(edges), f"{swaps} swap(s)"),
+        ("Edges", len(edges), f"{swaps} swap(s), {bridged} bridge(s)"),
         ("End points", len(terminals), "where the traced funds stop"),
         ("Addresses expanded", result["nodes_expanded"], "bounds the API calls"),
     ):
@@ -1358,7 +1464,9 @@ def build_trace_report(result: dict, network: Network) -> str:
     p.append(
         '<div class="callout">FIFO attribution is a convention: funds in one account are '
         "fungible, so each edge says where the traced amount would have gone under that "
-        "rule. Treat every edge as a lead to corroborate.</div>"
+        "rule. [lower – upper] is how much of the edge the traced funds can be under any "
+        "ordering convention, from the sender's own history of the asset: above 0 it is certain "
+        "at least that much, 0 it is only possible. Treat every edge as a lead to corroborate.</div>"
     )
 
     p.append('<h2>Where the traced funds stop<span class="rule"></span></h2>')
@@ -1371,8 +1479,10 @@ def build_trace_report(result: dict, network: Network) -> str:
         for t in terminals:
             label = format_label(t["label"]) if t.get("label") else ""
             tag = f' <span class="pill flag">{_e(label)}</span>' if label else ""
+            tag += _chain_tag(network, destinations, t.get("chain_id"))
+            net = _chain_net(network, destinations, t.get("chain_id"))
             p.append(
-                f'<tr><td class="mono">{_addr_link(network, t["address"])}</td>'
+                f'<tr><td class="mono">{_addr_link(net, t["address"])}</td>'
                 f'<td class="num">{_e(t["amount"])} {_e(t["asset"])}</td>'
                 f'<td class="num">{t["hop"]}</td><td>{_e(t["reason"])}{tag}</td></tr>'
             )
@@ -1385,7 +1495,7 @@ def build_trace_report(result: dict, network: Network) -> str:
         p.append(
             '<table><colgroup><col style="width:6%"><col style="width:22%">'
             '<col style="width:22%"><col style="width:18%"><col></colgroup>'
-            "<tr><th>Hop</th><th>From</th><th>To</th><th>Attributed / sent</th>"
+            "<tr><th>Hop</th><th>From</th><th>To</th><th>FIFO amount [lower – upper] / sent</th>"
             "<th>Transaction</th></tr>"
         )
         for e in edges:
@@ -1394,12 +1504,15 @@ def build_trace_report(result: dict, network: Network) -> str:
                 if e.get("swapped_to")
                 else ""
             )
+            if e["kind"] == "bridge":
+                swap += _bridge_note(e["bridge"], network, destinations)
+            net = _chain_net(network, destinations, e.get("chain_id"))
             p.append(
-                f'<tr><td class="num">{e["hop"]}</td>'
-                f'<td class="mono">{_addr_link(network, e["from"])}</td>'
-                f'<td class="mono">{_addr_link(network, e["to"])}</td>'
-                f'<td class="num">{_e(e["attributed"])} / {_e(e["value"])} {_e(e["asset"])}{swap}</td>'
-                f'<td class="mono">{_tx_link(network, e["tx_hash"])}</td></tr>'
+                f'<tr><td class="num">{e["hop"]}{_chain_tag(network, destinations, e.get("chain_id"))}</td>'
+                f'<td class="mono">{_addr_link(net, e["from"])}</td>'
+                f'<td class="mono">{_addr_link(net, e["to"])}</td>'
+                f'<td class="num">{_e(share_text(e))} / {_e(e["value"])} {_e(e["asset"])}{_share_note(e)}{swap}</td>'
+                f'<td class="mono">{_tx_link(net, e["tx_hash"])}</td></tr>'
             )
         p.append("</table>")
     else:
@@ -1408,10 +1521,10 @@ def build_trace_report(result: dict, network: Network) -> str:
     return "".join(p)
 
 
-def write_trace_report(result: dict, path: str, network: Network) -> str:
+def write_trace_report(result: dict, path: str, network: Network, destinations=None) -> str:
     """Write the multi-hop trace HTML report to ``path``."""
     with open(path, "w", encoding="utf-8") as fh:
-        fh.write(build_trace_report(result, network))
+        fh.write(build_trace_report(result, network, destinations))
     return path
 
 

@@ -10,6 +10,7 @@ from tornado_demix.deposit_addresses import (
     forwards_to,
     shared_deposit_hits,
 )
+from tornado_demix.errors import ApiError
 
 WALLET = "0x" + "a" * 40
 EXIT = "0x" + "b" * 40
@@ -101,8 +102,8 @@ def test_too_many_senders_or_rows_or_no_dominant_sweep_is_not_a_deposit_address(
 
 def test_a_contract_is_never_a_deposit_address():
     client = FakeClient(deposit_lists(), busy={HOT})
+    # a contract is still read, but only a smart account / forwarder can come out of it
     assert classify_deposit_address(client, DEPOSIT, is_contract=lambda a: True) is None
-    assert client.calls == []
 
 
 def test_depositor_scan_skips_labelled_and_excluded_counterparties():
@@ -345,3 +346,282 @@ def test_an_aggregated_token_sweep_has_a_one_percent_tolerance():
     rows[2]["value"] = "1000"
     rows[2]["contractAddress"] = OTHER  # another asset
     assert not forwards_to(rows, DEPOSIT, HOT)
+
+
+# --- kinds: exchange / service / forwarder, gas funder ---------------------------------
+
+GAMBLE = {HOT: {"category": "gambling", "entity": "somecasino"}}
+OPERATOR = "0x" + "9" * 40
+EXECUTOR = "0x" + "8" * 40
+FUNDER = "0x" + "6" * 40
+
+
+def test_kind_is_exchange_or_service_by_the_label_category_of_the_sweep_target():
+    lists = deposit_lists()
+    ex = info_of(lists, LABELS)
+    assert ex["kind"] == "exchange_deposit" and ex["evidence"] is True
+    unl = info_of(lists)
+    assert unl["kind"] == "exchange_deposit" and unl["evidence"] is False
+    svc = info_of(lists, GAMBLE)
+    assert svc["kind"] == "service_deposit"
+    assert svc["evidence"] is False and svc["exchange"] == "" and svc["service"] == "somecasino"
+    # a category without an entity names the category
+    svc = info_of(lists, {HOT: {"category": "bridge"}})
+    assert svc["kind"] == "service_deposit" and svc["service"] == "bridge"
+
+
+class OpClient(FakeClient):
+    def __init__(self, lists, infos, **kw):
+        super().__init__(lists, **kw)
+        self.infos = infos
+        self.info_calls = []
+
+    def tx_info(self, h):
+        self.info_calls.append(h)
+        return self.infos.get(h)
+
+
+def forwarder_lists(n=5, value=10**6, to_values=None):
+    rows = [tok(WALLET, DEPOSIT, value=value, h=f"0xin{i}") for i in range(2)]
+    rows += [tok(DEPOSIT, HOT, value=value, h=f"0xop{i}") for i in range(n)]
+    return {("tokentx", DEPOSIT): rows, ("txlist", DEPOSIT): [tx(WALLET, DEPOSIT, h="0xin0")]}
+
+
+def test_operator_executed_real_token_outflows_make_a_forwarder():
+    infos = {f"0xop{i}": {"from": EXECUTOR, "to": OPERATOR} for i in range(5)}
+    client = OpClient(forwarder_lists(), infos)
+    info = classify_deposit_address(client, DEPOSIT, busy=lambda a: False)
+    assert info == {
+        "address": DEPOSIT,
+        "kind": "forwarder",
+        "operator": OPERATOR,
+        "evidence": False,
+        "senders": [WALLET],
+    }
+    assert len(client.info_calls) == 3  # capped
+
+
+TOKEN2 = "0x" + "5" * 40
+ENTRY_V08 = "0x4337084d9e255ff0702461cf8895ce9e3b5ff108"
+
+
+def two_token_lists():
+    rows = [tok(WALLET, DEPOSIT, h="0xin0")]
+    rows += [tok(DEPOSIT, HOT, h="0xop0"), tok(DEPOSIT, HOT, h="0xop1", contract=TOKEN2)]
+    return {("tokentx", DEPOSIT): rows, ("txlist", DEPOSIT): []}
+
+
+def test_two_different_tokens_through_one_operator_contract_make_a_forwarder():
+    infos = {
+        "0xop0": {"from": EXECUTOR, "to": OPERATOR},
+        "0xop1": {"from": "0x" + "7" * 40, "to": OPERATOR},
+    }
+    info = classify_deposit_address(OpClient(two_token_lists(), infos), DEPOSIT)
+    assert info["kind"] == "forwarder" and info["operator"] == OPERATOR
+
+
+def test_an_erc4337_entrypoint_operator_makes_a_smart_account():
+    for ep in (
+        "0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789",
+        "0x0000000071727de22e5e9d8baf0edac6f37da032",
+        ENTRY_V08,
+    ):
+        infos = {
+            "0xop0": {"from": EXECUTOR, "to": ep},
+            "0xop1": {"from": "0x" + "7" * 40, "to": ep.upper().replace("0X", "0x")},
+        }
+        info = classify_deposit_address(OpClient(two_token_lists(), infos), DEPOSIT)
+        assert info["kind"] == "smart_account" and info["operator"] == ep
+        assert info["evidence"] is False
+
+
+def test_a_forwarder_needs_one_operator_contract_and_resolvable_lookups():
+    mixed = {
+        f"0xop{i}": {"from": EXECUTOR, "to": "0x" + str(i) * 40} for i in range(5)
+    }  # same sender is not enough
+    assert classify_deposit_address(OpClient(forwarder_lists(), mixed), DEPOSIT) is None
+    assert classify_deposit_address(OpClient(forwarder_lists(), {}), DEPOSIT) is None
+    assert classify_deposit_address(FakeClient(forwarder_lists()), DEPOSIT) is None  # no tx_info
+
+
+def test_zero_value_or_single_operator_tx_never_make_a_forwarder():
+    infos = {f"0xop{i}": {"from": EXECUTOR, "to": OPERATOR} for i in range(5)}
+    zero = forwarder_lists(value=0)
+    assert classify_deposit_address(OpClient(zero, infos), DEPOSIT) is None
+    assert classify_deposit_address(OpClient(forwarder_lists(n=1), infos), DEPOSIT) is None
+    lists = forwarder_lists(n=1)
+    lists[("tokentx", DEPOSIT)] += [tok(DEPOSIT, OTHER, value=0, h=f"0xz{i}") for i in range(9)]
+    assert classify_deposit_address(OpClient(lists, infos), DEPOSIT) is None
+
+
+def test_self_sent_sweeps_are_not_a_forwarder_and_keep_their_kind():
+    client = OpClient(deposit_lists(), {}, busy={HOT})
+    info = classify_deposit_address(client, DEPOSIT, busy=client.busy.__contains__)
+    assert info["kind"] == "exchange_deposit" and client.info_calls == []
+
+
+def test_shared_hits_ignore_service_and_forwarder_kinds():
+    base = {"address": DEPOSIT, "senders": [WALLET, EXIT], "evidence": True}
+    for kind in ("service_deposit", "forwarder", "smart_account"):
+        assert shared_deposit_hits([dict(base, kind=kind)], {EXIT}, WALLET) == {}
+        assert shared_deposit_hits([dict(base, kind=kind)], {EXIT}, WALLET, False) == {}
+    assert shared_deposit_hits([dict(base, kind="exchange_deposit")], {EXIT}, WALLET) == {
+        EXIT: [DEPOSIT]
+    }
+    assert shared_deposit_hits([base], {EXIT}, WALLET) == {EXIT: [DEPOSIT]}  # legacy row
+
+
+def gas_lists(gas_value, gas_ts=10, sweep_ts=100):
+    rows = [
+        tx(FUNDER, DEPOSIT, value=gas_value, ts=gas_ts, h="0xgas"),
+        tok(WALLET, DEPOSIT, value=10**6, ts=50, h="0xin"),
+    ]
+    rows += [tok(DEPOSIT, HOT, value=10**6, ts=sweep_ts + i, h=f"0xs{i}") for i in range(3)]
+    return {("tokentx", DEPOSIT): rows, ("txlist", DEPOSIT): [rows[0]] + rows[2:]}
+
+
+def test_gas_funder_is_the_small_native_transfer_before_the_first_sweep():
+    assert info_of(gas_lists(10**15), LABELS)["gas_funder"] == FUNDER
+    assert info_of(gas_lists(10**15), GAMBLE)["gas_funder"] == FUNDER
+    assert info_of(gas_lists(10**17), LABELS)["gas_funder"] is None  # not small
+    assert info_of(gas_lists(10**15, gas_ts=200), LABELS)["gas_funder"] is None  # after sweep
+    assert info_of(deposit_lists(), LABELS)["gas_funder"] is None  # no token sweep
+
+
+def test_reports_render_the_kind_next_to_each_deposit_address():
+    from tests.fixtures import demix_result as fx
+    from tornado_demix.report_html import build_html_report
+
+    rows = [
+        {
+            "address": DEPOSIT,
+            "kind": "exchange_deposit",
+            "exchange": "binance",
+            "senders": [WALLET],
+        },
+        {
+            "address": OTHER,
+            "kind": "service_deposit",
+            "service": "somecasino",
+            "evidence": False,
+            "senders": [WALLET],
+        },
+        {
+            "address": HOT,
+            "kind": "forwarder",
+            "operator": OPERATOR,
+            "evidence": False,
+            "senders": [WALLET],
+        },
+    ]
+    data = fx.two_pool_result()
+    data["deposit_addresses"] = rows
+    html = build_html_report(data, fx.network())
+    assert "exchange deposit" in html
+    assert "service deposit (somecasino)" in html
+    assert f"forwarder (operator {OPERATOR})" in html
+    data["deposit_addresses"] = [dict(rows[2], kind="smart_account")]
+    assert f"smart account (operator {OPERATOR})" in build_html_report(data, fx.network())
+
+
+def test_cli_prints_the_kind_of_each_deposit_address(monkeypatch, capsys):
+    from tests.fixtures import demix_result as fx
+    from tests.test_shared_deposit import _demix_args, _stub_cli
+    from tornado_demix import cli
+    from tornado_demix.heuristics import apply_heuristics
+
+    data = fx.two_pool_result()
+    data["deposit_addresses"] = [
+        {"address": OTHER, "kind": "service_deposit", "service": "somecasino", "senders": [WALLET]},
+        {"address": HOT, "kind": "forwarder", "operator": OPERATOR, "senders": [WALLET]},
+    ]
+    apply_heuristics(data, counterparties=set())
+    _stub_cli(monkeypatch, data, {})
+    cli.cmd_demix(_demix_args())
+    out = capsys.readouterr().out
+    assert "[deposit] 2 deposit address(es)" in out
+    assert "[service deposit (somecasino)]" in out and f"[forwarder (operator {OPERATOR})]" in out
+    data["deposit_addresses"][1]["kind"] = "smart_account"
+    cli.cmd_demix(_demix_args())
+    assert f"[smart account (operator {OPERATOR})]" in capsys.readouterr().out
+
+
+def test_a_fake_token_spoof_is_not_a_forwarder_with_the_token_as_operator():
+    fake = "0x" + "4" * 40
+    rows = [tok(WALLET, DEPOSIT, h="0xin0")]
+    rows += [tok(DEPOSIT, HOT, value=5, h=f"0xsp{i}", contract=fake) for i in range(3)]
+    infos = {f"0xsp{i}": {"from": EXECUTOR, "to": fake} for i in range(3)}
+    client = OpClient({("tokentx", DEPOSIT): rows, ("txlist", DEPOSIT): []}, infos)
+    assert classify_deposit_address(client, DEPOSIT) is None
+
+
+def test_a_contract_account_behind_an_entrypoint_is_a_smart_account_never_an_exchange():
+    infos = {
+        "0xop0": {"from": EXECUTOR, "to": ENTRY_V08},
+        "0xop1": {"from": "0x" + "7" * 40, "to": ENTRY_V08},
+    }
+    client = OpClient(two_token_lists(), infos)
+    info = classify_deposit_address(client, DEPOSIT, is_contract=lambda a: True)
+    assert info["kind"] == "smart_account" and info["operator"] == ENTRY_V08
+    # a contract with exchange-like sweeps is still rejected
+    ex = OpClient(deposit_lists(), {}, busy={HOT})
+    assert classify_deposit_address(ex, DEPOSIT, is_contract=lambda a: True, labels=LABELS) is None
+
+
+def test_an_api_error_from_tx_info_degrades_to_none_and_the_scan_continues():
+    class Boom(OpClient):
+        def tx_info(self, h):
+            raise ApiError("explorer down")
+
+    assert classify_deposit_address(Boom(two_token_lists(), {}), DEPOSIT) is None
+    txs = [tx(WALLET, DEPOSIT)]
+    found = depositor_deposit_addresses(Boom(two_token_lists(), {}), WALLET, txs)
+    assert found == []
+
+
+def test_the_operator_executed_share_boundary_is_eighty_percent():
+    def lists(n_op, n_self):
+        rows = [tok(WALLET, DEPOSIT, h="0xin0")]
+        rows += [tok(DEPOSIT, HOT, h=f"0xop{i}") for i in range(n_op)]
+        rows += [tok(DEPOSIT, HOT, h=f"0xme{i}") for i in range(n_self)]
+        own = [tx(DEPOSIT, HOT, value=0, h=f"0xme{i}") for i in range(n_self)]
+        return {("tokentx", DEPOSIT): rows, ("txlist", DEPOSIT): own}
+
+    infos = {f"0xop{i}": {"from": EXECUTOR, "to": OPERATOR} for i in range(5)}
+    assert classify_deposit_address(OpClient(lists(4, 1), infos), DEPOSIT)["kind"] == "forwarder"
+    assert classify_deposit_address(OpClient(lists(3, 1), infos), DEPOSIT) is None  # 0.75
+    assert classify_deposit_address(OpClient(lists(3, 2), infos), DEPOSIT) is None  # 0.6
+
+
+def _bs(category, entity=""):
+    return {"category": category, "entity": entity, "source": "blockscout", "lineage": "blockscout"}
+
+
+def test_a_blockscout_deposit_tag_does_not_hide_the_customer_address():
+    from tornado_demix.blockscout_labels import merge_labels
+
+    client = FakeClient(deposit_lists(), busy={HOT})
+    txs = [tx(WALLET, DEPOSIT)]
+    labels = merge_labels({}, {DEPOSIT: _bs("deposit", "DEPOSIT ADDRESS")})
+    found = depositor_deposit_addresses(client, WALLET, txs, labels=labels)
+    assert [f["address"] for f in found] == [DEPOSIT]
+    # an attribution label on the same address still marks it as a service's own wallet
+    own = {DEPOSIT: {"category": "deposit", "entity": "x", "source": "attribution"}}
+    assert depositor_deposit_addresses(client, WALLET, txs, labels=own) == []
+
+
+def test_a_blockscout_other_tag_on_the_sweep_target_is_not_a_service_but_exchange_counts():
+    from tornado_demix.blockscout_labels import merge_labels
+
+    lists = deposit_lists()
+    labels = merge_labels({}, {HOT: _bs("other", "Some Contract")})
+    info = info_of(lists, labels)
+    # the tag adds nothing: a busy unlabelled target, not a service, not evidence
+    assert info["kind"] == "exchange_deposit" and info["evidence"] is False
+    labels = merge_labels({}, {HOT: _bs("exchange", "binance")})
+    info = info_of(lists, labels)
+    assert info["kind"] == "exchange_deposit" and info["evidence"] is True
+    assert info["exchange"] == "binance"
+    # the same tag from an attribution source keeps making a service deposit address
+    svc = info_of(lists, {HOT: {"category": "other", "entity": "casino", "source": "attr"}})
+    assert svc["kind"] == "service_deposit"

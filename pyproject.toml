@@ -46,7 +46,7 @@ packages = ["tornado_demix", "tornado_demix.data"]
 
 # The on-chain-verified pool registry ships inside the package.
 [tool.setuptools.package-data]
-tornado_demix = ["data/*.csv"]
+tornado_demix = ["data/*.csv", "data/*.txt"]
 
 [tool.ruff]
 line-length = 100

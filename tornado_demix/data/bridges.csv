@@ -1,0 +1,59 @@
+chain_id,address,protocol,role,kind,source_url
+1,0x5c7bcd6e7de5423a257d81b442095a1a6ced35c5,across,"SpokePool (Ethereum_SpokePool)",contract,https://etherscan.io/address/0x5c7BCd6E7De5423a257D81B442095A1a6ced35C5#code
+1,0x4d9079bb4165aeb4084c526a32695dcfd2f77381,across,"SpokePool V2 (Ethereum_SpokePool; v2 not decoded)",contract,https://etherscan.io/address/0x4D9079Bb4165aeb4084c526a32695dCfd2F77381#code
+1,0xb98454270065a31d71bf635f6f7ee6a518dfb849,hop,"L1 bridge (L1_ERC20_Bridge)",contract,https://etherscan.io/address/0xb98454270065A31D71Bf635F6F7Ee6A518dFb849#code
+1,0x3666f603cc164936c1b87e207f36beba4ac5f18a,hop,"L1 bridge (L1_ERC20_Bridge)",contract,https://etherscan.io/address/0x3666f603Cc164936C1b87e207F36BEBa4AC5f18a#code
+1,0x2796317b0ff8538f253012862c06787adfb8ceb6,synapse,"SynapseBridge",contract,https://etherscan.io/address/0x2796317b0fF8538F253012862c06787Adfb8cEb6#code
+1,0x8731d54e9d02c286767d56ac03e8037c07e01e98,stargate,"Router",contract,https://etherscan.io/address/0x8731d54E9D02c286767d56ac03e8037C07e01e98#code
+1,0x150f94b44927f078737562f0fcf3c95c01cc2376,stargate,"RouterETH",contract,https://etherscan.io/address/0x150f94B44927F078737562f0fcF3C95c01Cc2376#code
+1,0x6b7a87899490ece95443e979ca9485cbe7e71522,multichain,"AnyswapV4Router",contract,https://etherscan.io/address/0x6b7a87899490EcE95443e979cA9485CBE7E71522#code
+1,0x765277eebeca2e31912c9946eae1021199b39c61,multichain,"AnyswapV4Router",contract,https://etherscan.io/address/0x765277EebeCA2e31912C9946eAe1021199B39C61#code
+1,0x3ee18b2214aff97000d974cf647e7c347e8fa585,wormhole,"TokenBridge",contract,https://etherscan.io/address/0x3ee18B2214AFF97000D974cf647E7C347E8fa585#code
+1,0x5427fefa711eff984124bfbb1ab6fbf5e3da1820,celer,"cBridge (Bridge)",contract,https://etherscan.io/address/0x5427FEFA711Eff984124bFBB1AB6fbf5E3DA1820#code
+1,0xef4fb24ad0916217251f553c0596f8edc630eb66,debridge,"DlnSource",contract,https://etherscan.io/address/0xeF4fB24aD0916217251F553c0596F8Edc630EB66#code
+1,0x43de2d77bf8027e25dbd179b491e8d64f38398aa,debridge,"DeBridgeGate",contract,https://etherscan.io/address/0x43dE2d77BF8027e25dBD179B491e8d64f38398aA#code
+1,0xa5f565650890fba1824ee0f21ebbbf660a179934,relay,"RelayReceiver",contract,https://etherscan.io/address/0xa5F565650890fBA1824Ee0F21EbBbF660a179934#code
+1,0x4cd00e387622c35bddb9b4c962c136462338bc31,relay,"RelayDepository",contract,https://etherscan.io/address/0x4cD00E387622C35bDDB9b4c962C136462338BC31#code
+1,0xbd3fa81b58ba92a82136038b25adec7066af3155,cctp,"TokenMessenger",contract,https://etherscan.io/address/0xBd3fa81B58Ba92a82136038B25aDec7066af3155#code
+1,0x28b5a0e9c621a5badaa536219b3a228c8168cf5d,cctp,"TokenMessengerV2",contract,https://etherscan.io/address/0x28b5a0e9C621a5BadaA536219b3a228C8168cf5d#code
+1,0xa0c68c638235ee32657e8f720a23cec1bfc77c77,polygon_pos,"RootChainManager",contract,https://etherscan.io/address/0xA0c68C638235ee32657e8f720a23ceC1bFc77C77#code
+1,0x401f6c983ea34274ec46f84d70b31c151321188b,polygon_pos,"DepositManager",contract,https://etherscan.io/address/0x401F6c983eA34274ec46f84D70b31C151321188b#code
+1,0x8484ef722627bf18ca5ae6bcf031c23e6e922b30,polygon_pos,"EtherPredicate",contract,https://etherscan.io/address/0x8484Ef722627bf18ca5Ae6BcF031c23E6e922B30#code
+1,0x4dbd4fc535ac27206064b68ffcf827b0a60bab3f,arbitrum,"Inbox",contract,https://etherscan.io/address/0x4Dbd4fc535Ac27206064B68FfCf827b0A60BAB3f#code
+1,0x72ce9c846789fdb6fc1f34ac4ad25dd9ef7031ef,arbitrum,"L1GatewayRouter",contract,https://etherscan.io/address/0x72Ce9c846789fdB6fC1f34aC4AD25Dd9ef7031ef#code
+1,0xa3a7b6f88361f48403514059f1f16c8e78d60eec,arbitrum,"L1ERC20Gateway",contract,https://etherscan.io/address/0xa3A7B6F88361F48403514059F1F16C8E78d60EeC#code
+1,0x8315177ab297ba92a06054ce80a67ed4dbd7ed3a,arbitrum,"Bridge",contract,https://etherscan.io/address/0x8315177aB297bA92A06054cE80a67Ed4DBd7ed3a#code
+1,0x99c9fc46f92e8a1c0dec1b1747d010903e884be1,optimism,"L1StandardBridge",contract,https://etherscan.io/address/0x99C9fc46f92E8a1c0deC1b1747d010903E884bE1#code
+1,0xbeb5fc579115071764c7423a4f12edde41f106ed,optimism,"OptimismPortal",contract,https://etherscan.io/address/0xbEb5Fc579115071764c7423A4f12eDde41f106Ed#code
+1,0x3154cf16ccdb4c6d922629664174b904d80f2c35,base,"L1StandardBridge",contract,https://etherscan.io/address/0x3154Cf16ccdb4C6d922629664174b904d80F2C35#code
+1,0x49048044d57e1c92a77f79988d21fa8faf74e97e,base,"OptimismPortal",contract,https://etherscan.io/address/0x49048044D57e1C92A77f79988d21Fa8fAF74E97e#code
+1,0x303a465b659cbb0ab36ee643ea362c509eeb5213,zksync,"L1Bridgehub",contract,https://etherscan.io/address/0x303a465B659cBB0ab36eE643eA362c509EEb5213#code
+1,0xd7f9f54194c633f36ccd5f3da84ad4a1c38cb2cb,zksync,"L1Nullifier (shared bridge)",contract,https://etherscan.io/address/0xD7f9f54194C633F36CCD5F3da84ad4a1c38cB2cB#code
+1,0xf8b1378579659d8f7ee5f3c929c2f3e332e41fd6,scroll,"L1GatewayRouter",contract,https://etherscan.io/address/0xF8B1378579659D8F7EE5f3C929c2f3E332E41Fd6#code
+1,0x88ad09518695c6c3712ac10a214be5109a655671,gnosis_omnibridge,"ForeignOmnibridge",contract,https://etherscan.io/address/0x88ad09518695c6c3712AC10a214bE5109a655671#code
+1,0xd37bbe5744d730a1d98d8dc97c42f0ca46ad7146,thorchain,"THORChain_Router",contract,https://etherscan.io/address/0xD37BbE5744D730a1d98d8DC97c42F0Ca46aD7146#code
+42161,0xe35e9842fceaca96570b734083f4a58e8f7c5f2a,across,"SpokePool (Arbitrum_SpokePool)",contract,https://arbiscan.io/address/0xe35e9842fceaCA96570B734083f4a58e8F7C5f2A#code
+137,0x9295ee1d8c5b022be115a2ad3c30c72e34e7f096,across,"SpokePool (Polygon_SpokePool)",contract,https://polygonscan.com/address/0x9295ee1d8C5b022Be115A2AD3c30C72E34e7F096#code
+8453,0x09aea4b2242abc8bb4bb78d537a67a245a7bec64,across,"SpokePool (OP_SpokePool)",contract,https://basescan.org/address/0x09aea4b2242abC8bb4BB78D537A67a245A7bEC64#code
+1,0x1231deb6f5749ef6ce6943a275a1d3e7486f4eae,lifi,"LiFiDiamond",aggregator,https://etherscan.io/address/0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE#code
+1,0x3a23f943181408eac424116af7b7790c94cb97a5,socket,"SocketGateway",aggregator,https://etherscan.io/address/0x3a23F943181408EAC424116Af7b7790c94Cb97a5#code
+1,0xc30141b657f4216252dc59af2e7cdb9d8792e1b0,socket,"Registry",aggregator,https://etherscan.io/address/0xc30141B657f4216252dc59Af2e7CdB9D8792e1B0#code
+1,0xce16f69375520ab01377ce7b88f5ba8c48f8d666,squid,"SquidRouter",aggregator,https://etherscan.io/address/0xce16F69375520ab01377ce7B88f5BA8C48F8D666#code
+1,0x69460570c93f9de5e2edbc3052bf10125f0ca22d,rango,"RangoDiamond",aggregator,https://etherscan.io/address/0x69460570c93f9DE5E2edbC3052bf10125f0Ca22d#code
+1,0xb8901acb165ed027e32754e0ffe830802919727f,hop,"L1_ETH_Bridge",contract,https://etherscan.io/address/0xb8901acB165ed027E32754E0FFe830802919727f#code
+1,0x3d4cc8a61c7528fd86c55cfe061a78dcba48edd1,hop,"L1_ERC20_Bridge",contract,https://etherscan.io/address/0x3d4Cc8A61c7528Fd86C55cfe061a78dCBA48EDd1#code
+1,0x22b1cbb8d98a01a3b71d034bb899775a76eb1cc2,hop,"L1_ERC20_Bridge",contract,https://etherscan.io/address/0x22B1Cbb8D98a01a3B71D034BB899775A76Eb1cc2#code
+1,0x77b2043768d28e9c9ab44e1abfc95944bce57931,stargate,"StargatePoolNative (v2)",contract,https://etherscan.io/address/0x77b2043768d28E9C9aB44E1aBfC95944bcE57931#code
+1,0xc026395860db2d07ee33e05fe50ed7bd583189c7,stargate,"StargatePoolUSDC (v2)",contract,https://etherscan.io/address/0xc026395860Db2d07ee33e05fE50ed7bD583189C7#code
+1,0x933597a323eb81cae705c5bc29985172fd5a3973,stargate,"StargatePoolMigratable USDT (v2)",contract,https://etherscan.io/address/0x933597a323Eb81cAe705C5bC29985172fd5A3973#code
+1,0x32400084c286cf3e17e7b677ea9583e60a000324,zksync,"DiamondProxy",contract,https://etherscan.io/address/0x32400084C286CF3E17e7B677ea9583e60a000324#code
+1,0xd19d4b5d358258f05d7b411e21a1460d11b0876f,linea,"LineaRollup (message service)",contract,https://etherscan.io/address/0xd19d4B5d358258f05D7B411E21A1460D11B0876F#code
+1,0x051f1d88f0af5763fb888ec4378b4d8b29ea3319,linea,"TokenBridge",contract,https://etherscan.io/address/0x051F1D88f0aF5763fB888eC4378b4D8B29ea3319#code
+1,0xae0ee0a63a2ce6baeeffe56e7714fb4efe48d419,starknet,"StarknetEthBridge",contract,https://etherscan.io/address/0xae0Ee0A63A2cE6BaeEFFE56e7714FB4EFE48D419#code
+1,0xc662c410c0ecf747543f5ba90660f6abebd9c8c4,starknet,"Starknet core",contract,https://etherscan.io/address/0xc662c410C0ECf747543f5bA90660f6ABeBD9C8c4#code
+1,0x2a3dd3eb832af982ec71669e178424b10dca2ede,polygon_zkevm,"AgglayerBridge",contract,https://etherscan.io/address/0x2a3DD3EB832aF982ec71669E178424b10Dca2EDe#code
+1,0x3a05e5d33d7ab3864d53aaec93c8301c1fa49115,blast,"L1BlastBridge",contract,https://etherscan.io/address/0x3a05E5d33d7Ab3864D53aaEc93c8301C1Fa49115#code
+1,0x697402166fbf2f22e970df8a6486ef171dbfc524,blast,"L1StandardBridge",contract,https://etherscan.io/address/0x697402166Fbf2F22E970df8a6486Ef171dbfc524#code
+1,0x95fc37a27a2f68e3a647cdc081f0a89bb47c3012,mantle,"L1StandardBridge",contract,https://etherscan.io/address/0x95fC37A27a2f68e3A647CDc081F0A89bb47c3012#code
+1,0x8898b472c54c31894e3b9bb83cea802a5d0e63c6,connext,"ConnextDiamond",contract,https://etherscan.io/address/0x8898B472C54c31894e3B9bb83cEA802a5d0e63C6#code
+1,0x2a5c2568b10a0e826bfa892cf21ba7218310180b,hyphen,"LiquidityPool",contract,https://etherscan.io/address/0x2A5c2568b10A0E826BfA892Cf21BA7218310180b#code

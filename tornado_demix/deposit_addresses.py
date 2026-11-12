@@ -40,6 +40,15 @@ Limits: a spoofed non-zero transfer *into* ``X`` from a fake token cannot be tol
 from a real one without token metadata, and a spoof routed through a contract that
 ``X`` itself called is not detected.
 
+Kinds. A result carries ``kind``: ``exchange_deposit`` (every labelled sweep target is
+an exchange), ``service_deposit`` (a labelled sweep target has another category, e.g.
+gambling or bridge; never scored, ``service`` names it) or ``forwarder`` (a per-account
+forwarder whose token outflows are executed by an operator, or ``smart_account`` when
+that operator is an ERC-4337 EntryPoint; see ``_forwarder``). Only
+``exchange_deposit`` links two addresses. Exchange and service results also carry
+``gas_funder``: the sender of a small native transfer that preceded the first token
+sweep (context, not scored).
+
 Only the depositor's own outgoing counterparties are examined, busiest first and at
 most ``MAX_CANDIDATES`` of them, so the cost is bounded: two history queries per
 examined address and one busy check per sweep target.
@@ -64,6 +73,17 @@ FORWARD_SECONDS = 38400
 _FALLBACK_BLOCKS = 3200  # the same window in blocks, only for rows without timeStamp
 FORWARD_ETH_WEI = 10**16  # ...and forwards it less at most 0.01 ETH (Victor, FC 2020)
 FORWARD_TOKEN_SHARE = 0.01  # tokens: forwards at least 99 % of the incoming amount
+GAS_FUND_WEI = 10**16  # a native transfer below 0.01 coin before the first sweep funds gas
+# Public ERC-4337 EntryPoints, verified against the release notes of
+# https://github.com/eth-infinitism/account-abstraction/releases (v0.6, v0.7, v0.8).
+ENTRY_POINTS = frozenset(
+    {
+        "0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789",  # v0.6
+        "0x0000000071727de22e5e9d8baf0edac6f37da032",  # v0.7
+        "0x4337084d9e255ff0702461cf8895ce9e3b5ff108",  # v0.8
+    }
+)
+MAX_EXECUTOR_LOOKUPS = 3  # tx_info calls per address to find the executor of a forwarder
 
 
 def _rows(client, action: str, address: str) -> list[dict]:
@@ -84,8 +104,23 @@ def _rows(client, action: str, address: str) -> list[dict]:
     return rows if isinstance(rows, list) else []
 
 
+def _label(labels: dict | None, address: str) -> dict:
+    """The label the classifier may use: a Blockscout-sourced tag counts only when it
+    says ``exchange``; its ``deposit`` / ``other`` tags are ignored here (they would hide
+    a customer address or turn any sweep target into a service). Attribution labels count
+    as they are."""
+    lab = (labels or {}).get(address) or {}
+    if lab.get("source") == "blockscout" and lab.get("category") != "exchange":
+        return {}
+    return lab
+
+
+def _category(labels: dict | None, address: str) -> str:
+    return _label(labels, address).get("category") or ""
+
+
 def _is_exchange(labels: dict | None, address: str) -> bool:
-    return bool(labels) and (labels.get(address) or {}).get("category") == "exchange"
+    return _label(labels, address).get("category") == "exchange"
 
 
 def _asset(row: dict) -> str:
@@ -188,6 +223,105 @@ def forwards_to(rows: list[dict], address: str, target: str) -> bool:
     return False
 
 
+def kind_label(info: dict) -> str:
+    """Short text for the kind of a result, for the reports."""
+    kind = info.get("kind", "exchange_deposit")
+    if kind == "service_deposit":
+        return f"service deposit ({info.get('service') or 'service'})"
+    if kind in ("forwarder", "smart_account"):
+        name = "forwarder" if kind == "forwarder" else "smart account"
+        return f"{name} (operator {info.get('operator') or 'unknown'})"
+    return "exchange deposit"
+
+
+def target_label(info: dict) -> str:
+    """Where a result sweeps to, for the reports (context kinds are never scored)."""
+    kind = info.get("kind", "exchange_deposit")
+    if kind in ("forwarder", "smart_account"):
+        return "executed by an operator (context, not scored)"
+    if kind == "service_deposit":
+        return (info.get("service") or "a service wallet") + " (context, not scored)"
+    if info.get("evidence", True):
+        return info.get("exchange") or "a hot wallet"
+    return "an unlabelled busy address (context, not scored)"
+
+
+def _order(row: dict) -> tuple[int, int]:
+    t = _num(row.get("timeStamp"))
+    return (t if t is not None else 0, _block(row))
+
+
+def _gas_funder(rows: list[dict], address: str) -> str | None:
+    """Sender of the first native incoming transfer if it is small and precedes the first
+    token sweep out of ``address``; no extra calls (context only)."""
+    sweeps = [r for r in rows if _addr(r, "from") == address and r.get("contractAddress")]
+    if not sweeps:
+        return None
+    first_sweep = min(_order(r) for r in sweeps)
+    native = [
+        r
+        for r in rows
+        if _addr(r, "to") == address
+        and _addr(r, "from") not in ("", address)
+        and not r.get("contractAddress")
+    ]
+    if not native:
+        return None
+    first = min(native, key=_order)
+    if _order(first) <= first_sweep and _value(first) < GAS_FUND_WEI:
+        return _addr(first, "from")
+    return None
+
+
+def _forwarder(client, address: str, txs: list[dict], tokens: list[dict], senders) -> dict | None:
+    """A forwarder or smart account: real-token outflows executed by an operator, not by
+    the address. This looks at the outgoing token rows BEFORE the poisoning filter of
+    ``transfers`` drops those not sent by ``address``. Needs at least MIN_SWEEP_SHARE of
+    its non-zero outgoing token transfers executed in transactions it did not send, in at
+    least two distinct transactions, and one operator: the same ``to`` contract across up
+    to MAX_EXECUTOR_LOOKUPS of those transactions. Kind ``smart_account`` when the
+    operator is an ERC-4337 EntryPoint (the user's own account run through a bundler),
+    else ``forwarder``."""
+    info_of = getattr(client, "tx_info", None)
+    if info_of is None:
+        return None
+    sent = {_addr(r, "hash") for r in txs if _addr(r, "from") == address}
+    out = [
+        r for r in tokens if _addr(r, "from") == address and _value(r) > 0 and _asset(r) != "eth"
+    ]
+    ops = [r for r in out if _addr(r, "hash") not in sent]
+    if not out or len(ops) / len(out) < MIN_SWEEP_SHARE:
+        return None
+    hashes = list(dict.fromkeys(_addr(r, "hash") for r in ops if _addr(r, "hash")))
+    if len(hashes) < 2:
+        return None
+    seen = []
+    for h in hashes[:MAX_EXECUTOR_LOOKUPS]:
+        try:
+            info = info_of(h)
+        except ApiKeyError:
+            raise
+        except ApiError:
+            info = None
+        if isinstance(info, dict):
+            seen.append(info)
+    if len(seen) < 2:
+        return None
+    tos = {(i.get("to") or "").lower() for i in seen}
+    if len(tos) != 1 or "" in tos or address in tos:
+        return None
+    operator = tos.pop()
+    if operator in {_asset(r) for r in ops}:
+        return None  # a spoof of a fake token is "executed" by the token itself
+    return {
+        "address": address,
+        "kind": "smart_account" if operator in ENTRY_POINTS else "forwarder",
+        "operator": operator,
+        "evidence": False,
+        "senders": sorted(senders),
+    }
+
+
 def classify_deposit_address(
     client,
     address: str,
@@ -195,11 +329,13 @@ def classify_deposit_address(
     labels: dict | None = None,
     busy: Callable[[str], bool] | None = None,
 ) -> dict | None:
-    """Return {address, sweep_target, exchange, senders} if ``address`` looks like
-    an exchange deposit address, else None."""
+    """Return {address, kind, sweep_target, exchange, senders, ...} if ``address`` looks
+    like an exchange or service deposit address or a forwarder (see the module
+    docstring), else None."""
     address = address.lower()
-    if is_contract is not None and is_contract(address):
-        return None
+    # A contract can only be a smart account or a forwarder (an ERC-4337 account is
+    # normally a contract); never an exchange or service deposit address.
+    contract = bool(is_contract is not None and is_contract(address))
     txs = _rows(client, "txlist", address)
     if len(txs) >= MAX_DEPOSIT_TXS:
         return None
@@ -210,6 +346,16 @@ def classify_deposit_address(
     }
     if not senders or len(senders) > MAX_DEPOSIT_SENDERS:
         return None
+    swept = None if contract else _sweep(address, rows, is_contract, labels, busy)
+    if swept is None:
+        return _forwarder(client, address, txs, tokens, senders)
+    swept["senders"] = sorted(senders)
+    swept["gas_funder"] = _gas_funder(rows, address)
+    return swept
+
+
+def _sweep(address, rows, is_contract, labels, busy) -> dict | None:
+    """The exchange / service sweep test on the filtered rows; None when it fails."""
     outgoing = Counter(_addr(r, "to") for r in rows if _addr(r, "from") == address and r.get("to"))
     if not outgoing:
         return None
@@ -233,17 +379,35 @@ def classify_deposit_address(
     if not hot or sum(n for _t, n in hot) / total < MIN_SWEEP_SHARE:
         return None
     target = hot[0][0]
+    # A labelled target of another category (gambling, bridge, ...) makes the address a
+    # service deposit address: shown, never scored, never linking two addresses.
+    services = sorted(
+        {
+            _label(labels, t).get("entity") or _category(labels, t)
+            for t, _n in hot
+            if _category(labels, t) and not _is_exchange(labels, t)
+        }
+    )
+    if services:
+        return {
+            "address": address,
+            "kind": "service_deposit",
+            "sweep_target": target,
+            "sweep_targets": [t for t, _n in hot],
+            "exchange": "",
+            "service": ", ".join(services),
+            "evidence": False,
+        }
     entities = sorted(
-        {(labels or {}).get(t, {}).get("entity", "") for t, _n in hot if _is_exchange(labels, t)}
-        - {""}
+        {_label(labels, t).get("entity", "") for t, _n in hot if _is_exchange(labels, t)} - {""}
     )
     labelled_share = sum(n for t, n in hot if _is_exchange(labels, t)) / total
     return {
         "address": address,
+        "kind": "exchange_deposit",
         "sweep_target": target,
         "sweep_targets": [t for t, _n in hot],
         "exchange": ", ".join(entities),
-        "senders": sorted(senders),
         # Only sweeps to labelled exchange wallets stood above chance in the placebo
         # test; an address that qualifies by activity alone is shown, not scored.
         "evidence": labelled_share >= MIN_SWEEP_SHARE,
@@ -298,7 +462,7 @@ def depositor_deposit_addresses(
         if addr in exclude or addr == wallet:
             continue
         # A labelled address is a service's own wallet, not a customer address.
-        if labels and addr in labels:
+        if _label(labels, addr):
             continue
         examined += 1
         try:
@@ -326,6 +490,8 @@ def shared_deposit_hits(
     out: dict[str, list[str]] = {}
     recips = set(recipients)
     for info in deposit_addresses:
+        if info.get("kind", "exchange_deposit") != "exchange_deposit":
+            continue  # service deposit addresses and forwarders never link two addresses
         if evidence_only and not info.get("evidence", True):
             continue
         for s in info["senders"]:

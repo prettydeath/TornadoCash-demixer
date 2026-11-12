@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from datetime import datetime, timezone
 
@@ -25,9 +26,18 @@ from .attribution import (
     format_label,
     load_attribution,
 )
+from .blockscout_labels import (
+    fetch_and_cache,
+    fetch_tags,
+    to_labels,
+    with_blockscout,
+    write_cache,
+)
+from .bridges import Destinations
 from .characterize import characterize_address
 from .cluster import MIN_FORWARD_FRACTION, trace_wallet
 from .demix import run_demix
+from .deposit_addresses import kind_label, target_label
 from .errors import ConfigError, TornadoDemixError
 from .etherscan import EtherscanClient
 from .multi import correlate
@@ -59,7 +69,7 @@ from .report import (
     write_trace_report,
 )
 from .rpc import make_contract_check
-from .trace import MAX_HOPS, trace_funds
+from .trace import MAX_HOPS, arrival_text, share_status, share_text, trace_funds
 
 
 def _positive_hours(value):
@@ -180,6 +190,18 @@ def _valid_address(value):
     return addr
 
 
+def _valid_tx_hash(value):
+    """Validate a transaction hash, returning it lowercased."""
+    tx = (value or "").strip().lower()
+    if not config.is_tx_hash(tx):
+        raise ConfigError(
+            "{!r} is not a transaction hash: expected 0x followed by 64 hex characters.".format(
+                value
+            )
+        )
+    return tx
+
+
 def _wallets_from_args(args):
     """Resolve the wallet list from positional args or a CSV file."""
     if getattr(args, "wallets_csv", None):
@@ -199,9 +221,20 @@ def _print_placebo(pb: dict) -> None:
             f"  {band:9} real {pb['target'][band]} | decoy {pb['decoy'][band]}"
             f"  - {pb['verdicts'][band]}"
         )
+    if pb.get("direct_link_verdict"):
+        print(f"  [!] Direct links: {pb['direct_link_verdict']}")
     for caveat in pb["caveats"]:
         print(f"  [!] {caveat}")
     print(f"  {pb['note']}")
+
+
+def _load_labels(args: argparse.Namespace, net) -> dict:
+    """Attribution labels, plus the cached Blockscout ones when ``--labels-blockscout``."""
+    labels = load_attribution(net.name, getattr(args, "attribution_dir", None))
+    if getattr(args, "labels_blockscout", False):
+        directory = os.path.join(getattr(args, "cache_dir", ".cache"), "labels", "blockscout")
+        labels = with_blockscout(labels, net.chain_id, directory)
+    return labels
 
 
 def cmd_demix(args: argparse.Namespace) -> None:
@@ -209,7 +242,7 @@ def cmd_demix(args: argparse.Namespace) -> None:
     key = config.load_api_key(args.api_csv)
     net = _network(args)
     client = EtherscanClient(key, **net.client_kwargs())
-    labels = load_attribution(net.name, getattr(args, "attribution_dir", None))
+    labels = _load_labels(args, net)
     data = run_demix(
         client,
         wallet,
@@ -224,6 +257,8 @@ def cmd_demix(args: argparse.Namespace) -> None:
         known_exits=[_valid_address(a) for a in getattr(args, "known_exit", None) or []],
         labels=labels,
         deposit_addresses=not getattr(args, "no_deposit_addresses", False),
+        root_check=getattr(args, "root_check", False),
+        root_cache_dir=os.path.join(getattr(args, "cache_dir", ".cache"), "merkle"),
     )
 
     print("\n=== DEMIX SUMMARY ===")
@@ -255,12 +290,15 @@ def cmd_demix(args: argparse.Namespace) -> None:
 
     deposits = data.get("deposit_addresses") or []
     if deposits:
-        print(f"\n[deposit] {len(deposits)} exchange deposit address(es) the depositor sent to:")
+        kinds = {d.get("kind", "exchange_deposit") for d in deposits}
+        noun = "exchange deposit" if kinds == {"exchange_deposit"} else "deposit"
+        print(f"\n[deposit] {len(deposits)} {noun} address(es) the depositor sent to:")
         for d in deposits:
-            print(
-                f"     {d['address']}  swept to {d.get('exchange') or 'a hot wallet'}; "
-                f"{len(d['senders'])} sender(s)"
-            )
+            if d.get("kind", "exchange_deposit") == "exchange_deposit":
+                where = f"swept to {d.get('exchange') or 'a hot wallet'}"
+            else:
+                where = target_label(d)
+            print(f"     {d['address']}  {where}; {len(d['senders'])} sender(s) [{kind_label(d)}]")
         shared = {}
         for pool_key, addr, addrs in data.get("heuristics", {}).get("shared_deposits", []):
             shared.setdefault(addr, (pool_key, addrs))
@@ -268,6 +306,23 @@ def cmd_demix(args: argparse.Namespace) -> None:
             print("  candidates that sent to one of them too (context only, not a lead):")
             for addr, (pool_key, addrs) in sorted(shared.items()):
                 print(f"     [{pool_key}] {addr} via {', '.join(addrs)}")
+
+    rc = data.get("root_check")
+    if rc:
+        print(
+            f"\n[root] Merkle-root check: {rc['withdrawals_checked']} withdrawal(s) read, "
+            f"roots found {rc['roots_found']}, not found {rc['roots_not_found']} (exploratory)"
+        )
+        for c in rc["excluded_candidates"]:
+            print(f"  [{c['pool_key']}] excluded by Merkle root: {c['address']}")
+            for w in c["withdrawals"]:
+                print(f"     {w['tx_hash']} (root holds {w['n_root']} leaves)")
+        for c in rc.get("dropped_after_recount", []):
+            print(f"  [{c['pool_key']}] dropped after recount (count match lost): {c['address']}")
+            for w in c["withdrawals"]:
+                print(f"     {w['tx_hash']} (root holds {w['n_root']} leaves)")
+        if rc["incomplete"]:
+            print("  [!] root_check_incomplete: some candidates were not checked")
 
     anchored = [g for g in data.get("exit_groups", []) if g["anchored"]]
     if anchored:
@@ -301,6 +356,8 @@ def cmd_demix(args: argparse.Namespace) -> None:
             gap_hours=args.gap_hours,
             mode=args.mode,
             max_voucher_span_hours=getattr(args, "max_voucher_span", None),
+            root_check=getattr(args, "root_check", False),
+            root_cache_dir=os.path.join(getattr(args, "cache_dir", ".cache"), "merkle"),
         )
         _print_placebo(data["placebo"])
 
@@ -372,7 +429,7 @@ def cmd_multi(args: argparse.Namespace) -> None:
         network=net,
         exit_window_hours=args.exit_window,
         max_voucher_span_hours=getattr(args, "max_voucher_span", None),
-        labels=load_attribution(net.name, getattr(args, "attribution_dir", None)),
+        labels=_load_labels(args, net),
         deposit_addresses=not getattr(args, "no_deposit_addresses", False),
     )
 
@@ -478,7 +535,7 @@ def cmd_characterize(args: argparse.Namespace) -> None:
     key = config.load_api_key(args.api_csv)
     net = _network(args)
     client = EtherscanClient(key, **net.client_kwargs())
-    labels = load_attribution(net.name, getattr(args, "attribution_dir", None))
+    labels = _load_labels(args, net)
     info = characterize_address(client, address, net, labels=labels)
 
     print("\n=== CANDIDATE CHARACTERISATION ===")
@@ -533,13 +590,21 @@ def cmd_characterize(args: argparse.Namespace) -> None:
         print(f"\n[*] HTML report: {args.report}", file=sys.stderr)
 
 
+def _chain_name(destinations, chain_id):
+    """Registry name of a chain id, or the bare id."""
+    net = destinations.network(chain_id) if chain_id is not None else None
+    return net.name if net else ("" if chain_id is None else f"chain {chain_id}")
+
+
 def cmd_trace(args: argparse.Namespace) -> None:
     address = _valid_address(args.address)
     key = config.load_api_key(args.api_csv)
     net = _network(args)
     client = EtherscanClient(key, **net.client_kwargs())
-    labels = load_attribution(net.name, getattr(args, "attribution_dir", None))
+    labels = _load_labels(args, net)
     token = _valid_address(args.token) if args.token else None
+    arrival_tx = _valid_tx_hash(args.arrival_tx) if getattr(args, "arrival_tx", "") else None
+    destinations = Destinations(key, args.networks_csv, getattr(args, "attribution_dir", None))
     result = trace_funds(
         client,
         address,
@@ -550,33 +615,50 @@ def cmd_trace(args: argparse.Namespace) -> None:
         max_hops=args.max_hops,
         labels=labels,
         is_contract=make_contract_check(net.rpc_url),
+        chain_id=net.chain_id,
+        destinations=destinations,
+        arrival_tx=arrival_tx,
     )
 
     print("\n=== MULTI-HOP TRACE (FIFO) ===")
     print(f"Start: {result['start']}  {args.amount} {result['asset']}")
+    if arrival_text(result):
+        print(f"Arrival: {arrival_text(result)}")
     for e in result["edges"]:
         swap = f" -> swapped to {e['swapped_to']}" if e["kind"] == "swap" else ""
+        if e["kind"] == "bridge":
+            b = e["bridge"]
+            fill = f", fill {b['fill_tx']}" if b.get("fill_tx") else ", fill not found"
+            swap = f" -> bridge {b['protocol']} to {_chain_name(destinations, b['dest_chain_id'])}"
+            swap += f" (deposit id {b['deposit_id']}{fill})"
+        chain = _chain_name(destinations, e.get("chain_id"))
+        where = f" [{chain}]" if chain and e.get("chain_id") != net.chain_id else ""
         print(
-            f"{'  ' * e['hop']}hop {e['hop']}: {e['from']} -> {e['to']}  "
-            f"{e['attributed']} of {e['value']} {e['asset']}{swap}  {e['tx_hash']}"
+            f"{'  ' * e['hop']}hop {e['hop']}{where}: {e['from']} -> {e['to']}  "
+            f"{share_text(e, '-')} of {e['value']} {e['asset']}"
+            f"{'  ' + share_status(e) if share_status(e) else ''}{swap}  {e['tx_hash']}"
         )
     print("\nWhere the traced funds stop:")
     for t in result["terminals"]:
         tag = format_label(t["label"]) if t["label"] else ""
+        chain = _chain_name(destinations, t.get("chain_id"))
+        where = f"  on {chain}" if chain and t.get("chain_id") != net.chain_id else ""
         print(
             f"  {t['address']}  {t['amount']} {t['asset']}  hop {t['hop']}  [{t['reason']}]"
+            + where
             + (f"  {tag}" if tag else "")
         )
     print(
         "\nFIFO attribution is a convention: funds in one account are fungible, "
-        "so each edge is a lead to corroborate."
+        "so each edge is a lead to corroborate. [lower - upper] is the share the "
+        "traced funds can have under any ordering; ? marks an incomplete history."
     )
     if getattr(args, "json", ""):
         with open(args.json, "w", encoding="utf-8") as fh:
             json.dump(result, fh, indent=1, sort_keys=True)
         print(f"[*] JSON trace: {args.json}", file=sys.stderr)
     if getattr(args, "report", ""):
-        write_trace_report(result, args.report, net)
+        write_trace_report(result, args.report, net, destinations)
         print(f"[*] HTML report: {args.report}", file=sys.stderr)
 
 
@@ -593,6 +675,9 @@ def _count(n: int) -> str:
 def cmd_labels(args: argparse.Namespace) -> None:
     """``labels fetch`` / ``labels status``: manage the attribution set."""
     print(LABELS_NOTE)
+    if args.labels_command == "blockscout":
+        _cmd_labels_blockscout(args)
+        return
     if args.labels_command == "fetch":
         results = fetch_attribution(args.network or None, args.dir)
         print("{:<10} {:>9} {:>9}  {}".format("network", "rows", "exchange", "result"))
@@ -615,6 +700,40 @@ def cmd_labels(args: argparse.Namespace) -> None:
                 name, _count(r["rows"]), _count(r["exchange"]), r["path"] or "not loaded"
             )
         )
+
+
+def _add_blockscout_flag(parser) -> None:
+    parser.add_argument(
+        "--labels-blockscout",
+        action="store_true",
+        help="also use cached Blockscout metadata tags (fill the cache with "
+        "'labels blockscout'); a source of its own lineage, opt-in",
+    )
+
+
+def _cmd_labels_blockscout(args: argparse.Namespace) -> None:
+    net = get_network(args.network, args.networks_csv)
+    addresses = [_valid_address(a) for a in args.address]
+    if args.addresses_file:
+        with open(args.addresses_file, encoding="utf-8") as fh:
+            addresses += [_valid_address(ln.strip()) for ln in fh if ln.strip()]
+    if not addresses:
+        raise ConfigError("give --address and/or --addresses-file")
+    if args.out:
+        fresh = to_labels(fetch_tags(net.chain_id, addresses))
+        path = write_cache(net.chain_id, fresh, path=args.out)
+        found = len(fresh)
+    else:
+        directory = os.path.join(args.cache_dir, "labels", "blockscout")
+        cache = fetch_and_cache(net.chain_id, addresses, directory=directory)
+        found = sum(1 for a in addresses if a.lower() in cache)
+        path = os.path.join(directory, "{}.csv".format(net.chain_id))
+    print(
+        "{}: {} of {} addresses tagged ({}); Blockscout tags are often copied from "
+        "Etherscan, so they are not corroboration of an Etherscan-derived label.".format(
+            net.name, found, len(addresses), path
+        )
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -655,6 +774,18 @@ def build_parser() -> argparse.ArgumentParser:
         "leads found there with the real ones (doubles explorer calls)",
     )
     p_demix.add_argument(
+        "--root-check",
+        action="store_true",
+        help="exploratory: read the Merkle root of each candidate withdrawal and drop those "
+        "whose root predates every note of the depositor in that pool (a candidate with all "
+        "withdrawals excluded leaves the ranking). One transaction lookup per withdrawal (max "
+        "200); the first run builds a root index per pool, about 30 min for a large one, "
+        "cached under --cache-dir/merkle",
+    )
+    p_demix.add_argument(
+        "--cache-dir", default=".cache", help="directory for the Merkle root index cache"
+    )
+    p_demix.add_argument(
         "--no-deposit-addresses",
         action="store_true",
         help="skip the exchange-deposit-address lookup; saves up to ~50 explorer calls "
@@ -669,6 +800,7 @@ def build_parser() -> argparse.ArgumentParser:
         "$TORNADO_DEMIX_ATTRIBUTION or config/attribution/",
     )
     _add_common(p_demix)
+    _add_blockscout_flag(p_demix)
     p_demix.set_defaults(func=cmd_demix)
 
     p_multi = sub.add_parser("multi", help="analyse & correlate several wallets")
@@ -684,6 +816,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--report", default="", help="write a downloadable HTML correlation report to this path"
     )
     _add_common(p_multi)
+    _add_blockscout_flag(p_multi)
     p_multi.set_defaults(func=cmd_multi)
 
     p_cluster = sub.add_parser("cluster", help="trace split-exit reconvergence")
@@ -732,6 +865,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_char.add_argument(
         "--report", default="", help="write a downloadable HTML characterisation report here"
     )
+    _add_blockscout_flag(p_char)
     p_char.set_defaults(func=cmd_characterize)
 
     p_trace = sub.add_parser(
@@ -744,6 +878,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_trace.add_argument(
         "--start-block", type=int, default=0, help="block the funds arrived in (default 0)"
+    )
+    p_trace.add_argument(
+        "--arrival-tx",
+        default="",
+        help="transaction that brought the amount to the address (default: matched by amount)",
     )
     p_trace.add_argument(
         "--max-hops", type=int, default=MAX_HOPS, help=f"hops to follow (default {MAX_HOPS})"
@@ -765,6 +904,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="directory holding <network>.csv attribution tables; a labelled "
         "address ends the trace",
     )
+    _add_blockscout_flag(p_trace)
     p_trace.set_defaults(func=cmd_trace)
 
     p_labels = sub.add_parser(
@@ -790,6 +930,25 @@ def build_parser() -> argparse.ArgumentParser:
             help="directory holding <network>.csv; default $TORNADO_DEMIX_ATTRIBUTION "
             "or config/attribution/",
         )
+    p_bs = labels_sub.add_parser(
+        "blockscout",
+        help="fetch Blockscout metadata tags for addresses (needs the labels extra for "
+        "EIP-55 checksums); cached for --labels-blockscout",
+    )
+    p_bs.add_argument("--network", default="ethereum", help="network name (default ethereum)")
+    p_bs.add_argument("--networks-csv", default=None, help="CSV defining pools per network")
+    p_bs.add_argument(
+        "--address", action="extend", nargs="+", default=[], metavar="A", help="address(es)"
+    )
+    p_bs.add_argument("--addresses-file", default=None, help="file with one address per line")
+    p_bs.add_argument(
+        "--out",
+        default=None,
+        help="write only the fetched labels to this CSV instead of adding them to the cache",
+    )
+    p_bs.add_argument(
+        "--cache-dir", default=".cache", help="cache root; tags go to <dir>/labels/blockscout/"
+    )
     p_labels.set_defaults(func=cmd_labels)
 
     return parser

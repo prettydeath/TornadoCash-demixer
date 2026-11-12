@@ -252,11 +252,19 @@ class EtherscanClient:
                 row["hash"] = row["transactionHash"]
         return _dedupe(rows, _row_identity)
 
-    def get_logs(self, address: str, topic0: str, start_block: int, end_block: int) -> list[dict]:
+    def get_logs(
+        self,
+        address: str,
+        topic0: str,
+        start_block: int,
+        end_block: int,
+        topics: dict[int, str] | None = None,
+    ) -> list[dict]:
         """Return every event log for ``address`` matching ``topic0``.
 
-        Same paging strategy as :meth:`fetch_all`; logs are de-duplicated by
-        (transaction hash, log index).
+        ``topics`` adds exact matches on the indexed topics, ``{1: topic1, 2: topic2}``;
+        each is ANDed with topic0. Same paging strategy as :meth:`fetch_all`; logs
+        are de-duplicated by (transaction hash, log index).
         """
         query = {
             "module": "logs",
@@ -264,6 +272,12 @@ class EtherscanClient:
             "address": address.lower(),
             "topic0": topic0,
         }
+        indexes = sorted(topics or {})
+        for i in indexes:
+            query[f"topic{i}"] = topics[i]
+            query[f"topic0_{i}_opr"] = "and"
+        for a, b in zip(indexes, indexes[1:]):
+            query[f"topic{a}_{b}_opr"] = "and"
         rows = self._paged(
             query, ("fromBlock", "toBlock"), start_block, end_block, lambda b: int(b, 16)
         )
@@ -429,15 +443,23 @@ class EtherscanClient:
             result = self._rpc("eth_getTransactionByHash", [tx_hash])
         return result if isinstance(result, dict) else None
 
-    def deposit_emitters(self, tx_hash: str) -> set[str] | None:
-        """Addresses that emitted a Tornado Deposit event in the transaction; None when
-        neither the proxy module nor the RPC returns the receipt."""
+    def tx_receipt(self, tx_hash: str) -> dict | None:
+        """Return the receipt of ``tx_hash`` (status, logs), or None.
+
+        Tries the explorer's proxy module first, then the node in ``rpc_url``.
+        """
         receipt = self._proxy(
             {"module": "proxy", "action": "eth_getTransactionReceipt", "txhash": tx_hash}
         )
         if not isinstance(receipt, dict):
             receipt = self._rpc("eth_getTransactionReceipt", [tx_hash])
-        if not isinstance(receipt, dict):
+        return receipt if isinstance(receipt, dict) else None
+
+    def deposit_emitters(self, tx_hash: str) -> set[str] | None:
+        """Addresses that emitted a Tornado Deposit event in the transaction; None when
+        neither the proxy module nor the RPC returns the receipt."""
+        receipt = self.tx_receipt(tx_hash)
+        if receipt is None:
             return None
         return {
             (log.get("address") or "").lower()

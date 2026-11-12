@@ -37,6 +37,7 @@ traces users leave around it.
   hours of the last deposit, otherwise shown as a late direct link, context), and an early multi-pool profile: a recipient that received the
   wallet's full note profile over two or more pools (10+ notes) within 72 hours of
   the last deposit in each pool.
+- Labels each listed deposit address as an exchange deposit, a service deposit, an operator-run forwarder or an ERC-4337 smart account; only the exchange kind can link two addresses, and it is context only.
 - Reports a band per candidate: `strong` (lead signals from two independent sources:
   early direct link and early multi-pool profile), `moderate` (a lead signal
   from one source), `weak` (amount+timing, gas price and/or context-only
@@ -70,6 +71,16 @@ traces users leave around it.
   the depositor's side (`linked_sender`) is context too: it did not separate from
   chance in any placebo sample. Since 2.21 so is a shared exchange deposit
   address (see above).
+- Optionally excludes withdrawals by their Merkle root (`--root-check`, or the "Merkle-root
+  check" box in the web UI; exploratory, off by default). A withdrawal proof names the root
+  it was built against; if that root held none of the depositor's notes in the pool the
+  withdrawal cannot be theirs. A candidate with every withdrawal excluded leaves the ranking
+  and is listed as "excluded by Merkle root"; one with some withdrawals removed is recounted and carries
+  the context signal `root_excluded` (or is listed as dropped after recount if it loses its count match); one whose notes were only partly in the tree carries `root_partial` and nothing is removed. It is not a lead and is not scored. It needs one
+  transaction lookup per candidate withdrawal (at most 200) and a per-pool root index (about
+  30 minutes to build for a large pool, then cached). See
+  [METHODOLOGY.md](docs/METHODOLOGY.md) section 4c and the measurement in
+  [EVALUATION.md](docs/EVALUATION.md#merkle-root-exclusion-exploratory).
 - Optionally runs a placebo check (`--placebo`, or the web UI option): the same
   analysis on a decoy window that ends before the wallet's first deposit, so the
   report shows how many leads chance alone produces for this wallet.
@@ -81,7 +92,11 @@ traces users leave around it.
   discriminating edges only).
 - Traces split exits one hop forward to a common collection address (`cluster`).
 - Follows withdrawn funds forward over several hops with FIFO attribution and
-  DEX-swap resolution, up to a labelled service (`trace`).
+  DEX-swap resolution, up to a labelled service (`trace`); each edge shows
+  `FIFO amount [lower - upper]`, the share the traced funds can have under any
+  ordering. A deposit into an Across SpokePool (V3 and current events only) is
+  followed to the destination chain by its on-chain deposit id; `--arrival-tx`
+  fixes the transaction that brought the start amount, which narrows the bounds.
 - Characterises an exit candidate: activity, pool inflows, next hops, a disposable
   flag, optional address labels (`characterize`).
 
@@ -112,6 +127,7 @@ The method, thresholds and the reasoning behind them are in
 | `tools/wang_baseline.py` | the ENS set scored under the Wang et al. (2023) protocol, with their H2/H3/H5 re-implemented |
 | `tools/placebo_eval.py`, `tools/placebo_windows.py` | placebo (target-decoy) test on random real depositors, per evidence family and exit window — [results](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/EVALUATION.md#placebo-test-on-real-depositors) |
 | `tools/placebo_dar.py`, `tools/placebo_dar_universe.py` | placebo test of the shared exchange-deposit-address signal on the cached runs and on 1,000 depositors read from the ENS universe |
+| `tools/root_ceiling.py`, `tools/root_exclusion_eval.py` | upper bound and placebo measurement of the Merkle-root exclusion on the cached runs |
 | `tools/review_sample.py` | a blinded manual-review sheet of leads and hidden controls, and its scoring |
 
 ## Requirements
@@ -187,6 +203,8 @@ data is not bundled: it is third-party, and each upstream source keeps its own
 licence (see below).
 
 ### Address labels (optional)
+
+Opt-in extra source: `tornado-demix labels blockscout --network polygon --addresses-file F` caches Blockscout metadata tags (needs the `labels` extra), and `--labels-blockscout` or the web checkbox uses them; see METHODOLOGY 7a for lineage.
 
 Labels are not bundled. The tool reads one `<network>.csv` per chain
 (`ethereum.csv`, `bsc.csv`, ...) with an `address` column and optionally `entity`,
@@ -459,8 +477,9 @@ The method on both public cases, with the numbers behind each claim, is in
   On the public KuCoin and Harmony laundering cases the count match found no exit
   (every exit collected notes of several deposits); in KuCoin the linked withdrawal
   sender found 6 of the attacker's 35 exits in one depositor's window; since 2.19 these are context, not leads. Details: [docs/EVALUATION.md](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/EVALUATION.md)
-- Only Tornado Cash pools in the registry are covered. Bridges, other mixers and
-  cross-chain hops are not followed; `cluster` follows one hop only, and `trace`
+- Only Tornado Cash pools in the registry are covered. Other mixers are not
+  followed. Of the bridges only Across (V3 and current deposits) is followed across chains;
+  other bridges and aggregators end the branch, and `cluster` follows one hop only, and `trace`
   follows funds by FIFO attribution, a convention that does not hold when an
   address mixes the traced funds with others.
 - BNB Smart Chain has no verified router in the registry, so routed deposits

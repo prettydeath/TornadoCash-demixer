@@ -53,6 +53,7 @@ from tornado_demix.etherscan import EtherscanClient  # noqa: E402
 from tornado_demix.heuristics import METHOD_FAMILY, ranked_candidates  # noqa: E402
 from tornado_demix.networks import get_network  # noqa: E402
 from tornado_demix.placebo import decoy_offset  # noqa: E402
+from tornado_demix.registry import record_safe as record  # noqa: E402
 from tornado_demix.report_json import _json_default  # noqa: E402
 
 OUT = os.path.join(CACHE, "placebo")
@@ -227,6 +228,12 @@ def report(results, boot=2000, seed=7):
             "fdr_95ci": ci,
             "precision_estimate": round(max(0.0, 1 - fdr), 3) if fdr is not None else None,
         }
+        record(
+            "placebo.fdr.up_to_" + upto,
+            __file__,
+            {"depositors": len(pairs), "boot": boot, "seed": seed},
+            out["up_to_" + upto],
+        )
     fam_t, fam_d = Counter(), Counter()
     for tp, dp in pairs:
         fam_t.update(tp["families"])

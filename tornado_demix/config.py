@@ -139,6 +139,11 @@ def is_address(value: str) -> bool:
     return bool(_ADDRESS_RE.fullmatch(value))
 
 
+def is_tx_hash(value: str) -> bool:
+    """True for a 0x-prefixed string of exactly 64 hex digits."""
+    return bool(re.fullmatch(r"0x[0-9a-fA-F]{64}", value))
+
+
 def load_wallets(csv_path: str | None = None) -> list[str]:
     """Return a list of lowercased wallet addresses from a CSV file.
 

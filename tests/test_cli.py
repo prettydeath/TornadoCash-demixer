@@ -403,6 +403,8 @@ def test_cmd_trace_prints_edges_and_terminals_and_writes_json(monkeypatch, args,
                 "asset": "ETH",
                 "value": 2.0,
                 "attributed": 1.0,
+                "lower": 0.25,
+                "upper": 1.0,
                 "kind": "swap",
                 "swapped_to": "DAI",
             }
@@ -430,6 +432,7 @@ def test_cmd_trace_prints_edges_and_terminals_and_writes_json(monkeypatch, args,
     cli.cmd_trace(args(address=fx.BOB, amount=1.0, token="", start_block=5, max_hops=3, json=path))
     out = capsys.readouterr().out
     assert "swapped to DAI" in out and "[labelled address]" in out
+    assert "FIFO 1.0 [0.25 - 1.0]" in out and "certain at least 0.25" in out
     assert seen["start_block"] == 5 and seen["max_hops"] == 3 and seen["token"] is None
     assert '"nodes_expanded": 1' in open(path, encoding="utf-8").read()
 

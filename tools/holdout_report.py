@@ -38,6 +38,7 @@ from placebo_windows import OUT, narrow  # noqa: E402
 
 from tornado_demix.deposit_addresses import shared_deposit_hits  # noqa: E402
 from tornado_demix.heuristics import LEAD_SOURCE, ranked_candidates  # noqa: E402
+from tornado_demix.registry import record_safe as record  # noqa: E402
 
 WINDOWS = {"30d": 720, "72h": 72}
 SEED = 20260801
@@ -172,7 +173,7 @@ def ratio_stats(per, rng, boot=2000):
     return out
 
 
-def analyze(pairs, boot=2000, seed=SEED):
+def analyze(pairs, boot=2000, seed=SEED, window=None):
     """pairs: [(target_tally, decoy_tally)] for one window -> metric table."""
     rng = random.Random(seed)
     out = {}
@@ -183,6 +184,12 @@ def analyze(pairs, boot=2000, seed=SEED):
             continue
         per = [(metric(t, key), t["exposure"], metric(d, key), d["exposure"]) for t, d in pairs]
         out[label] = ratio_stats(per, rng, boot)
+        record(
+            f"holdout.ratio.{key}",
+            __file__,
+            {"window": window, "label": label, "boot": boot, "seed": seed},
+            out[label],
+        )
     combos = {"target": Counter(), "decoy": Counter()}
     for t, d in pairs:
         if t["exposure"] and d["exposure"]:
@@ -222,7 +229,7 @@ def build(runs, boot=2000, seed=SEED, windows=None):
     out = {"depositors": len(runs), "boot": boot, "seed": seed, "windows": {}}
     for wname, hours in windows.items():
         pairs = [(tally(narrow(t, hours)), tally(narrow(d, hours))) for t, d in runs]
-        res = analyze(pairs, boot, seed)
+        res = analyze(pairs, boot, seed, window=wname)
         res["hours"] = hours
         res["depositors_with_withdrawals"] = sum(
             1 for t, d in pairs if t["exposure"] and d["exposure"]

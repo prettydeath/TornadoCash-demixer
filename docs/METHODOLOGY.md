@@ -338,6 +338,28 @@ gas-price gate and the contract check make bounded, memoised RPC calls.
   Deposit addresses without a label stay context as before. The lookup costs up to 50
   history queries plus a busy check per new sweep target, and can be turned off
   (`--no-deposit-addresses`).
+
+  Kinds (unreleased). Every listed address has a `kind`. `exchange_deposit` is the rule
+  above: every labelled sweep target is an exchange, and only a sweep to labelled
+  exchange wallets is `evidence`; this is the only kind that was ever a lead (since
+  2.21 it is context too) and the only kind that links two addresses.
+  `service_deposit` has the same sweep behaviour but a labelled sweep target of another
+  category (gambling, bridge, payment, ...): it is shown with the service name, never
+  scored and never linked. `forwarder` is a per-account forwarder whose token outflows
+  are executed by an operator or relayer instead of the address: at least 80 % of the
+  address's non-zero outgoing real-token transfers (any token contracts) are in
+  transactions the address did not send, in at least two distinct transactions, and up
+  to three of them read with `tx_info` share one `to` contract (the operator);
+  zero-value transfers never make a forwarder. When that operator is a public ERC-4337
+  EntryPoint (v0.6, v0.7 or v0.8) the kind is `smart_account` instead: the user's own
+  account run through a bundler, not a service address. A contract account (ERC-4337 accounts normally are contracts) is read too, but only these two kinds can be returned for a contract. A forwarder whose operator is the token contract itself (a fake-token spoof) is rejected. Both kinds are never scored and
+  never link two addresses. This pass reads the outgoing
+  token rows before the poisoning filter, which stays unchanged for the other two
+  kinds. Exchange and service addresses also record a `gas_funder` (context, not
+  scored): the sender of the first native transfer, if it is below 0.01 of the native
+  coin and precedes the first token sweep. Without labels the classifier misses
+  Binance (its hot wallet is a proxy contract) and Crypto.com (its hot wallet has
+  fewer than 10,000 transactions); these are documented limits.
 - **Early multi-pool profile.** A wallet that deposited at least 10 notes over two
   or more pools has a profile (notes per pool). A recipient that, in every one of
   those pools, received exactly that many withdrawals between the pool's first
@@ -424,6 +446,97 @@ zero-fee withdrawals are ordinary, crediting it would merge unrelated depositors
 into a single "operator". A shared multi-pool consolidator unions unless it is
 graded as a window-overlap artefact. Bare count-overlap never does.
 
+## 4c. Merkle-root exclusion of withdrawals (exploratory, off by default)
+
+A withdrawal proof is built against one Merkle root of the pool's tree, and the withdrawal
+transaction names that root in its calldata. A root computed after `n_root` insertions holds
+the leaves `0 .. n_root - 1`, so a note with a leaf index of `n_root` or more cannot have been
+spent by that withdrawal. `demix --root-check` (the "Merkle-root check" box in the web UI,
+`run_demix(root_check=True)`) uses this to exclude withdrawals of candidates.
+
+Rules (the semantics are fixed; the wording is the code's):
+
+- A withdrawal is **excluded** for the wallet if `n_root <= min_leaf`: the tree at the time of
+  that root held **none** of the wallet's notes in this pool. This is a cryptographic fact, not
+  a probability.
+- If `min_leaf < n_root <= max_leaf`, only the later notes are excluded. Nothing is removed and
+  the withdrawal is still counted; the candidate carries the separate context signal
+  `root_partial` ("some of the wallet's notes were not yet in the tree at this withdrawal's
+  root"), not `root_excluded`.
+- A candidate whose **all** withdrawals in a pool are excluded is removed from the ranking and
+  shown in a separate block, "excluded by Merkle root", with each transaction and its `n_root`.
+  A candidate with some withdrawals removed stays, only the non-excluded withdrawals are
+  counted (the count match, `candidates_by_count` and the signals are recomputed) and it carries
+  the context signal `root_excluded`. If the recount costs it its count match and it no longer qualifies,
+  it is listed in the same block as "dropped after recount". Only that candidate's own hits
+  change: the field statistics other candidates are judged against (recipient counts,
+  `unique_recipients`, the gas-price share) stay at their pre-removal values, because an
+  excluded withdrawal is still a real withdrawal of someone else.
+- Only the withdrawals of ranked candidates are read, not every withdrawal in the window: one
+  `tx_info` call per transaction, at most `ROOT_CHECK_LIMIT = 200` per run. Past the limit
+  (or when a pool cannot be checked) the check stops, the run logs it, and
+  `root_check_incomplete` is set; candidates not reached are not excluded.
+
+`root_excluded` and `root_partial` are not leads, have no weight in the score and never change a band. The check removes
+withdrawals; it does not add evidence for anyone. A root that is not in the pool's index
+(a withdrawal whose root cannot be read from the calldata, or an index that does not reach that
+block) keeps the withdrawal and is counted as "not found".
+
+**How the pieces are obtained.** The root is the 32-byte word before the withdrawal's nullifier
+in the transaction input, found at any byte offset (`tornado_demix/withdraw_root.py`). The
+number of leaves behind a root comes from an index built by recomputing the pool's tree from its
+`Deposit` events (`tornado_demix/merkle.py`: MiMCSponge, 20 levels, the contract's empty-tree
+values; the empty-tree values are tested against the deployed pools in `tests/test_merkle.py`,
+and a wrong index would show as withdrawal roots that are not found, see
+[EVALUATION.md](EVALUATION.md)). The first build of a
+large pool takes about half an hour of pure-Python hashing (17 ms per deposit) and is cached
+under `.cache/merkle`, later runs are incremental. The wallet's leaves are the `leafIndex` of
+the `Deposit` event of each of its deposit transactions.
+
+**Decoy windows.** In a decoy run (`deposit_shift_seconds` > 0, used by `--placebo`) every
+withdrawal predates the wallet's real deposits, so the real leaf indices would exclude all of
+them and bias the comparison. In decoy mode the wallet's emulated leaf `L` for a deposit is the
+number of pool insertions up to the block of the *shifted* deposit time (real mode uses the
+actual leaf index). The emulated note counts as inserted at the block of the pool's real
+insertion number `L`; a withdrawal mined before that block is not checked and is counted as
+"decoy gap, not checked", because between the shifted block and that insertion the newest root
+holds exactly `L` leaves and would exclude the withdrawal by construction. Only later
+withdrawals with `n_root <= L` are excluded, which asks the same question as a real window.
+
+**Direct-link observability in the placebo.** The placebo plants one synthetic withdrawal to a
+non-contract counterparty of the wallet in the decoy run and re-scores it with the same code
+(`tornado_demix/power.py`). When the planted lead is not found, or the wallet has no non-contract
+counterparty at all, no direct link to a third-party address can be observed for this wallet, and the same counterparties
+stand in its real window: it is blind on both sides. The report then says "decoy window cannot show
+a planted lead; no chance estimate for this wallet" for direct links (`decoy_detectable` and
+`direct_link_observable` in the summary) and does not read the decoy count as a chance level.
+Early-profile leads are not affected and are reported normally. Planting at the wallet itself is
+tried too (`self_detectable`); a withdrawal back to the depositor can be observed and does occur
+(12 of 95 target leads on Ethereum, 17 of 103 on Polygon), but it does not make a wallet
+observable for links to third parties. In rate tables such wallets are removed from target and decoy alike.
+
+**Ceiling.** A root can exclude a deposit only while it is still accepted: the pool keeps the
+last `ROOT_HISTORY_SIZE` roots (100 on the Ethereum pools, 30 on the Polygon ones, read from the
+verified source), so a withdrawal proven against a root older than the wallet's newest note is
+the only kind that can be excluded. In the cached hold-out windows at most 11.01 % of
+Ethereum and 10.94 % of Polygon withdrawals could be excluded at all (`tools/root_ceiling.py`,
+upper bound, newest note only; see [EVALUATION.md](EVALUATION.md)). Most withdrawals in a
+window are made after the wallet's notes are in every accepted root, so the exclusion cannot
+decide them; it can only remove those that are old enough.
+
+**Limits.** The exclusion tests the wallet's *notes*, not its funds: a withdrawal proven
+against a newer root is not excluded, whoever made it. A withdrawal whose calldata does not
+expose the root next to the nullifier is not excluded. Candidates
+admitted only through a count that the removal changes are re-evaluated once; a candidate that
+would newly appear after the removal is not looked for.
+
+The evaluation tools log every test they compute to a hash-chained register
+(`tornado_demix/registry.py`, see "Test register" in EVALUATION.md), so the number of
+tests actually run, exploratory sweeps included, is known when results are corrected for
+multiple comparisons.
+
+A record is marked `confirmatory` only when the protocol lock lists the SHA-256 of the script that produced it. That is all the status says: it depends on the script file's hash alone, so a change in the library code the script calls (or in the inputs, parameters or data) is not covered by it.
+
 ## 5. Cluster tracing (split exits)
 
 When a wallet does not consolidate to a single address, its notes are spread across many
@@ -479,15 +592,77 @@ each attributed transfer is an edge to the next address. A transfer into a
 contract that pays the sender back in the same transaction (a DEX swap: an
 internal transfer or a token transfer to the sender in that transaction) is
 resolved: the trace continues from the sender with the swap output, scaled by the
-share of the input the trace owns. A contract that pays nothing back (a bridge, a
-deposit contract) ends that branch. The walk also stops at a labelled address, at
+share of the input the trace owns. A contract that pays nothing back (a deposit
+contract, a bridge the tool cannot decode) ends that branch. The walk also stops at a labelled address, at
 `--max-hops` (default 4), at an address that did not move the funds on, and after
 `MAX_NODES` = 40 expanded addresses, which bounds the API calls. Amounts below 1 %
 of the start are not followed.
 
+**Bridges.** A deposit into an Across SpokePool is followed to the destination
+chain. The deposit event of the origin transaction (`V3FundsDeposited` or
+`FundsDeposited`) carries the destination chain id, a deposit id, the depositor and
+the recipient; the destination SpokePool's `FilledRelay` / `FilledV3Relay` event
+repeats the origin chain id and the deposit id as indexed topics, so the fill is read
+with one `getLogs` query on the destination chain (any chain of the networks registry)
+and no bridge API. The walk continues from the fill recipient, in the token the fill
+paid (the native coin when a wrapped native token is paid out), with the amount the
+fill delivered (the traced share of the deposit, after the bridge fee); the hop count
+carries on and every edge and end point names its chain. A deposit with no fill in
+the explorer ends the branch as "bridge, fill not found"; a destination outside the
+registry as "bridge, destination chain N not supported"; an explorer error on the
+destination chain (block lookup, API) ends only that branch as "bridge, fill lookup
+failed: ..." (a rejected API key still aborts). The fill is accepted only when its
+original relay data (tokens, amounts, recipient, depositor) equal the deposit's; a
+sped-up fill is followed to its updated recipient and amount
+(`relayExecutionInfo`). Only the V3 and current SpokePool events are followed:
+Tornado-era v2 deposits (2022 to early 2024) are not decoded, and a call to a listed
+SpokePool with no decodable deposit ends as "bridge across, deposit event not decoded"
+("(v2 not decoded)" for the v2 pool). A deposit that pays out to a contract recipient
+in a wrapped native token is continued as that token or as the native coin per
+`WRAPPED_NATIVE`; a contract recipient is not looked into. The contracts that count as
+bridges are listed in `tornado_demix/data/bridges.csv` (columns chain_id, address,
+protocol, role, kind, source_url; kind is contract, aggregator or maker_eoa), each row
+with the public page it came from; any other contract is treated as before. Other
+bridges and aggregators are listed but not decoded. Maker-based bridges (Orbiter,
+Layerswap, Owlto, Rhino.fi) pay out of EOAs; no maker address has an official or
+public-label source here, so none is listed. The join is by on-chain id; it identifies
+where the bridged amount
+arrived, not who controls the recipient.
+
+Only the first matching deposit of a transaction is followed (one deposit per transaction: the depositor and the traced token must match); a transaction with several Across deposits from the same address is not split. Labels end a trace on the start chain, where the attribution labels and, with `--labels-blockscout`, the cached Blockscout labels apply; the addresses reached on a destination chain after a bridge are checked against the attribution labels only, never against Blockscout labels.
+
 FIFO is a convention: funds in one account are fungible, so an edge says where
 the traced amount *would* have gone under that rule. It is a lead for
 corroboration, like every other output.
+
+**Allocation bounds.** Next to the FIFO amount every edge carries `lower` and
+`upper`: how much of the transfer can be the traced funds under *any* ordering
+convention. The sender's history of the same asset (its inflows and outflows, one
+extra explorer call per expanded node: internal transactions for the native
+currency, nothing extra for a token) splits its balance B into a traced pool T and
+an other pool. Per outflow `o`, with T known to lie in `[t_lo, t_hi]`:
+`lower = max(0, o - (B - t_lo))`, `upper = min(o, t_hi)`, then
+`t_lo = max(0, t_lo - o)`, `t_hi = min(t_hi, B - o)`, `B -= o`. These are tight and
+FIFO always lies inside them (derivation in `tornado_demix/allocation.py`). `lower`
+above 0 means "certainly at least that much"; `lower` 0 means the transfer is only
+possible. Events are ordered by block, then by transaction index when the explorer
+row has one (internal transfers do not: an unindexed inflow counts as first in its
+block, an unindexed outflow as last). Native and token assets are separate
+histories. An outflow larger than the balance the history explains sets
+`history_incomplete` on the edge (internal transfers or pages missing); the
+shortfall is treated as unknown other funds, never clamped. Gas fees are not
+subtracted, which only widens the interval. Inflows the explorer does not list
+(beacon-chain withdrawals, block rewards, self-destruct payouts) understate the
+balance and can raise `lower`; `history_incomplete` is set per expanded node, not per
+edge, and is not triggered by such unlisted inflows. The traced inflow is the arrival
+transaction of the hop (the swap or bridge fill transaction too); for the start
+address, whose arrival is not known, the first inflow at or after the start block
+that matches the amount if exactly one does (`arrival_matched` = `exact`); with
+several equal inflows (`ambiguous`, common with Tornado denominations) or none
+(`synthetic`) the amount is placed at the start block, which only widens the bounds.
+`--arrival-tx` (web: arrival transaction) names the arrival explicitly. An edge whose
+transfer precedes the arrival, or whose FIFO amount falls outside its own bounds, shows
+FIFO only with `bounds_available` false.
 
 ## 6. Reading the output responsibly
 
@@ -516,6 +691,19 @@ and first internal transaction) and marks an exit with at most a day of history
 before its first withdrawal as fresh. In the 27 MixLaunder cases 98.6 % of
 laundering exits were such fresh addresses; so is any newly created wallet, so the
 mark is context in the report and never enters the score or the band.
+
+## 7a. Label sources and lineage
+
+Labels decide whether a deposit address is shown as swept to a labelled exchange, so a thin label set costs recall (on Polygon a 10-address re-test found one Binance wallet in the wallet-attribution set, while the Blockscout metadata service tagged Binance, Bybit, Coinbase and Crypto.com). There are two sources:
+
+- **wallet-attribution** (`labels fetch`, `--attribution-dir`): one CSV per network, as before.
+- **Blockscout metadata** (opt-in: `--labels-blockscout` / the "Blockscout labels (cached)" checkbox): `tornado-demix labels blockscout --network N --addresses-file F` asks `metadata.services.blockscout.com` for tags, 20 addresses per call, by EIP-55 checksummed address (a lowercase lookup finds nothing; checksumming needs keccak from the `labels` extra), and caches them in `.cache/labels/blockscout/<chainId>.csv`. A failed or exhausted request raises; it is never read as "no tags". The `/api/v2/addresses/<a>` field `metadata` is not used (it is null even when tags exist).
+
+Classification is conservative. `exchange` only when the tag name starts with one of Binance, Coinbase, Bybit, OKX, Kraken, Crypto.com, KuCoin, Gate, HTX/Huobi, Bitfinex, Bitget, MEXC followed by `:` or a space, and names no token, bridge, router or contract (so "Binance Smart Chain: Token" is `other`); a generic "DEPOSIT ADDRESS" tag is `deposit`; everything else is `other`. Nothing is guessed beyond that.
+
+The deposit-address classifier (section 4b, shared exchange deposit address) uses a Blockscout-sourced label only when its category is `exchange`: a Blockscout `deposit` tag does not hide a counterparty as "a service's own wallet", and a Blockscout `other` tag on a sweep target does not make the address a `service_deposit`. Labels from the attribution source keep their full effect there. The tags remain visible as labels in the reports.
+
+**Lineage.** Blockscout tags are often copied from Etherscan, and commercial tools copy Blockscout, so agreement between those is one observation, not two. A merged label lists its `sources` and carries `independent_sources`: Etherscan- and Blockscout-derived labels count as ONE lineage (`etherscan/blockscout`), any other source is its own lineage, and a label naming a different entity is listed but not counted. The wallet-attribution entry wins on category and entity; the Blockscout label only adds addresses it does not know. Scoring does not yet use `independent_sources`; it is recorded so a reader can see how many independent lineages stand behind a label.
 
 ## Pool identity
 

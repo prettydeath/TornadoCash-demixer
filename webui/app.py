@@ -14,6 +14,7 @@ characterize, with a CSV download of the results table and the HTML reports.
 import csv
 import io
 import os
+import re
 import secrets
 import sys
 from collections import OrderedDict
@@ -25,6 +26,7 @@ from flask import (  # noqa: E402
     Flask,
     Response,
     abort,
+    has_request_context,
     redirect,
     render_template,
     request,
@@ -37,9 +39,12 @@ from tornado_demix.attribution import (  # noqa: E402
     format_label,
     load_attribution,
 )
+from tornado_demix.blockscout_labels import fetch_and_cache, with_blockscout  # noqa: E402
+from tornado_demix.bridges import Destinations  # noqa: E402
 from tornado_demix.characterize import characterize_address  # noqa: E402
 from tornado_demix.cluster import trace_wallet  # noqa: E402
 from tornado_demix.demix import run_demix  # noqa: E402
+from tornado_demix.deposit_addresses import kind_label, target_label  # noqa: E402
 from tornado_demix.errors import TornadoDemixError  # noqa: E402
 from tornado_demix.etherscan import EtherscanClient  # noqa: E402
 from tornado_demix.heuristics import (  # noqa: E402
@@ -76,7 +81,13 @@ from tornado_demix.report import (  # noqa: E402
     format_totals,
 )
 from tornado_demix.rpc import make_contract_check  # noqa: E402
-from tornado_demix.trace import MAX_HOPS, trace_funds  # noqa: E402
+from tornado_demix.trace import (
+    MAX_HOPS,
+    arrival_text,
+    share_status,
+    share_text,
+    trace_funds,
+)  # noqa: E402
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET", os.urandom(16))
@@ -184,9 +195,42 @@ def _base_context():
         "trace_start_block": "",
         "trace_token": "",
         "trace_max_hops": "",
+        "trace_arrival_tx": "",
         "known_exits": "",
         "placebo": False,
         "deposit_addresses": True,
+        "root_check": False,
+        "labels_blockscout": False,
+        "blockscout_max": BLOCKSCOUT_MAX_ADDRESSES,
+    }
+
+
+def _root_row(c, net):
+    return {
+        "pool_key": c["pool_key"],
+        "address": c["address"],
+        "url": net.addr_url(c["address"]),
+        "withdrawals": [
+            {"tx_hash": w["tx_hash"], "url": net.tx_url(w["tx_hash"]), "n_root": w["n_root"]}
+            for w in c["withdrawals"]
+        ],
+    }
+
+
+def _root_check_view(data, net):
+    """Merkle-root check as the template needs it: counts and the fully excluded candidates."""
+    rc = data.get("root_check")
+    if not rc:
+        return None
+    return {
+        "checked": rc["withdrawals_checked"],
+        "found": rc["roots_found"],
+        "not_found": rc["roots_not_found"],
+        "calls": rc["tx_info_calls"],
+        "incomplete": rc["incomplete"],
+        "unchecked_pools": ", ".join(rc["unchecked_pools"]),
+        "excluded": [_root_row(c, net) for c in rc["excluded_candidates"]],
+        "dropped": [_root_row(c, net) for c in rc.get("dropped_after_recount", [])],
     }
 
 
@@ -214,11 +258,21 @@ def _placebo_view(pb, net):
         "leads": [dict(lead, url=net.addr_url(lead["address"])) for lead in pb["decoy_leads"]],
         "caveats": pb["caveats"],
         "note": pb["note"],
+        "direct_link": pb.get("direct_link_verdict"),
     }
 
 
 def _rate(value):
     return "n/a" if value is None else "{:g}".format(value)
+
+
+def _labels(net):
+    """Attribution labels, plus cached Blockscout tags when the form ticked the box."""
+    labels = load_attribution(net.name)
+    if has_request_context() and request.form.get("labels_blockscout"):
+        directory = os.path.join(".cache", "labels", "blockscout")
+        labels = with_blockscout(labels, net.chain_id, directory)
+    return labels
 
 
 def _run_demix(
@@ -231,10 +285,11 @@ def _run_demix(
     known_exits=(),
     placebo=False,
     deposit_addresses=True,
+    root_check=False,
 ):
     """Per-wallet demix. Returns (blocks, csv_rows, reports)."""
     blocks, rows, reports = [], [], {}
-    labels = load_attribution(net.name)
+    labels = _labels(net)
     for wallet in wallets:
         data = run_demix(
             client,
@@ -246,6 +301,7 @@ def _run_demix(
             known_exits=known_exits,
             labels=labels,
             deposit_addresses=deposit_addresses,
+            root_check=root_check,
         )
         if placebo and data["deposits"]:
             data["placebo"] = run_placebo(
@@ -257,6 +313,7 @@ def _run_demix(
                 labels=labels,
                 exit_window_hours=exit_window_hours,
                 mode=mode,
+                root_check=root_check,
             )
         reports[wallet] = build_html_report(data, net, attribution=labels)
         reports[wallet + ".json"] = demix_json(data, attribution=labels)
@@ -402,12 +459,8 @@ def _run_demix(
                     {
                         "address": d["address"],
                         "url": net.addr_url(d["address"]),
-                        "target": (
-                            d.get("exchange")
-                            if d.get("evidence", True)
-                            else "an unlabelled busy address (context, not scored)"
-                        )
-                        or "a hot wallet",
+                        "kind": kind_label(d),
+                        "target": target_label(d),
                         "senders": len(d.get("senders", [])),
                         "shared_by": [
                             {"address": addr, "pool_key": pool_key, "url": net.addr_url(addr)}
@@ -432,6 +485,7 @@ def _run_demix(
                 "top_band": top_band,
                 "assumptions": analysis_assumptions(data),
                 "placebo": _placebo_view(data.get("placebo"), net),
+                "root_check": _root_check_view(data, net),
             }
         )
     header = [
@@ -449,7 +503,13 @@ def _run_demix(
 
 def _run_multi(client, wallets, net, window_days, mode, exit_window_hours=None):
     corr = correlate(
-        client, wallets, window_days, mode=mode, network=net, exit_window_hours=exit_window_hours
+        client,
+        wallets,
+        window_days,
+        mode=mode,
+        network=net,
+        exit_window_hours=exit_window_hours,
+        labels=_labels(net),
     )
     report = build_multi_report(corr, net)
     strong = [
@@ -560,7 +620,11 @@ def _trace_params(form):
     token = (form.get("trace_token") or "").strip().lower()
     if token and not config.is_address(token):
         return None, "The token must be a 0x contract address, or empty for the native currency."
+    arrival_tx = (form.get("trace_arrival_tx") or "").strip().lower()
+    if arrival_tx and not config.is_tx_hash(arrival_tx):
+        return None, "The arrival transaction must be a 0x hash of 64 hex digits, or empty."
     return {
+        "arrival_tx": arrival_tx or None,
         "amount": amount,
         "start_block": start_block,
         "max_hops": max_hops,
@@ -572,7 +636,8 @@ def _run_trace(client, address, net, params):
     """Follow withdrawn funds forward from one address. Returns (view, table, reports)."""
     import json
 
-    labels = load_attribution(net.name)
+    labels = _labels(net)
+    destinations = Destinations(getattr(client, "api_key", ""))
     result = trace_funds(
         client,
         address,
@@ -583,18 +648,44 @@ def _run_trace(client, address, net, params):
         max_hops=params["max_hops"],
         labels=labels,
         is_contract=make_contract_check(net.rpc_url),
+        chain_id=net.chain_id,
+        destinations=destinations,
+        arrival_tx=params.get("arrival_tx"),
     )
-    edges = [
-        {
+
+    def on(chain_id):
+        return destinations.network(chain_id) or net if chain_id != net.chain_id else net
+
+    def chain_note(chain_id):
+        return on(chain_id).name if chain_id not in (None, net.chain_id) else ""
+
+    edges = []
+    for e in result["edges"]:
+        here = on(e.get("chain_id"))
+        view_edge = {
             **e,
-            "from_url": net.addr_url(e["from"]),
-            "to_url": net.addr_url(e["to"]),
-            "tx_url": net.tx_url(e["tx_hash"]),
+            "from_url": here.addr_url(e["from"]),
+            "to_url": here.addr_url(e["to"]),
+            "tx_url": here.tx_url(e["tx_hash"]),
+            "chain": chain_note(e.get("chain_id")),
+            "share": share_text(e),
+            "share_status": share_status(e),
         }
-        for e in result["edges"]
-    ]
+        if e["kind"] == "bridge":
+            info = e["bridge"]
+            there = destinations.network(info["dest_chain_id"])
+            view_edge["bridge_to"] = there.name if there else f"chain {info['dest_chain_id']}"
+            view_edge["bridge_fill_url"] = (
+                there.tx_url(info["fill_tx"]) if there and info.get("fill_tx") else ""
+            )
+        edges.append(view_edge)
     terminals = [
-        {**t, "url": net.addr_url(t["address"]), "label": format_label(t.get("label"))}
+        {
+            **t,
+            "url": on(t.get("chain_id")).addr_url(t["address"]),
+            "label": format_label(t.get("label")),
+            "chain": chain_note(t.get("chain_id")),
+        }
         for t in result["terminals"]
     ]
     view = {
@@ -604,8 +695,22 @@ def _run_trace(client, address, net, params):
         "edges": edges,
         "terminals": terminals,
         "nodes_expanded": result["nodes_expanded"],
+        "arrival_note": arrival_text(result),
     }
-    header = ["hop", "from", "to", "asset", "attributed", "value", "kind", "tx_hash"]
+    header = [
+        "hop",
+        "from",
+        "to",
+        "asset",
+        "attributed",
+        "value",
+        "kind",
+        "tx_hash",
+        "chain",
+        "lower",
+        "upper",
+        "bounds_available",
+    ]
     rows = [
         [
             e["hop"],
@@ -616,11 +721,15 @@ def _run_trace(client, address, net, params):
             e["value"],
             e["kind"],
             e["tx_hash"],
+            on(e.get("chain_id")).name,
+            e.get("lower", ""),
+            e.get("upper", ""),
+            e.get("bounds_available", ""),
         ]
         for e in result["edges"]
     ]
     reports = {
-        "trace": build_trace_report(result, net),
+        "trace": build_trace_report(result, net, destinations),
         address + ".json": json.dumps(result, indent=1, sort_keys=True),
     }
     return view, (header, rows), reports
@@ -628,7 +737,7 @@ def _run_trace(client, address, net, params):
 
 def _run_characterize(client, address, net):
     """Characterise one exit-candidate address. Returns (view, table, reports)."""
-    labels = load_attribution(net.name)
+    labels = _labels(net)
     info = characterize_address(client, address, net, labels=labels)
     totals = ", ".join(f"{v} {a}" for a, v in sorted(info["inflow_totals"].items()))
     inflows = [
@@ -693,11 +802,14 @@ def index():
     ctx["exit_window"] = request.form.get("exit_window") or ""
     ctx["placebo"] = bool(request.form.get("placebo"))
     ctx["deposit_addresses"] = bool(request.form.get("deposit_addresses"))
+    ctx["root_check"] = bool(request.form.get("root_check"))
+    ctx["labels_blockscout"] = bool(request.form.get("labels_blockscout"))
     for field in (
         "trace_amount",
         "trace_start_block",
         "trace_token",
         "trace_max_hops",
+        "trace_arrival_tx",
         "known_exits",
     ):
         ctx[field] = request.form.get(field) or ""
@@ -772,6 +884,7 @@ def index():
                 known_exits,
                 placebo=bool(request.form.get("placebo")),
                 deposit_addresses=ctx["deposit_addresses"],
+                root_check=ctx["root_check"],
             )
             payload = {"kind": "demix", "blocks": blocks}
         elif analysis == "multi":
@@ -841,6 +954,80 @@ def labels_fetch():
     if ok:
         lines.append("Run the analysis again to use them.")
     session["labels_msg"] = {"ok": ok, "lines": lines}
+    return redirect("/")
+
+
+BLOCKSCOUT_MAX_ADDRESSES = 1000
+_ADDRESS_RE = re.compile(r"0x[0-9a-fA-F]{40}")
+
+
+def _result_addresses(header, rows):
+    """Distinct lowercase addresses found in the cells of a result table, in order."""
+    seen = {}
+    for row in rows:
+        for cell in row:
+            for match in _ADDRESS_RE.findall(str(cell)):
+                seen.setdefault(match.lower(), None)
+    return list(seen)
+
+
+@app.route("/labels/blockscout", methods=["POST"])
+def labels_blockscout():
+    """Fill the Blockscout tag cache for a network, on request.
+
+    Same rules as ``/labels/fetch``: POST with the session's CSRF token, the outcome
+    in the session, the form page shown again. The addresses are the pasted list or,
+    when it is empty, the addresses of the last result table; at most
+    ``BLOCKSCOUT_MAX_ADDRESSES``, validated, sent only to the Blockscout metadata
+    service, and the cache lands under ``.cache/labels/blockscout``.
+    """
+    if not secrets.compare_digest(request.form.get("csrf", ""), session.get("csrf", "")):
+        abort(400)
+    networks = load_networks(DEFAULT_NETWORKS_CSV)
+    net = networks.get(request.form.get("network") or "")
+    if net is None:
+        session["labels_msg"] = {"ok": False, "lines": ["Unknown network."]}
+        return redirect("/")
+    pasted = (request.form.get("addresses") or "").strip()
+    if pasted:
+        addresses, bad = _parse_wallets(pasted)
+        if bad:
+            session["labels_msg"] = {
+                "ok": False,
+                "lines": ["Not 0x addresses: {}".format(", ".join(bad[:5]))],
+            }
+            return redirect("/")
+    else:
+        store = _store_get()
+        csv_part = (store or {}).get("csv") or {}
+        addresses = _result_addresses(csv_part.get("header", []), csv_part.get("rows", []))
+    if not addresses:
+        session["labels_msg"] = {"ok": False, "lines": ["No addresses to look up."]}
+        return redirect("/")
+    if len(addresses) > BLOCKSCOUT_MAX_ADDRESSES:
+        session["labels_msg"] = {
+            "ok": False,
+            "lines": [
+                "{} addresses; at most {} per request.".format(
+                    len(addresses), BLOCKSCOUT_MAX_ADDRESSES
+                )
+            ],
+        }
+        return redirect("/")
+    directory = os.path.join(".cache", "labels", "blockscout")
+    try:
+        cache = fetch_and_cache(net.chain_id, addresses, directory=directory)
+    except TornadoDemixError as exc:
+        session["labels_msg"] = {"ok": False, "lines": [str(exc)]}
+        return redirect("/")
+    found = sum(1 for a in addresses if a in cache)
+    session["labels_msg"] = {
+        "ok": True,
+        "lines": [
+            '{}: {} of {} addresses tagged by Blockscout. Tick "Blockscout labels (cached)" '
+            "and run the analysis again to use them.".format(net.name, found, len(addresses))
+        ],
+    }
     return redirect("/")
 
 

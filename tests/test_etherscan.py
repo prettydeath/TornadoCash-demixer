@@ -661,3 +661,21 @@ def test_a_partially_indexed_blockscout_answer_keeps_its_rows(monkeypatch):
     )
     monkeypatch.setattr(client.session, "get", lambda *a, **k: _Resp())
     assert client.call({"module": "account", "action": "txlistinternal", "address": "0x1"}) == rows
+
+
+def test_get_logs_ands_the_indexed_topics_with_topic0():
+    client = EtherscanClient("k")
+    seen = []
+
+    def fake_call(params):
+        seen.append(params)
+        return []
+
+    client.call = fake_call
+    client.get_logs("0xAbC", "0xt0", 1, 2, topics={1: "0xt1", 2: "0xt2"})
+    q = seen[0]
+    assert (q["topic0"], q["topic1"], q["topic2"]) == ("0xt0", "0xt1", "0xt2")
+    assert q["topic0_1_opr"] == q["topic0_2_opr"] == q["topic1_2_opr"] == "and"
+    seen.clear()
+    client.get_logs("0xAbC", "0xt0", 1, 2)
+    assert not any(k.startswith("topic") and k != "topic0" for k in seen[0])

@@ -56,3 +56,9 @@ def _no_backoff_sleeps(request, monkeypatch):
     if request.node.get_closest_marker("live"):
         return
     monkeypatch.setattr("time.sleep", lambda _seconds: None)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_test_register(tmp_path, monkeypatch):
+    """The evaluation tools append to the test register; keep that out of the real one."""
+    monkeypatch.setenv("TORNADO_DEMIX_REGISTRY", str(tmp_path / "_register" / "tests.jsonl"))

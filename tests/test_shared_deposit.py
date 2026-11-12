@@ -277,7 +277,7 @@ def test_the_html_report_lists_deposit_addresses_only_when_found():
     data["deposit_addresses"] = [DEPOSIT_ROW]
     apply_heuristics(data, counterparties=set(), shared_deposits={fx.BOB: [DEPOSIT]})
     html = build_html_report(data, fx.network())
-    assert "Exchange deposit addresses" in html
+    assert "Deposit addresses<" in html
     assert DEPOSIT in html and "binance" in html
     assert "same exchange deposit address as the depositor" in html
     assert "Shared exchange deposit address" in html or "shared exchange deposit address" in html
@@ -285,7 +285,7 @@ def test_the_html_report_lists_deposit_addresses_only_when_found():
     empty = fx.two_pool_result()
     empty["deposit_addresses"] = []
     apply_heuristics(empty, counterparties={fx.BOB})
-    assert "Exchange deposit addresses" not in build_html_report(empty, fx.network())
+    assert "Deposit addresses<" not in build_html_report(empty, fx.network())
 
 
 # --- web UI ----------------------------------------------------------------------
@@ -335,5 +335,20 @@ def test_the_result_page_shows_the_deposit_addresses(web, monkeypatch):
     body = web.post("/", data={"wallets": fx.WALLET, "analysis": "demix", "csrf": "tok"}).get_data(
         as_text=True
     )
-    assert "Exchange deposit addresses</h4>" in body
+    assert "Deposit addresses</h4>" in body
     assert DEPOSIT in body and "binance" in body and fx.BOB in body
+
+
+def test_the_result_page_shows_the_kind_of_each_deposit_address(web, monkeypatch):
+    data = fx.two_pool_result()
+    data["deposit_addresses"] = [
+        dict(DEPOSIT_ROW, kind="service_deposit", service="somecasino", evidence=False),
+        dict(DEPOSIT_ROW, address="0x" + "9" * 40, kind="forwarder", operator="0x" + "8" * 40),
+    ]
+    apply_heuristics(data, counterparties=set())
+    monkeypatch.setattr(webapp, "run_demix", lambda *a, **kw: data)
+    body = web.post("/", data={"wallets": fx.WALLET, "analysis": "demix", "csrf": "tok"}).get_data(
+        as_text=True
+    )
+    assert "service deposit (somecasino)" in body
+    assert "forwarder (operator 0x" + "8" * 40 + ")" in body
