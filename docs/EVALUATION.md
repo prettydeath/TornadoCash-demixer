@@ -623,7 +623,7 @@ needs both. The change was decided after seeing the hold-out numbers, so it is e
 and has not been tested on new data. The tables above are historical and were not
 rewritten.
 
-The same release fixes four defects in the deposit-address classifier
+The same release fixes five defects in the deposit-address classifier
 (`tornado_demix/deposit_addresses.py`, `tornado_demix/rpc.py`) that an
 [external read-only review](https://github.com/searadacunha/Polymarket-Home-of-the-Insiders/blob/main/research_notes/github-tooling-audit-2026-11-06/audit_notes/demixer_evaluation.md)
 (2026-11-06) pointed out and that were confirmed:
@@ -639,6 +639,10 @@ The same release fixes four defects in the deposit-address classifier
    38,400 seconds from the row timestamps (blocks only when a timestamp is missing), and a
    sweep that forwards the sum of several incoming transfers since the previous outgoing
    transfer is accepted.
+5. With the contract status unknown (a failed `eth_getCode` lookup), an unlabelled busy
+   address could still be taken for a hot wallet, so contracts such as a bridge depository
+   passed as exchange wallets in the review's test; an unknown status is now not taken for
+   an EOA.
 
 The fixes change which addresses are listed as deposit addresses; they were not re-run on the
 cached hold-out data, so no number above reflects them.

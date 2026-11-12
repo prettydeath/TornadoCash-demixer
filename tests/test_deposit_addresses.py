@@ -234,6 +234,19 @@ def test_a_token_transfer_is_counted_once_not_as_txlist_call_plus_tokentx():
     assert info is not None and info["sweep_targets"] == [HOT]
 
 
+def test_unknown_contract_status_is_not_a_hot_wallet():
+    # A failed eth_getCode lookup (None) must not let a busy contract pass as a hot wallet.
+    client = FakeClient(deposit_lists(), busy={HOT})
+    info = classify_deposit_address(
+        client, DEPOSIT, is_contract=lambda a: None, busy=client.busy.__contains__
+    )
+    assert info is None
+    info = classify_deposit_address(
+        client, DEPOSIT, is_contract=lambda a: False, busy=client.busy.__contains__
+    )
+    assert info is not None and info["sweep_target"] == HOT
+
+
 def test_an_eth_value_row_to_a_token_contract_is_kept():
     fwd = 10**18 - 10**15
     lists = {

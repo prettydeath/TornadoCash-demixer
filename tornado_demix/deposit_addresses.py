@@ -220,14 +220,15 @@ def classify_deposit_address(
             hot.append((target, n))
         elif (
             busy is not None
-            and not (is_contract is not None and is_contract(target))
+            and (is_contract is None or is_contract(target) is False)
             and forwards_to(rows, address, target)
             and busy(target)
         ):
             # Without a label, a hot wallet is an ordinary (non-contract) busy address
             # that receives forwarded deposits: a token, a DEX router or a Tornado
             # contract is busy too but is not an exchange, and a wallet that merely
-            # pays a busy address does not forward what it received.
+            # pays a busy address does not forward what it received. An unknown
+            # contract status (lookup failed) is not taken for an EOA.
             hot.append((target, n))
     if not hot or sum(n for _t, n in hot) / total < MIN_SWEEP_SHARE:
         return None
