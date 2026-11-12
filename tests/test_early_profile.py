@@ -134,7 +134,9 @@ def test_wiring():
     assert METHOD_FAMILY["early_profile"] == "amount+timing"
     assert SIGNAL_WEIGHTS["early_profile"] == 0.35
     assert SIGNAL_LABEL["early_profile"] == "Early multi-pool profile match"
-    assert LEAD_SIGNALS == (LINKED_SIGNALS - {"linked_sender"}) | {"early_profile"}
+    assert LEAD_SIGNALS == (LINKED_SIGNALS - {"linked_sender", "shared_deposit"}) | {
+        "early_profile"
+    }
     assert "early_profile" not in LINKED_SIGNALS
 
 

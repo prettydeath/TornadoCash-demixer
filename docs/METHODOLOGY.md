@@ -283,8 +283,7 @@ gas-price gate and the contract check make bounded, memoised RPC calls.
   within 72 hours was a lead 26 times in real windows against once in decoy
   windows (before 2022-08-08 15 against 0, after it 11 against 1); a later one 8
   against 13 (5 against 4, 3 against 9), chance level ([EVALUATION.md](EVALUATION.md#direct-links-early-versus-late)).
-  The rule applies to the depositor's own address as well. `shared_deposit` is
-  unchanged.
+  The rule applies to the depositor's own address as well.
 - **Linked withdrawal sender.** `withdraw()` may be called by anyone, and the
   caller is recorded as the transaction sender. If the depositor, or one of its
   direct non-contract counterparties, sent a withdrawal transaction, its recipient
@@ -314,15 +313,29 @@ gas-price gate and the contract check make bounded, memoised RPC calls.
   frequent destinations, those labelled as an exchange or with at least 10,000
   transactions. A busy address counts as a hot wallet only if it is not a contract
   (a token, a DEX router or the Tornado router is busy too) and receives amounts
-  forwarded within 3,200 blocks, short by at most 0.01 ETH or 1 % of a token amount
-  (the forwarding test of Victor used by Tutela). A recipient in the window that
-  also sent funds to one of these addresses is flagged `shared_deposit`
-  (linked-address family), but only when the deposit address sweeps at least 80 %
-  of its outflow to **labelled** exchange wallets: in the placebo test that version
-  gave 27 real-window against 4 decoy hits, while deposit addresses recognised by
-  activity alone were at chance (16 against 12). Those are shown as context. So
-  without an attribution set the signal does not fire (`tornado-demix labels fetch`
-  downloads the public set). The lookup costs up to 50
+  forwarded within 38,400 seconds (3,200 Ethereum blocks of 12 s; the window is a
+  duration, taken from the row timestamps, and falls back to 3,200 blocks only for a
+  row without one), short by at most 0.01 ETH or 1 % of a token amount (the
+  forwarding test of Victor used by Tutela); a sweep may also forward the sum of
+  several incoming transfers of the same asset received in the window and after the
+  previous outgoing transfer of that asset, with the same tolerance. Counting rows:
+  a token transfer is one transfer (the `txlist` call to the token contract, value
+  0, is not counted next to the `tokentx` row), zero-value transfers are ignored,
+  and a token transfer out of the address whose transaction the address did not send
+  is dropped (address poisoning by `transferFrom` spoofing); a spoofed non-zero
+  transfer into the address by a fake token is not detected offline. An account
+  whose code is an EIP-7702 delegation designator (`0xef0100` plus a 20-byte
+  address) is an EOA, not a contract. A recipient in the window that
+  also sent funds to one of these addresses is flagged `shared_deposit`. Since 2.21
+  this is **context only**: it is shown in the evidence but has no weight, never
+  raises the band and is not an independent family (like `linked_sender`). In the
+  second hold-out, at 30 days, a labelled shared deposit was 18 target against 30
+  decoy leads on Ethereum (R 1.77, interval 0.16-3.91) and 23 against 13 on Polygon
+  (R 0.58, 0.00-3.16), while at 72 hours it was 14 against 2 and 23 against 0
+  ([HOLDOUT2_RESULTS.md](HOLDOUT2_RESULTS.md)). Before that, in the sample of rule
+  2.17, deposit addresses swept to labelled exchanges gave 27 real-window against 4
+  decoy hits and those recognised by activity alone were at chance (16 against 12).
+  Deposit addresses without a label stay context as before. The lookup costs up to 50
   history queries plus a busy check per new sweep target, and can be turned off
   (`--no-deposit-addresses`).
 - **Early multi-pool profile.** A wallet that deposited at least 10 notes over two
@@ -337,17 +350,17 @@ gas-price gate and the contract check make bounded, memoised RPC calls.
 
 **Band, evidence and score.** Each recipient accumulates a signal set
 (`count_match`, `self_relayed`, `early_profile`, `gas_price`, `linked`,
-`shared_deposit`, and `profile_match` on `multi` runs), and
-possibly `linked_late` and `linked_sender`, which are context only (since 2.19 for
-the sender): no family, no weight, no band. The signals
+and `profile_match` on `multi` runs), and
+possibly `linked_late`, `linked_sender` and `shared_deposit`, which are context
+only (since 2.19 for the sender, since 2.21 for the shared deposit address): no
+family, no weight, no band. The signals
 fall into evidence families: amount+timing (`count_match`, `self_relayed`,
-`early_profile`, `profile_match`), gas price, linked address (`linked`,
-`shared_deposit`). The **band** needs a lead signal — an early direct link, a
-shared exchange deposit address or an early multi-pool profile. Lead
-signals come from three independent sources: an early direct link (`linked`), a shared deposit address (`shared_deposit`) and an early
-multi-pool profile (`early_profile`). `strong` needs lead signals from two of
-these sources, `moderate` a lead signal from one, and `weak` is amount+timing
-and/or gas price only. Amount+timing and gas price never raise the band; they
+`early_profile`, `profile_match`), gas price, linked address (`linked`). The
+**band** needs a lead signal — an early direct link or an early multi-pool
+profile. Lead signals come from two independent sources: an early direct link
+(`linked`) and an early multi-pool profile (`early_profile`). `strong` needs lead
+signals from both of them, `moderate` a lead signal from one, and `weak` is
+amount+timing, gas price and/or context-only signals. Amount+timing and gas price never raise the band; they
 are shown as context. The rule follows the
 placebo test on real depositors ([EVALUATION.md](EVALUATION.md)): run on decoy
 windows that end before the wallet's first deposit, the pipeline found
@@ -363,11 +376,12 @@ gas-price match or a self-relayed count match alone reached `moderate`, and two
 non-linked families reached `strong`. Since 2.17 a direct link counts as a lead
 only within 72 hours (see above); the pooled 30-day number hid that a later one
 is chance-level. Before 2.17 a direct link at any delay was `linked`. Before 2.19 a
-`linked_sender` was a lead (the second source with the direct link). A
+`linked_sender` was a lead (the second source with the direct link); before 2.21 a
+`shared_deposit` was a third lead source. A
 linked exit whose first withdrawal came within 72 hours of the deposit is marked
 as an **early exit**; like the fresh-address mark it does not change the band or
 the score by itself (an early direct link is `linked` by definition; for
-`shared_deposit` and the context-only `linked_sender` the mark is context). Every candidate carries its **evidence**: each family, whether it
+the context-only `shared_deposit` and `linked_sender` the mark is context). Every candidate carries its **evidence**: each family, whether it
 holds, and the numbers behind it (share of the field with the same count, `disc`,
 gas price, number of relayer-free withdrawals).
 

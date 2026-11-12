@@ -21,7 +21,7 @@ a withdrawal sent by the depositor's side, a deposit address swept to a labelled
 exchange) and, measured later, an early multi-pool profile match. A band needs one
 of these (since version 2.13 for the linked family, since 2.15 for the profile).
 Since version 2.16 `strong` needs lead signals from two independent sources
-(direct link, shared deposit address, early profile); one source is `moderate`,
+(direct link, shared deposit address, early profile; since 2.21 only the early direct link and the early profile); one source is `moderate`,
 and amount+timing and gas price are context that never raises the band. Before
 2.16, a lead signal plus any other family was `strong`, so a direct link plus a
 count match was `strong`. The synthetic tables below use the current rule. The gas-price signal turned out
@@ -312,7 +312,7 @@ window (0.06), but the profile rests on different data than an address link. Sin
 `early_profile` signal (at least 10 notes, two or more pools, 72 hours); it makes
 a lead on its own. Being a stricter count match, it belongs to the amount+timing
 family; as one lead source it is `moderate`, and it reaches `strong` only together
-with a second lead source (a direct link or a shared deposit address).
+with a second lead source (a direct link; before 2.21 also a shared deposit address).
 
 **Hold-out and sensitivity.** `tools/placebo_profile.py` takes `--period
 before|after` (split at the sanctions, 2022-08-08), `--notes`, `--hours` and
@@ -516,7 +516,7 @@ the decoy window of the wallet under investigation, beside the real one.
 
 ### Current rule (2.17) in one table
 
-Since 2.19 the "linked sender (lead)" row below is context only (see [Rule 2.19](#rule-219)).
+Since 2.19 the "linked sender (lead)" row below is context only (see [Rule 2.19](#rule-219)). Since 2.21 so is the "shared deposit" row (see [Rule 2.21](#rule-221-unreleased-shared-deposit-address-is-context)).
 
 `tools/review4_*.py` re-score the cached runs offline under the 2.17 rule. R is
 decoy leads per withdrawal searched over target leads per withdrawal searched;
@@ -603,6 +603,45 @@ second hold-out that tests 2.19 is pre-registered in
 reported the rule has not been confirmed on new data. The tables above are
 historical and were not rewritten: they describe the rule in force when each was
 measured.
+
+### Rule 2.21 (unreleased): shared deposit address is context
+
+The second hold-out ([HOLDOUT2_RESULTS.md](HOLDOUT2_RESULTS.md)) tested rule 2.19 on 599
+Ethereum and 400 Polygon depositors. The labelled shared deposit address was not above chance
+at 30 days: Ethereum 18 target against 30 decoy leads (R 1.77, interval 0.16-3.91), Polygon 23
+against 13 (R 0.58, 0.00-3.16). Pre-registered hypothesis H4 (upper bound of R below 1) was not
+supported, and H3 and H6 failed with it. At 72 hours the same signal was 14 against 2 and
+23 against 0, so the failure is a matter of window and of a few depositors: the 30 Ethereum
+decoy leads came from 5 depositors, 20 of them from one. The deposit addresses behind them had
+31, 35 and 18 distinct senders (the rule accepts up to 50), so they were shared, not per
+customer.
+
+Version 2.21 therefore treats `shared_deposit` as `linked_sender` has been treated since
+2.19: it is shown as evidence, has no weight, never raises the band and is not an independent
+family. Lead sources are now the early direct link and the early multi-pool profile; `strong`
+needs both. The change was decided after seeing the hold-out numbers, so it is exploratory,
+and has not been tested on new data. The tables above are historical and were not
+rewritten.
+
+The same release fixes four defects in the deposit-address classifier
+(`tornado_demix/deposit_addresses.py`, `tornado_demix/rpc.py`) that an
+[external read-only review](https://github.com/searadacunha/Polymarket-Home-of-the-Insiders/blob/main/research_notes/github-tooling-audit-2026-11-06/audit_notes/demixer_evaluation.md)
+(2026-11-06) pointed out and that were confirmed:
+
+1. A token transfer was counted twice as an outgoing transfer (the `txlist` call to the
+   token contract and the `tokentx` row); the call row is now dropped.
+2. Address poisoning: zero-value transfers are ignored, and a token transfer out of the
+   address whose transaction the address did not send is dropped. A spoofed non-zero
+   transfer into the address by a fake token is not detected (no token metadata offline).
+3. An EIP-7702 delegated account (code `0xef0100` plus a 20-byte address) is an EOA, not a
+   contract.
+4. The forwarding window was 3,200 blocks, which is 10.7 hours only on Ethereum; it is now
+   38,400 seconds from the row timestamps (blocks only when a timestamp is missing), and a
+   sweep that forwards the sum of several incoming transfers since the previous outgoing
+   transfer is accepted.
+
+The fixes change which addresses are listed as deposit addresses; they were not re-run on the
+cached hold-out data, so no number above reflects them.
 
 ### Published heuristics under the same design
 
@@ -759,7 +798,7 @@ so this confirms that careless users also transact directly; it does not
 measure the other signals. Two of the 16 pairs are also found by `shared_deposit`
 (depositor and recipient sent funds to the same deposit address of a
 labelled exchange); with the direct link that is two lead sources, so these two
-are the `strong` pairs, and without `linked` they stay `moderate`. Otherwise the other
+are the `strong` pairs, and without `linked` they stay `moderate` (measured under 2.17; since 2.21 the shared deposit is context, so they are `moderate`). Otherwise the other
 signals find almost nothing here, for a reason the
 method states in advance: 24 of the 31 pairs come from depositors whose only
 voucher in that pool is a single note, where the count match cannot narrow the

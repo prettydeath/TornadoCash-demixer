@@ -12,11 +12,15 @@ from tests.test_demix import RELAYER, _FakeClient, _recipient, _tx, _wlog
 from tornado_demix import cli
 from tornado_demix.demix import run_demix
 from tornado_demix.heuristics import (
+    CONTEXT_SIGNALS,
+    LEAD_SIGNALS,
+    LEAD_SOURCE,
     LINKED_SIGNALS,
     METHOD_FAMILY,
     SIGNAL_LABEL,
     SIGNAL_WEIGHTS,
     apply_heuristics,
+    band_rationale,
     candidate_reason,
     confidence_band,
     method_breakdown,
@@ -42,29 +46,35 @@ def _row(data, address):
 # --- signal wiring -----------------------------------------------------------
 
 
-def test_the_signal_is_a_linked_address_signal_with_the_linked_weight():
-    assert METHOD_FAMILY["shared_deposit"] == "linked address"
-    assert "shared_deposit" in LINKED_SIGNALS
-    assert SIGNAL_WEIGHTS["shared_deposit"] == SIGNAL_WEIGHTS["linked"] == 0.40
+def test_the_signal_is_context_only_since_2_21():
+    """Second hold-out, 30 days: labelled shared deposit 18 / 30 on Ethereum (R 1.77),
+    23 / 13 on Polygon (R 0.58); not above chance."""
+    assert METHOD_FAMILY["shared_deposit"] == "context"
+    assert "shared_deposit" in CONTEXT_SIGNALS
+    assert "shared_deposit" not in LEAD_SIGNALS and "shared_deposit" not in LEAD_SOURCE
+    assert "shared_deposit" not in SIGNAL_WEIGHTS  # no weight, like linked_sender
+    assert "shared_deposit" in LINKED_SIGNALS  # still marks an early exit
     assert SIGNAL_LABEL["shared_deposit"] == "Shared exchange deposit address"
 
 
-def test_a_shared_deposit_alone_is_a_moderate_band_and_admits_the_recipient():
+def test_a_shared_deposit_alone_is_weak_and_admits_the_recipient():
     data = fx.two_pool_result()
     apply_heuristics(data, counterparties=set(), shared_deposits={fx.BOB: [DEPOSIT]})
     row = _row(data, fx.BOB)
     assert row["signals"] == ["shared_deposit"]
-    assert row["band"] == "moderate"
-    assert confidence_band({"shared_deposit"}) == "moderate"
+    assert row["band"] == "weak" and row["confidence"] == 0.0
+    assert confidence_band({"shared_deposit"}) == "weak"
+    rationale = band_rationale(row["band"], set(row["signals"]))
+    assert "context only" in rationale and "18 against 30" in rationale
 
 
-def test_a_shared_deposit_with_a_count_match_is_moderate():
+def test_a_shared_deposit_with_a_count_match_is_weak():
     data = fx.two_pool_result()
     apply_heuristics(data, counterparties=set(), shared_deposits={fx.ALICE: [DEPOSIT]})
     row = _row(data, fx.ALICE)
     assert {"count_match", "shared_deposit"} <= set(row["signals"])
-    # one lead source; the count match is context only
-    assert row["band"] == "moderate"
+    # no lead source: both are context only
+    assert row["band"] == "weak"
 
 
 def test_the_signal_is_recorded_per_pool_where_the_recipient_appears():
@@ -101,7 +111,7 @@ def test_the_evidence_text_names_the_address_and_where_it_is_swept():
     apply_heuristics(data, counterparties=set(), shared_deposits={fx.BOB: [DEPOSIT]})
     row = _row(data, fx.BOB)
     line = next(e for e in row["evidence"] if e["signal"] == "shared_deposit")
-    assert line["holds"] is True and line["family"] == "linked address"
+    assert line["holds"] is True and line["family"] == "context"
     assert "sent funds to the same exchange deposit address as the depositor" in line["detail"]
     assert DEPOSIT[:10] in line["detail"] and "swept to binance" in line["detail"]
     assert "same exchange deposit address as the depositor" in candidate_reason(row)
@@ -137,10 +147,10 @@ class _DepositClient(_FakeClient):
         self.calls = []
         self.lists = {
             ("txlist", DEPOSIT): [
-                {"from": fx.WALLET, "to": DEPOSIT, "hash": "0x1"},
-                {"from": SHARER, "to": DEPOSIT, "hash": "0x2"},
-                {"from": DEPOSIT, "to": HOT, "hash": "0x3"},
-                {"from": DEPOSIT, "to": HOT, "hash": "0x4"},
+                {"from": fx.WALLET, "to": DEPOSIT, "hash": "0x1", "value": "1000"},
+                {"from": SHARER, "to": DEPOSIT, "hash": "0x2", "value": "1000"},
+                {"from": DEPOSIT, "to": HOT, "hash": "0x3", "value": "1000"},
+                {"from": DEPOSIT, "to": HOT, "hash": "0x4", "value": "1000"},
             ]
         }
 
@@ -169,7 +179,7 @@ def test_run_demix_passes_the_hits_and_stores_the_deposit_addresses():
     assert [d["address"] for d in data["deposit_addresses"]] == [DEPOSIT]
     json.dumps(data["deposit_addresses"])  # serialisable
     row = _row(data, SHARER)
-    assert "shared_deposit" in row["signals"] and row["band"] == "moderate"
+    assert "shared_deposit" in row["signals"] and row["band"] == "weak"
     assert data["heuristics"]["shared_deposits"] == [("1 ETH", SHARER, [DEPOSIT])]
     line = next(e for e in row["evidence"] if e["signal"] == "shared_deposit")
     assert "swept to binance" in line["detail"]

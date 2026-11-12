@@ -136,8 +136,9 @@ def test_link_errors_reach_the_heuristics(fast_and_late, rates, signal):
     (exit_addr,) = planted_exits(positives)
     sig = set(data["denoms"][POOL]["signals"][exit_addr])
     assert signal in sig
-    # since 2.19 a linked withdrawal sender is context only
-    assert confidence_band(sig) == ("weak" if signal == "linked_sender" else "moderate")
+    # since 2.19 a linked withdrawal sender, since 2.21 a shared deposit, is context only
+    context = {"linked_sender", "shared_deposit"}
+    assert confidence_band(sig) == ("weak" if signal in context else "moderate")
 
 
 def test_a_late_direct_link_is_context_only(fast_and_late):
@@ -153,13 +154,14 @@ def test_a_late_direct_link_is_context_only(fast_and_late):
     assert info["early_link"] == 0
 
 
-def test_two_independent_leads_make_strong(fast_and_late):
+def test_a_link_plus_a_shared_deposit_is_one_lead_source(fast_and_late):
+    # the shared deposit address has been context since 2.21: it is not a second source
     rates = dict(NO_ERRORS, p_link=1.0, p_shared=1.0)
     data, positives, _ = sem.plant(
         background(), {POOL: 2}, sem.Behaviour("now", "single", **rates), random.Random(5)
     )
     (exit_addr,) = planted_exits(positives)
-    assert confidence_band(set(data["denoms"][POOL]["signals"][exit_addr])) == "strong"
+    assert confidence_band(set(data["denoms"][POOL]["signals"][exit_addr])) == "moderate"
 
 
 def test_self_relay_and_gas_reuse(fast_and_late):
@@ -272,10 +274,10 @@ def _scored(signals_by_addr, positives):
 
 def test_metrics_by_level():
     sig = {
-        "p_strong": {"linked", "shared_deposit"},
+        "p_strong": {"linked", "early_profile"},
         "p_mod": {"linked"},
         "p_none": set(),
-        "n_mod": {"shared_deposit"},
+        "n_mod": {"linked"},
         "n_weak": {"gas_price"},
         "n_none": set(),
         "n_none2": set(),
@@ -292,11 +294,11 @@ def test_metrics_by_level():
     assert m["top1"] == 1.0 and m["top5"] == 1.0
     # order: strong(p), moderate p_mod / n_mod tie on score, weak n -> AP
     assert m["pr_auc"] == pytest.approx((1 / 3) * 1 + (1 / 3) * (2 / 3))
-    assert m["signals"]["shared_deposit"] == {
-        "tp": 1,
+    assert m["signals"]["linked"] == {
+        "tp": 2,
         "fp": 1,
-        "precision": 0.5,
-        "recall": pytest.approx(1 / 3),
+        "precision": pytest.approx(2 / 3),
+        "recall": pytest.approx(2 / 3),
     }
     assert m["band_precision_moderate"] == 0.5
 

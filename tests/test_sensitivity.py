@@ -43,7 +43,7 @@ def test_weights_are_restored_after_each_sample():
 def test_a_strong_lead_keeps_its_place_above_weaker_bands():
     data = _data(
         {
-            "0xa": (["linked", "shared_deposit"], 0.6),  # strong: two lead sources
+            "0xa": (["linked", "early_profile"], 0.6),  # strong: two lead sources
             "0xb": (["count_match", "linked"], 1.0),  # moderate: one lead source
             "0xc": (["count_match", "self_relayed"], 1.0),  # weak
         }

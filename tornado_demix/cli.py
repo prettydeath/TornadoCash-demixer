@@ -265,7 +265,7 @@ def cmd_demix(args: argparse.Namespace) -> None:
         for pool_key, addr, addrs in data.get("heuristics", {}).get("shared_deposits", []):
             shared.setdefault(addr, (pool_key, addrs))
         if shared:
-            print("  candidates that sent to one of them too (linked address):")
+            print("  candidates that sent to one of them too (context only, not a lead):")
             for addr, (pool_key, addrs) in sorted(shared.items()):
                 print(f"     [{pool_key}] {addr} via {', '.join(addrs)}")
 

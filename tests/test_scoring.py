@@ -190,10 +190,12 @@ def test_a_barely_rare_count_plus_a_link_is_not_strong():
         pytest.param({"count_match", "linked"}, "moderate", id="amount+timing and linked"),
         pytest.param({"gas_price", "linked"}, "moderate", id="gas price and linked"),
         pytest.param({"linked", "linked_sender"}, "moderate", id="two links, one source"),
-        pytest.param({"linked", "shared_deposit"}, "strong", id="link and shared deposit"),
+        pytest.param({"linked", "early_profile"}, "strong", id="link and early profile"),
+        pytest.param({"linked", "shared_deposit"}, "moderate", id="link and shared deposit"),
         pytest.param(
-            {"early_profile", "shared_deposit"}, "strong", id="early profile and shared deposit"
+            {"early_profile", "shared_deposit"}, "moderate", id="early profile and shared deposit"
         ),
+        pytest.param({"shared_deposit"}, "weak", id="shared deposit alone (context since 2.21)"),
         pytest.param(
             {"count_match", "self_relayed", "gas_price"}, "weak", id="context signals only"
         ),
@@ -324,7 +326,7 @@ def test_a_corroborated_lead_ranks_above_a_higher_scoring_single_family_lead():
     res["signals"] = {a: [] for a in res["detail"]}
     res["confidence"] = {a: 0.0 for a in res["detail"]}
     res["discrimination"] = {a: 0.0 for a in res["detail"]}
-    res["signals"][strong] = ["linked", "shared_deposit"]
+    res["signals"][strong] = ["linked", "early_profile"]
     res["confidence"][strong] = 0.3625
     res["discrimination"][strong] = 0.5
     res["signals"][moderate] = ["linked"]

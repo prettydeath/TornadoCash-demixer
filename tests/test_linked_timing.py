@@ -154,23 +154,26 @@ def test_an_early_link_has_no_late_line():
     assert data["heuristics"]["linked_late"] == []
 
 
-def test_a_late_link_plus_a_shared_deposit_is_moderate():
+def test_a_late_link_plus_a_shared_deposit_is_weak_context_only():
     data = apply_heuristics(
         _data(200), counterparties={LINKED}, shared_deposits={LINKED: ["0x" + "d" * 40]}
     )
     row = _row(data)
     assert {"linked_late", "shared_deposit"} <= set(row["signals"])
-    assert row["band"] == "moderate"
-    assert band_rationale(row["band"], set(row["signals"])).startswith(
-        "one lead signal (shared deposit address)"
-    )
+    assert row["band"] == "weak"
+    assert "context only" in band_rationale(row["band"], set(row["signals"]))
 
 
-def test_an_early_link_plus_a_shared_deposit_is_strong():
+def test_an_early_link_plus_a_shared_deposit_is_moderate_one_lead_source():
+    # since 2.21 the shared deposit address is context: it cannot make the second source
     data = apply_heuristics(
         _data(10), counterparties={LINKED}, shared_deposits={LINKED: ["0x" + "d" * 40]}
     )
-    assert _row(data)["band"] == "strong"
+    row = _row(data)
+    assert row["band"] == "moderate"
+    assert band_rationale(row["band"], set(row["signals"])).startswith(
+        "one lead signal (direct link)"
+    )
 
 
 def test_a_late_link_is_not_an_independent_family():

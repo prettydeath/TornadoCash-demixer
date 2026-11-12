@@ -153,7 +153,7 @@
           <input id="placebo" name="placebo" type="checkbox" value="1" {% if placebo %}checked{% endif %} style="width:auto;margin-right:.3rem">Placebo check (doubles explorer calls)</label>
       </div>
       <div>
-        <label for="deposit_addresses" title="Look for exchange deposit addresses the depositor sent funds to, and for withdrawal recipients that sent to the same one (a linked address). Costs up to about 50 explorer calls per wallet.">
+        <label for="deposit_addresses" title="Look for exchange deposit addresses the depositor sent funds to, and for withdrawal recipients that sent to the same one (context only, not a lead). Costs up to about 50 explorer calls per wallet.">
           <input id="deposit_addresses" name="deposit_addresses" type="checkbox" value="1" {% if deposit_addresses %}checked{% endif %} style="width:auto;margin-right:.3rem">Exchange deposit addresses</label>
       </div>
     </div>
@@ -270,7 +270,7 @@
               </tr>
               {% endfor %}
             </table>
-            <div class="note">The <b>band</b> is the headline. <b>strong</b>: lead signals from two independent sources (an early direct link, a shared exchange deposit address, an early multi-pool profile); <b>moderate</b>: a lead signal from one source, for example a linked address (a direct counterparty whose first withdrawal came within 72 h of the last deposit) or an early multi-pool profile match (the wallet's full note count in every pool it used, within 72 h of the last deposit in each, for wallets with at least 2 pools and 10 notes); <b>weak</b>: amount+timing or gas price only — on real depositors these fire as often in decoy windows as in real ones, so they are context and never raise the band. A direct link first withdrawn later than 72 h is shown as a <b>late direct link</b>: on real depositors it is chance-level, so it is context too (since 2.17). A withdrawal sent by the depositor's side (<b>linked sender</b>) is context as well since 2.19: it did not separate from chance in placebo tests. The score only orders leads within a band; it is uncalibrated and not a probability. Open <b>Evidence</b> to see what was checked for each address.</div>
+            <div class="note">The <b>band</b> is the headline. <b>strong</b>: lead signals from two independent sources (an early direct link, an early multi-pool profile); <b>moderate</b>: a lead signal from one source, for example a linked address (a direct counterparty whose first withdrawal came within 72 h of the last deposit) or an early multi-pool profile match (the wallet's full note count in every pool it used, within 72 h of the last deposit in each, for wallets with at least 2 pools and 10 notes); <b>weak</b>: amount+timing or gas price only — on real depositors these fire as often in decoy windows as in real ones, so they are context and never raise the band. A direct link first withdrawn later than 72 h is shown as a <b>late direct link</b>: on real depositors it is chance-level, so it is context too (since 2.17). A withdrawal sent by the depositor's side (<b>linked sender</b>) is context as well since 2.19: it did not separate from chance in placebo tests. A <b>shared exchange deposit address</b> is context since 2.21: in the second hold-out it was not above chance at 30 days (18 target against 30 decoy leads on Ethereum, 23 against 13 on Polygon). The score only orders leads within a band; it is uncalibrated and not a probability. Open <b>Evidence</b> to see what was checked for each address.</div>
             {% else %}<div class="note">No discriminating candidates (usually single-note vouchers).</div>{% endif %}
 
             <h4 style="margin:1.1rem 0 .3rem;font-size:.9rem;">Cross-method matches</h4>
@@ -351,7 +351,7 @@
             {% endif %}
             {% if b.deposit_addresses %}
             <h4 style="margin:1.1rem 0 .3rem;font-size:.9rem;">Exchange deposit addresses</h4>
-            <div class="note" style="margin-bottom:.3rem;">Addresses the depositor sent funds to that behave like a per-customer exchange deposit address (few senders, swept to a hot wallet). A recipient that sent to the same address shares a linked address with the depositor. Leads, not proof.</div>
+            <div class="note" style="margin-bottom:.3rem;">Addresses the depositor sent funds to that behave like a per-customer exchange deposit address (few senders, swept to a hot wallet). A recipient that sent to the same address shares it with the depositor; this is context only (since 2.21 it did not beat chance in the second hold-out) and never raises the band.</div>
             <table>
               <colgroup><col style="width:34%"><col style="width:22%"><col style="width:8%"><col></colgroup>
               <tr><th>Deposit address</th><th>Swept to</th><th>Senders</th><th>Also used by a candidate</th></tr>

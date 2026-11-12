@@ -319,8 +319,9 @@ def _deposit_addresses_html(data: dict, network: Network) -> str:
         '<div class="meta">Addresses the depositor sent funds to that behave like a per-customer '
         "exchange deposit address: few senders, quiet, and what arrives is swept to a hot "
         "wallet. A recipient of the searched withdrawals that sent funds to the same address "
-        "shares a linked address with the depositor (the address-reuse idea of Tutela, through "
-        "an intermediary). Leads, not proof: an exchange address can be shared by mistake or "
+        "shares a deposit address with the depositor (the address-reuse idea of Tutela, through "
+        "an intermediary). Context only since 2.21: in the second hold-out this did not beat "
+        "chance, so it never raises the band. An exchange address can be shared by mistake or "
         "by a service.</div>",
         '<table><colgroup><col style="width:34%"><col style="width:26%">'
         '<col style="width:10%"><col></colgroup>'
@@ -633,8 +634,8 @@ def build_html_report(
         p.append("</table>")
         p.append(
             '<div class="meta">The <b>band</b> is the headline: strong needs lead signals '
-            "from two independent sources (direct link, shared deposit address, early multi-pool profile), moderate one lead source, weak amount+timing or "
-            "gas price only, which are context (chance-level on real depositors). The score is a "
+            "from two independent sources (early direct link, early multi-pool profile), moderate one lead source, weak amount+timing, "
+            "gas price or context-only signals (late direct link, withdrawal sender, shared deposit address), which are chance-level on real depositors. The score is a "
             "noisy-OR over expert signal weights that orders leads within a band; it is "
             "uncalibrated and is not a probability.</div>"
         )

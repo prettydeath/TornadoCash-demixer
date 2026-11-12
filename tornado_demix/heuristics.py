@@ -23,7 +23,6 @@ SIGNAL_WEIGHTS = {
     "self_relayed": 0.25,  # paid own gas -> funded address tied to exit
     "gas_price": 0.25,  # exact deposit gas price reused on withdrawal
     "linked": 0.40,  # directly transacts with the depositor
-    "shared_deposit": 0.40,  # sent to the same exchange deposit address as the depositor
     "profile_match": 0.35,  # received the full pool fingerprint
     "early_profile": 0.35,  # received the wallet's whole note profile within 72 h
 }
@@ -660,24 +659,27 @@ METHOD_FAMILY = {
     "early_profile": "amount+timing",
     "gas_price": "gas price",
     "linked": "linked address",
-    "shared_deposit": "linked address",
     "linked_late": "context",
     "linked_sender": "context",
+    "shared_deposit": "context",
 }
 
 # Shown as evidence, never scored, never a lead, never an independent family:
 # a direct link first withdrawn later than EARLY_EXIT_HOURS (since version 2.17),
 # and a withdrawal sent by the depositor's side (since version 2.19: in no sample
 # did it separate from chance - 8 / 2, 14 / 11, 9 / 2 - and in the 2026 hold-out
-# it was 11 of the 15 decoy moderate leads).
-CONTEXT_SIGNALS = frozenset({"linked_late", "linked_sender"})
+# it was 11 of the 15 decoy moderate leads), and a shared exchange deposit address
+# (since version 2.21: in the second hold-out, labelled shared deposits at 30 days
+# were 18 target against 30 decoy leads on Ethereum, R 1.77 (0.16-3.91), and 23
+# against 13 on Polygon, R 0.58 (0.00-3.16); not above chance).
+CONTEXT_SIGNALS = frozenset({"linked_late", "linked_sender", "shared_deposit"})
 
 
 # The score is uncalibrated and a percentage reads as a probability, so results
 # are presented by band. A placebo test on real depositors (docs/EVALUATION.md:
 # the same pipeline run on decoy windows that cannot hold the wallet's notes)
 # found amount+timing and gas-price leads as frequent in decoy windows as in real
-# ones; only the linked-address family stood above chance, and so did the early
+# ones; only a direct link within 72 h stood above chance, and so did the early
 # multi-pool profile match (chance share 0.12, tools/placebo_profile.py). A band
 # therefore needs one of these lead signals. Since version 2.16 only lead signals
 # corroborate each other: among candidates with a lead, a count match did not
@@ -686,12 +688,11 @@ CONTEXT_SIGNALS = frozenset({"linked_late", "linked_sender"})
 BAND_ORDER = {"strong": 3, "moderate": 2, "weak": 1}
 
 LINKED_SIGNALS = frozenset({"linked", "linked_sender", "shared_deposit"})
-LEAD_SIGNALS = frozenset({"linked", "shared_deposit", "early_profile"})
+LEAD_SIGNALS = frozenset({"linked", "early_profile"})
 
 # Independent sources of lead evidence; "strong" needs two of them.
 LEAD_SOURCE = {
     "linked": "direct link",
-    "shared_deposit": "shared deposit address",
     "early_profile": "early multi-pool profile",
 }
 
@@ -699,17 +700,18 @@ LEAD_SOURCE = {
 # direct link (``linked``) is a lead only this early: on 302 random depositors a
 # direct link first withdrawn within 72 h was a lead 26 times in real windows
 # against 1 in decoy windows, a later one 8 against 13 (chance level), so a later
-# one is ``linked_late``, context only. shared_deposit keeps its band at any delay;
-# the early-exit mark on a row shows when it is early.
+# one is ``linked_late``, context only. The early-exit mark on a row of a context-only
+# linked signal (linked_sender, shared_deposit) shows when it is early.
 EARLY_EXIT_HOURS = 72
 
 
 def confidence_band(signals):
     """Return "strong", "moderate" or "weak" from the candidate's signal set.
 
-    strong: lead signals from two independent sources (a direct link, a shared
-    exchange deposit address, an early multi-pool profile match); moderate: a
-    lead signal from one source; weak: amount+timing and/or gas price only.
+    strong: lead signals from two independent sources (an early direct link, an
+    early multi-pool profile match); moderate: a lead signal from one source;
+    weak: amount+timing, gas price and/or context-only signals (late direct link,
+    withdrawal sender, shared deposit address).
     Amount+timing and gas price never raise the band: on real depositors they
     are chance-level; next to a lead signal there are too few cases to judge,
     so they are not counted.
@@ -733,6 +735,12 @@ def band_rationale(band: str, signals: set[str]) -> str:
         return (
             "no lead signal; a withdrawal sent by the depositor's side did not beat chance "
             "on real data, so it is context only"
+        )
+    if "shared_deposit" in signals:
+        return (
+            "no lead signal; a shared exchange deposit address did not beat chance in the "
+            "second hold-out (30 days: 18 against 30 decoy leads on Ethereum, 23 against 13 "
+            "on Polygon), so it is context only"
         )
     if "linked_late" in signals:
         return (

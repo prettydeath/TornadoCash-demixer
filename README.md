@@ -7,9 +7,8 @@ Probabilistic demixing of Tornado Cash deposits using only public on-chain data.
 The toolkit links a depositor wallet to likely withdrawal addresses and reports
 each candidate with an evidence band and the evidence behind it. A band needs a
 lead signal that stood above chance on real depositors: a linked address (a direct
-counterparty whose first withdrawal came within 72 hours of the deposit, a
-deposit address swept to a labelled exchange) or an early multi-pool profile
-match; two independent
+counterparty whose first withdrawal came within 72 hours of the deposit) or an
+early multi-pool profile match; two independent
 lead sources make a band `strong`. Amount+timing and gas-price matches turn up as
 often by chance as for real exits, so they are shown as context and never raise
 a band. It also groups exits paid out together, links wallets of one operator
@@ -38,10 +37,10 @@ traces users leave around it.
   hours of the last deposit, otherwise shown as a late direct link, context), and an early multi-pool profile: a recipient that received the
   wallet's full note profile over two or more pools (10+ notes) within 72 hours of
   the last deposit in each pool.
-- Reports a band per candidate: `strong` (lead signals from two independent sources
-  among direct link, shared exchange deposit address and early multi-pool
-  profile), `moderate` (a lead signal from one source), `weak` (amount+timing
-  and/or gas price only, which never raise the band — chance-level on
+- Reports a band per candidate: `strong` (lead signals from two independent sources:
+  early direct link and early multi-pool profile), `moderate` (a lead signal
+  from one source), `weak` (amount+timing, gas price and/or context-only
+  signals, which never raise the band — chance-level on
   real depositors, see the [placebo test in EVALUATION.md](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/EVALUATION.md) for details), with the evidence behind it: every family, whether it holds,
   and the numbers (share of the recipient field with the same count, `disc`,
   gas price). Candidates are ordered by band, then by an uncalibrated noisy-OR
@@ -53,19 +52,24 @@ traces users leave around it.
   operator that pooled several deposits; a group is listed when a corroborated
   candidate or an exit you already know (`--known-exit`) anchors it.
 - Finds the depositor's exchange deposit addresses and flags a recipient that
-  sent funds to the same one (`shared_deposit`, linked-address family). It is
-  scored only when the deposit address sweeps to labelled exchange wallets (on
-  1,000 random depositors 27 real-window against 4 decoy hits); one recognised by
-  activity alone was at chance and is shown as context, so the signal needs an
-  attribution set.
+  sent funds to the same one (`shared_deposit`). Since 2.21 this is context
+  only: it is shown in the evidence but has no weight and never raises the band.
+  On 1,000 random depositors it gave 27 real-window against 4 decoy hits when
+  the deposit address swept to labelled exchange wallets (rule 2.17 sample), but
+  in the second hold-out it was not above chance at 30 days (Ethereum 18 target
+  against 30 decoy leads, R 1.77, interval 0.16-3.91; Polygon 23 against 13,
+  R 0.58, 0.00-3.16); at 72 hours it was 14 against 2 and 23 against 0. The
+  decoy leads came from deposit addresses with many senders, which are shared,
+  not per customer.
 - Marks a linked exit that withdrew within 72 hours of the deposit (early exit).
   Since 2.17 a direct link is a lead only then: on 302 random Ethereum depositors
   a direct link first withdrawn within 72 hours was a lead 26 times in real
   windows against once in decoy windows, a later one 8 against 13, chance level.
   A later direct link is listed as context and never raises the band or the
-  score; the shared-deposit signal is unchanged. Since 2.19 a withdrawal sent by
+  score. Since 2.19 a withdrawal sent by
   the depositor's side (`linked_sender`) is context too: it did not separate from
-  chance in any placebo sample.
+  chance in any placebo sample. Since 2.21 so is a shared exchange deposit
+  address (see above).
 - Optionally runs a placebo check (`--placebo`, or the web UI option): the same
   analysis on a decoy window that ends before the wallet's first deposit, so the
   report shows how many leads chance alone produces for this wallet.
@@ -161,11 +165,12 @@ registry.
 
 ### Labels (attribution set)
 
-The shared exchange deposit address signal is scored only when exchange labels
-are loaded. With them, the placebo test gave 27 real-window against 4 decoy hits
-on 1,000 depositors; without them, deposit addresses found by activity alone sit
-at chance (16 against 12), so they are shown as context and the signal does not
-fire. To load the public label set (about 88,000 Ethereum addresses, 26,000 of
+The shared exchange deposit address signal is context only since 2.21, labels or
+not. Exchange labels still decide which deposit addresses are listed as swept to a
+labelled exchange: with them, the placebo test gave 27 real-window against 4 decoy
+hits on 1,000 depositors (before the second hold-out); without them, deposit
+addresses found by activity alone sit at chance (16 against 12) and are shown as
+context only. To load the public label set (about 88,000 Ethereum addresses, 26,000 of
 them exchange labels):
 
 ```bash
@@ -415,17 +420,24 @@ The method on both public cases, with the numbers behind each claim, is in
   whose gas price a relayer chose. A linked address (a direct counterparty or a
   deposit address swept to a labelled exchange; before 2.19 also a
   withdrawal sent by the depositor's side) stood above chance (30 against 7 over 30 days, 19 against 1
-  within 72 hours, measured before 2.17). The pooled 30-day number hid that a
+  within 72 hours, measured before 2.17; the shared deposit part did not hold up
+  in the second hold-out, see below). The pooled 30-day number hid that a
   direct link withdrawn later than 72 hours is chance-level (8 against 13 on 302
   depositors, against 26 to 1 within 72 hours), so since 2.17 it is context; and so did a multi-pool profile of 10+ notes within 72 hours
-  (318 against 34 on 4,194 such depositors); only these make a `moderate` or `strong`
-  band, and `strong` needs two independent ones. Details: [EVALUATION.md](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/EVALUATION.md#placebo-test-on-real-depositors)
+  (318 against 34 on 4,194 such depositors); only these two (an early direct link, an early multi-pool profile) make a
+  `moderate` or `strong` band, and `strong` needs both. Details: [EVALUATION.md](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/EVALUATION.md#placebo-test-on-real-depositors)
 - The 2.17 rule was then frozen, pre-registered and run on new depositors (591 on
   Ethereum, 300 on Polygon): early direct links 84 against 2 and 59 against 1,
   `moderate` within 72 hours 103 against 7 and 71 against 1, count match at chance
   level on both chains. A labelled shared deposit on Polygon (5 against 0) was too
   rare to beat chance there; `strong` stayed rare (3 against 0). Details:
   [HOLDOUT_RESULTS.md](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/HOLDOUT_RESULTS.md)
+- The second hold-out (2.19 rule, 599 Ethereum and 400 Polygon depositors) found
+  a labelled shared deposit at 30 days at chance level: Ethereum 18 target
+  against 30 decoy leads (R 1.77, 0.16-3.91), Polygon 23 against 13 (R 0.58,
+  0.00-3.16); the early direct link held (85 against 5 and 92 against 5). Since 2.21
+  the shared deposit address is context only. Details:
+  [HOLDOUT2_RESULTS.md](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/HOLDOUT2_RESULTS.md)
 - On 31 depositor/exit pairs labelled through ENS (2019-2026), demix found 16 of
   the 21 pairs inside its window (measured before 2.17, when a direct link counted
   at any delay), all through a direct transaction between the two addresses,
