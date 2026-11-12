@@ -49,7 +49,7 @@ def summarize(path):
 def write_lock(scripts, out):
     lines = ["# sha256  script (tools/registry_report.py --lock)"]
     for s in scripts:
-        lines.append(f"{registry.sha256_file(s)}  {os.path.relpath(s).replace(os.sep, '/')}")
+        lines.append(f"{registry.sha256_file(s)}  {registry._rel(s)}")
     os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
     with open(out, "w", encoding="utf-8", newline="\n") as fh:
         fh.write("\n".join(lines) + "\n")
@@ -57,7 +57,10 @@ def write_lock(scripts, out):
 
 def _inside(child, parent):
     child, parent = os.path.realpath(child), os.path.realpath(parent)
-    return os.path.commonpath([child, parent]) == parent
+    try:
+        return os.path.commonpath([child, parent]) == parent
+    except ValueError:  # different drives on Windows
+        return False
 
 
 def main(argv=None):
