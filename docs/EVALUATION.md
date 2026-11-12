@@ -516,7 +516,7 @@ the decoy window of the wallet under investigation, beside the real one.
 
 ### Current rule (2.17) in one table
 
-Since 2.19 the "linked sender (lead)" row below is context only (see [Rule 2.19](#rule-219)). Since 2.21 so is the "shared deposit" row (see [Rule 2.21](#rule-221-unreleased-shared-deposit-address-is-context)).
+Since 2.19 the "linked sender (lead)" row below is context only (see [Rule 2.19](#rule-219)). Since 2.21 so is the "shared deposit" row (see [Rule 2.21](#rule-221-shared-deposit-address-is-context)).
 
 `tools/review4_*.py` re-score the cached runs offline under the 2.17 rule. R is
 decoy leads per withdrawal searched over target leads per withdrawal searched;
@@ -604,7 +604,7 @@ reported the rule has not been confirmed on new data. The tables above are
 historical and were not rewritten: they describe the rule in force when each was
 measured.
 
-### Rule 2.21 (unreleased): shared deposit address is context
+### Rule 2.21: shared deposit address is context
 
 The second hold-out ([HOLDOUT2_RESULTS.md](HOLDOUT2_RESULTS.md)) tested rule 2.19 on 599
 Ethereum and 400 Polygon depositors. The labelled shared deposit address was not above chance
@@ -647,7 +647,7 @@ The same release fixes five defects in the deposit-address classifier
 The fixes change which addresses are listed as deposit addresses; they were not re-run on the
 cached hold-out data, so no number above reflects them.
 
-### Deposit-address kinds (unreleased)
+### Deposit-address kinds (2.21)
 
 An external read-only review and a follow-up check ran the classifier on 10 addresses.
 With an exchange label set, the Binance, Crypto.com, Bybit and Coinbase deposit addresses
@@ -1030,7 +1030,7 @@ hold-out 3 is. The register cannot show that its tail was cut off; keep a witnes
 
 ## Checks of the code itself
 
-Run on 2026-09-28; tests, coverage and the live check re-run on 2026-10-02, tests and coverage again on 2026-10-07 (2.18.0). The `pytest` row was re-run on 2026-11-12 on this branch (unreleased); the other rows are from the earlier runs and were not repeated.
+Run on 2026-09-28; tests, coverage and the live check re-run on 2026-10-02, tests and coverage again on 2026-10-07 (2.18.0). The `pytest` row was re-run on 2026-11-12 (2.21.0); the other rows are from the earlier runs and were not repeated.
 
 | Check | Result |
 |---|---|

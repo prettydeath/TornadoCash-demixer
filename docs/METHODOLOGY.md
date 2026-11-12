@@ -339,7 +339,7 @@ gas-price gate and the contract check make bounded, memoised RPC calls.
   history queries plus a busy check per new sweep target, and can be turned off
   (`--no-deposit-addresses`).
 
-  Kinds (unreleased). Every listed address has a `kind`. `exchange_deposit` is the rule
+  Kinds (since 2.21). Every listed address has a `kind`. `exchange_deposit` is the rule
   above: every labelled sweep target is an exchange, and only a sweep to labelled
   exchange wallets is `evidence`; this is the only kind that was ever a lead (since
   2.21 it is context too) and the only kind that links two addresses.
