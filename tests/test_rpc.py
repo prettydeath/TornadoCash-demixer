@@ -257,3 +257,28 @@ def test_contract_check_without_an_endpoint_is_unknown():
     from tornado_demix.rpc import make_contract_check
 
     assert make_contract_check("")("0xabc") is None
+
+
+def test_contract_check_treats_an_eip7702_delegation_as_an_eoa(monkeypatch):
+    from tornado_demix import rpc
+
+    delegated = "0xef0100" + "ab" * 20
+    codes = {
+        "0xd": delegated,
+        "0xu": "0xEF0100" + "AB" * 20,
+        "0xlong": delegated + "00",  # longer than the designator: real code
+        "0xshort": "0xef0100" + "ab" * 19,
+        "0xother": "0xef0200" + "ab" * 20,  # same length, another prefix
+    }
+
+    class Client:
+        def call(self, method, params):
+            return codes[params[0]]
+
+    monkeypatch.setattr(rpc, "RpcClient", lambda url: Client())
+    check = rpc.make_contract_check("https://rpc.example")
+    assert check("0xd") is False
+    assert check("0xu") is False
+    assert check("0xlong") is True
+    assert check("0xshort") is True
+    assert check("0xother") is True

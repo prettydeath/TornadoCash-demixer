@@ -4,19 +4,41 @@ A centralised exchange gives each customer their own deposit address and sweeps
 what arrives there to a hot wallet. Two addresses that both sent funds to the
 same deposit address are, with few exceptions, one customer: the same shape as
 the address-reuse (DAR) heuristic of Tutela (Béres et al.). It is a linked-address
-signal reached through an intermediary instead of a direct transfer.
+signal reached through an intermediary instead of a direct transfer. Since rule
+2.21 a match is context only (``heuristics.CONTEXT_SIGNALS``): in the second
+hold-out it did not stand above chance. The classifier below decides which
+addresses are listed as deposit addresses.
 
 An address ``X`` counts as a deposit address when all of the following hold:
 
-* it is not a contract and has fewer than ``MAX_DEPOSIT_TXS`` transactions;
+* it is not a contract (an EIP-7702 delegated account is an EOA, see
+  ``rpc.make_contract_check``) and has fewer than ``MAX_DEPOSIT_TXS`` transactions;
 * at most ``MAX_DEPOSIT_SENDERS`` distinct addresses sent it funds;
 * at least ``MIN_SWEEP_SHARE`` of its outgoing transfers go to hot wallets: among
   its ``MAX_SWEEP_TARGETS`` most frequent destinations, those labelled as an
   exchange, or ordinary (non-contract) addresses with at least ``HOT_WALLET_TXS``
-  transactions to which ``X`` forwards amounts it has just received (within
-  ``FORWARD_BLOCKS``, short by at most 0.01 ETH or 1 % of a token amount). An
-  exchange sweeps to several hot wallets, so the share is summed over them; a
-  token, DEX router or Tornado contract is busy but not an exchange.
+  transactions to which ``X`` forwards what it has just received. An exchange
+  sweeps to several hot wallets, so the share is summed over them; a token, DEX
+  router or Tornado contract is busy but not an exchange.
+
+Forwarding test: an outgoing transfer forwards when an incoming transfer of the
+same asset arrived at most ``FORWARD_SECONDS`` earlier (by ``timeStamp``; only when
+a timestamp is missing, ``_FALLBACK_BLOCKS`` blocks) and the sweep is short of it by
+at most 0.01 ETH (ETH) or 1 % (tokens); or, for an aggregated sweep, when the sum of
+the incoming transfers of that asset received in the window and after the previous
+outgoing transfer of that asset (to anyone) covers the outgoing value with the same
+tolerance.
+
+Which rows are counted. The same transfer is listed by ``txlist`` (the call to the
+token contract, value 0) and by ``tokentx`` (the token movement); only the second
+is counted, so one token transfer is one transfer: ``txlist`` rows with value 0 are
+dropped, ETH-value rows are kept. Address poisoning is filtered in a limited,
+offline way: zero-value transfers (of ETH or of any token) are dropped, and a
+``tokentx`` transfer out of ``X`` whose transaction is not among the ``txlist`` rows
+sent by ``X`` was not initiated by ``X`` (a ``transferFrom`` spoof) and is dropped.
+Limits: a spoofed non-zero transfer *into* ``X`` from a fake token cannot be told
+from a real one without token metadata, and a spoof routed through a contract that
+``X`` itself called is not detected.
 
 Only the depositor's own outgoing counterparties are examined, busiest first and at
 most ``MAX_CANDIDATES`` of them, so the cost is bounded: two history queries per
@@ -36,7 +58,10 @@ MAX_DEPOSIT_SENDERS = 50  # distinct senders a per-customer address can have
 MIN_SWEEP_SHARE = 0.8  # share of outgoing transfers that go to hot wallets
 MAX_SWEEP_TARGETS = 3  # most frequent destinations checked for a hot wallet
 HOT_WALLET_TXS = 10000  # a sweep target this busy is taken for a hot wallet
-FORWARD_BLOCKS = 3200  # a sweep follows the incoming transfer within this many blocks
+# A sweep follows the incoming transfer within this time: 3200 Ethereum blocks of
+# 12 s, kept as a duration so that chains with other block times are not distorted.
+FORWARD_SECONDS = 38400
+_FALLBACK_BLOCKS = 3200  # the same window in blocks, only for rows without timeStamp
 FORWARD_ETH_WEI = 10**16  # ...and forwards it less at most 0.01 ETH (Victor, FC 2020)
 FORWARD_TOKEN_SHARE = 0.01  # tokens: forwards at least 99 % of the incoming amount
 
@@ -67,37 +92,99 @@ def _asset(row: dict) -> str:
     return (row.get("contractAddress") or "").lower() or "eth"
 
 
+def _num(value) -> int | None:
+    """An explorer number (decimal, or 0x hex in a few stubs); None if unreadable."""
+    text = str(value).strip().lower()
+    try:
+        return int(text, 16) if text.startswith("0x") else int(text)
+    except ValueError:
+        return None
+
+
+def _value(row: dict) -> int:
+    v = _num(row.get("value", 0))
+    return v if v is not None and v > 0 else 0
+
+
+def _addr(row: dict, key: str) -> str:
+    return (row.get(key) or "").lower()
+
+
+def _block(row: dict) -> int:
+    b = _num(row.get("blockNumber"))
+    return b if b is not None else 0
+
+
+def transfers(address: str, txs: list[dict], tokens: list[dict]) -> list[dict]:
+    """The real, non-zero transfers of ``address``: ``txlist`` rows with value (the
+    value-0 calls to token contracts are the same movement as the ``tokentx`` row and
+    are not counted twice) plus ``tokentx`` rows with value, minus outgoing token
+    transfers that ``address`` did not initiate (address poisoning; see the module
+    docstring for the limits)."""
+    sent = {_addr(r, "hash") for r in txs if _addr(r, "from") == address}
+    rows = [r for r in txs if _value(r) > 0]
+    for r in tokens:
+        if _value(r) <= 0:
+            continue
+        if _addr(r, "from") == address and _addr(r, "hash") not in sent:
+            continue
+        rows.append(r)
+    return rows
+
+
+def _within(out: dict, inc: dict) -> bool:
+    """``inc`` is not later than ``out`` and at most FORWARD_SECONDS before it (by
+    timeStamp; by block, _FALLBACK_BLOCKS, when a timestamp is missing)."""
+    ot, it = _num(out.get("timeStamp")), _num(inc.get("timeStamp"))
+    if ot is not None and it is not None:
+        return 0 <= ot - it <= FORWARD_SECONDS
+    ob, ib = _num(out.get("blockNumber")), _num(inc.get("blockNumber"))
+    return ob is not None and ib is not None and 0 <= ob - ib <= _FALLBACK_BLOCKS
+
+
+def _covers(out: dict, received: int, sent: int) -> bool:
+    """``received`` covers ``sent`` and exceeds it by at most the sweep tolerance."""
+    if received < sent:
+        return False
+    if _asset(out) == "eth":
+        return received - sent <= FORWARD_ETH_WEI
+    return received - sent <= received * FORWARD_TOKEN_SHARE
+
+
 def forwards_to(rows: list[dict], address: str, target: str) -> bool:
     """True when ``address`` sent ``target`` an amount it had just received: an
-    incoming transfer of the same asset at most FORWARD_BLOCKS earlier, and the
-    sweep short of it by at most 0.01 ETH (ETH) or 1 % (tokens). This is how an
-    exchange deposit address behaves (the forwarding test of Victor, FC 2020, used
-    by Tutela); a personal wallet that merely pays a busy address does not."""
+    incoming transfer of the same asset at most FORWARD_SECONDS earlier, and the
+    sweep short of it by at most 0.01 ETH (ETH) or 1 % (tokens); or an aggregated
+    sweep, where the incoming transfers of that asset received in the window and
+    after the previous outgoing transfer of that asset (to anyone) add up to it with
+    the same tolerance. This is how an exchange deposit address behaves (the
+    forwarding test of Victor, FC 2020, used by Tutela); a personal wallet that
+    merely pays a busy address does not."""
+    indexed = list(enumerate(rows))
     incoming = [
-        r
-        for r in rows
-        if (r.get("to") or "").lower() == address and str(r.get("value", "0")).isdigit()
+        (i, r) for i, r in indexed if _addr(r, "to") == address and _addr(r, "from") != address
     ]
-    for out in rows:
-        if (out.get("from") or "").lower() != address or (out.get("to") or "").lower() != target:
+    outgoing = [(i, r) for i, r in indexed if _addr(r, "from") == address and _addr(r, "to")]
+    for oi, out in outgoing:
+        if _addr(out, "to") != target:
             continue
-        try:
-            ob, ov = int(out.get("blockNumber", 0)), int(out.get("value", 0))
-        except ValueError:
-            continue
+        ov = _value(out)
         if ov <= 0:
             continue
-        for inc in incoming:
-            if _asset(inc) != _asset(out):
-                continue
-            ib, iv = int(inc.get("blockNumber", 0)), int(inc["value"])
-            if not 0 <= ob - ib <= FORWARD_BLOCKS or iv < ov:
-                continue
-            if _asset(out) == "eth":
-                if iv - ov <= FORWARD_ETH_WEI:
-                    return True
-            elif iv - ov <= iv * FORWARD_TOKEN_SHARE:
-                return True
+        same = [(i, r) for i, r in incoming if _asset(r) == _asset(out) and _value(r) > 0]
+        # one incoming transfer
+        if any(_within(out, r) and _covers(out, _value(r), ov) for _i, r in same):
+            return True
+        # several incoming transfers since the previous outgoing one
+        previous = max(
+            (i for i, r in outgoing if i < oi and _asset(r) == _asset(out)),
+            default=-1,
+        )
+        pool = [
+            r for i, r in same if previous < i < oi and _block(r) <= _block(out) and _within(out, r)
+        ]
+        if len(pool) > 1 and _covers(out, sum(_value(r) for r in pool), ov):
+            return True
     return False
 
 
@@ -117,19 +204,13 @@ def classify_deposit_address(
     if len(txs) >= MAX_DEPOSIT_TXS:
         return None
     tokens = _rows(client, "tokentx", address)
-    rows = txs + tokens
-    senders = {
-        (r.get("from") or "").lower()
-        for r in rows
-        if (r.get("to") or "").lower() == address and r.get("from")
-    } - {address}
+    rows = transfers(address, txs, tokens)
+    senders = {_addr(r, "from") for r in rows if _addr(r, "to") == address and r.get("from")} - {
+        address
+    }
     if not senders or len(senders) > MAX_DEPOSIT_SENDERS:
         return None
-    outgoing = Counter(
-        (r.get("to") or "").lower()
-        for r in rows
-        if (r.get("from") or "").lower() == address and r.get("to")
-    )
+    outgoing = Counter(_addr(r, "to") for r in rows if _addr(r, "from") == address and r.get("to"))
     if not outgoing:
         return None
     total = sum(outgoing.values())

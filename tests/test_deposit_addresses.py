@@ -1,12 +1,13 @@
 """Exchange deposit addresses shared by a depositor and a withdrawal recipient."""
 
 from tornado_demix.deposit_addresses import (
-    FORWARD_BLOCKS,
+    FORWARD_SECONDS,
     HOT_WALLET_TXS,
     MAX_DEPOSIT_SENDERS,
     MAX_DEPOSIT_TXS,
     classify_deposit_address,
     depositor_deposit_addresses,
+    forwards_to,
     shared_deposit_hits,
 )
 
@@ -17,14 +18,26 @@ HOT = "0x" + "d" * 40
 OTHER = "0x" + "e" * 40
 
 
-def tx(frm, to, value=10**18, block=100):
-    return {
+def tx(frm, to, value=10**18, block=100, ts=None, h=None):
+    row = {
         "from": frm,
         "to": to,
-        "hash": "0x" + frm[-4:] + to[-4:],
+        "hash": h or "0x" + frm[-4:] + to[-4:],
         "value": str(value),
         "blockNumber": str(block),
     }
+    if ts is not None:
+        row["timeStamp"] = str(ts)
+    return row
+
+
+TOKEN = "0x" + "7" * 40
+
+
+def tok(frm, to, value=10**18, block=100, ts=None, h=None, contract=TOKEN):
+    row = tx(frm, to, value, block, ts, h)
+    row["contractAddress"] = contract
+    return row
 
 
 class FakeClient:
@@ -167,10 +180,10 @@ def test_without_a_label_a_busy_target_must_receive_forwarded_amounts():
     ]
     client = FakeClient({("txlist", DEPOSIT): rows}, busy={HOT})
     assert classify_deposit_address(client, DEPOSIT, busy=client.busy.__contains__) is None
-    # forwarded too late (more than FORWARD_BLOCKS after the incoming transfer)
+    # forwarded too late (more than FORWARD_SECONDS after the incoming transfer)
     rows = [
-        tx(WALLET, DEPOSIT, block=100),
-        tx(DEPOSIT, HOT, value=10**18, block=100 + FORWARD_BLOCKS + 1),
+        tx(WALLET, DEPOSIT, ts=1000),
+        tx(DEPOSIT, HOT, value=10**18, ts=1000 + FORWARD_SECONDS + 1),
     ]
     client = FakeClient({("txlist", DEPOSIT): rows}, busy={HOT})
     assert classify_deposit_address(client, DEPOSIT, busy=client.busy.__contains__) is None
@@ -190,3 +203,132 @@ def test_only_deposit_addresses_swept_to_labelled_exchanges_count_as_evidence():
     info = classify_deposit_address(client, DEPOSIT, labels=labels, busy=lambda a: False)
     assert info["evidence"] is True
     assert shared_deposit_hits([info], {EXIT}, WALLET) == {EXIT: [DEPOSIT]}
+
+
+LABELS = {HOT: {"category": "exchange", "entity": "binance"}}
+
+
+def info_of(lists, labels=None):
+    client = FakeClient(lists, busy={HOT})
+    return classify_deposit_address(client, DEPOSIT, labels=labels, busy=client.busy.__contains__)
+
+
+def test_a_token_transfer_is_counted_once_not_as_txlist_call_plus_tokentx():
+    # A token sweep is listed twice by the explorer: a txlist call to the token
+    # contract (value 0) and the tokentx movement. The call is not a second
+    # outgoing transfer, to the contract.
+    fwd = 10**18 - 10**15
+    lists = {
+        ("txlist", DEPOSIT): [
+            tx(WALLET, DEPOSIT, h="0x01"),
+            tx(DEPOSIT, TOKEN, value=0, h="0x02"),
+            tx(DEPOSIT, TOKEN, value=0, h="0x03"),
+        ],
+        ("tokentx", DEPOSIT): [
+            tok(DEPOSIT, HOT, value=fwd, h="0x02"),
+            tok(DEPOSIT, HOT, value=fwd, h="0x03"),
+        ],
+    }
+    # counted twice, 2 of 4 outgoing rows would go to HOT (50 %) and it would fail
+    info = info_of(lists, LABELS)
+    assert info is not None and info["sweep_targets"] == [HOT]
+
+
+def test_an_eth_value_row_to_a_token_contract_is_kept():
+    fwd = 10**18 - 10**15
+    lists = {
+        ("txlist", DEPOSIT): [
+            tx(WALLET, DEPOSIT, h="0x01"),
+            tx(DEPOSIT, HOT, value=fwd, h="0x02"),
+            tx(DEPOSIT, HOT, value=fwd, h="0x03"),
+            tx(DEPOSIT, HOT, value=fwd, h="0x04"),
+            tx(DEPOSIT, TOKEN, value=10**18, h="0x05"),  # ETH sent to a contract
+        ],
+    }
+    assert info_of(lists, LABELS) is None  # 3 of 4 transfers (75 %) go to HOT
+    del lists[("txlist", DEPOSIT)][-1]
+    assert info_of(lists, LABELS) is not None
+
+
+def test_zero_value_poisoning_transfers_are_ignored():
+    spoof = "0x" + "9" * 40
+    lists = deposit_lists()
+    lists[("txlist", DEPOSIT)] += [tx(spoof, DEPOSIT, value=0, h="0xaa")]
+    lists[("tokentx", DEPOSIT)] = [
+        tok(spoof, DEPOSIT, value=0, h="0xab"),
+        tok(DEPOSIT, OTHER, value=0, h="0xac"),
+        tok(DEPOSIT, OTHER, value=0, h="0xad"),
+    ]
+    info = info_of(lists)
+    assert info is not None
+    assert info["senders"] == sorted([WALLET, EXIT])
+    assert info["sweep_targets"] == [HOT]
+
+
+def test_a_token_transfer_out_not_initiated_by_the_address_is_dropped():
+    # transferFrom spoof: the explorer lists the transfer from DEPOSIT, but the
+    # transaction was not sent by DEPOSIT (no txlist row of DEPOSIT carries it).
+    lists = deposit_lists(sweeps=1)
+    lists[("tokentx", DEPOSIT)] = [
+        tok(DEPOSIT, OTHER, value=10**18, h=f"0xspoof{i}") for i in (1, 2, 3)
+    ]
+    info = info_of(lists)
+    assert info is not None and info["sweep_targets"] == [HOT]
+    # the same transfers sent by the address itself are counted: no dominant sweep
+    lists[("txlist", DEPOSIT)] += [tx(DEPOSIT, TOKEN, value=0, h=f"0xspoof{i}") for i in (1, 2, 3)]
+    assert info_of(lists) is None
+
+
+def test_the_window_is_a_time_not_a_block_count():
+    # Fast chains have many blocks in 38,400 s; the window is the duration.
+    rows = [
+        tx(WALLET, DEPOSIT, block=100, ts=1000),
+        tx(DEPOSIT, HOT, value=10**18, block=100 + 50_000, ts=1000 + FORWARD_SECONDS),
+    ]
+    assert forwards_to(rows, DEPOSIT, HOT)
+    rows[1]["timeStamp"] = str(1000 + FORWARD_SECONDS + 1)
+    assert not forwards_to(rows, DEPOSIT, HOT)
+    # without timestamps the fallback of 3200 blocks applies
+    rows = [tx(WALLET, DEPOSIT, block=100), tx(DEPOSIT, HOT, value=10**18, block=100 + 3200)]
+    assert forwards_to(rows, DEPOSIT, HOT)
+    rows[1]["blockNumber"] = str(100 + 3201)
+    assert not forwards_to(rows, DEPOSIT, HOT)
+
+
+def test_an_aggregated_sweep_forwards_the_sum_of_several_deposits():
+    rows = [
+        tx(WALLET, DEPOSIT, value=4 * 10**17, ts=1000, block=10),
+        tx(EXIT, DEPOSIT, value=6 * 10**17, ts=1100, block=11),
+        tx(DEPOSIT, HOT, value=10**18 - 10**15, ts=1200, block=12),
+    ]
+    assert forwards_to(rows, DEPOSIT, HOT)
+    rows[2]["value"] = str(10**18 - 2 * 10**16)  # short by more than 0.01 ETH
+    assert not forwards_to(rows, DEPOSIT, HOT)
+    rows[2]["value"] = str(2 * 10**18)  # the sum does not cover it
+    assert not forwards_to(rows, DEPOSIT, HOT)
+
+
+def test_an_aggregate_counts_only_deposits_after_the_previous_outgoing_transfer():
+    rows = [
+        tx(WALLET, DEPOSIT, value=4 * 10**17, ts=1000, block=10),
+        tx(DEPOSIT, OTHER, value=4 * 10**17, ts=1050, block=11),  # spends the first deposit
+        tx(EXIT, DEPOSIT, value=6 * 10**17, ts=1100, block=12),
+        tx(DEPOSIT, HOT, value=10**18, ts=1200, block=13),
+    ]
+    assert not forwards_to(rows, DEPOSIT, HOT)
+    del rows[1]  # without that spend the two deposits add up
+    assert forwards_to(rows, DEPOSIT, HOT)
+
+
+def test_an_aggregated_token_sweep_has_a_one_percent_tolerance():
+    rows = [
+        tok(WALLET, DEPOSIT, value=500, ts=1000, block=10),
+        tok(EXIT, DEPOSIT, value=500, ts=1100, block=11),
+        tok(DEPOSIT, HOT, value=995, ts=1200, block=12),
+    ]
+    assert forwards_to(rows, DEPOSIT, HOT)
+    rows[2]["value"] = "980"
+    assert not forwards_to(rows, DEPOSIT, HOT)
+    rows[2]["value"] = "1000"
+    rows[2]["contractAddress"] = OTHER  # another asset
+    assert not forwards_to(rows, DEPOSIT, HOT)

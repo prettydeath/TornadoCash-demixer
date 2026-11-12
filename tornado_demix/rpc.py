@@ -130,10 +130,22 @@ def user_chosen_gas_price(base_fee: int | None | _Unknown) -> bool:
     return base_fee is None or base_fee == 0
 
 
+def _has_contract_code(code: str) -> bool:
+    """True when ``eth_getCode`` output is contract code. Empty code and an EIP-7702
+    delegation designator (``0xef0100`` + 20 bytes, 48 characters with the prefix)
+    belong to an EOA."""
+    code = code.lower()
+    if code in ("0x", "0x0"):
+        return False
+    return not (len(code) == 48 and code.startswith("0xef0100"))
+
+
 def make_contract_check(rpc_url: str) -> Callable[[str], bool | None]:
     """Return ``check(address) -> True | False | None`` via ``eth_getCode``.
 
     None means unknown (no endpoint, or the lookup failed). Memoised per address.
+    An EIP-7702 delegated account (code of exactly ``0xef0100`` plus a 20-byte
+    address) is an externally owned account, not a contract: False.
     """
     if not rpc_url:
         return lambda address: None
@@ -143,7 +155,7 @@ def make_contract_check(rpc_url: str) -> Callable[[str], bool | None]:
     def check(address):
         if address not in cache:
             code = client.call("eth_getCode", [address, "latest"])
-            cache[address] = None if not isinstance(code, str) else code not in ("0x", "0x0")
+            cache[address] = None if not isinstance(code, str) else _has_contract_code(code)
         return cache[address]
 
     return check
