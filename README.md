@@ -79,8 +79,8 @@ traces users leave around it.
   the context signal `root_excluded` (or is listed as dropped after recount if it loses its count match); one whose notes were only partly in the tree carries `root_partial` and nothing is removed. It is not a lead and is not scored. It needs one
   transaction lookup per candidate withdrawal (at most 200) and a per-pool root index (about
   30 minutes to build for a large pool, then cached). See
-  [METHODOLOGY.md](docs/METHODOLOGY.md) section 4c and the measurement in
-  [EVALUATION.md](docs/EVALUATION.md#merkle-root-exclusion-exploratory).
+  [METHODOLOGY.md](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/METHODOLOGY.md) section 4c and the measurement in
+  [EVALUATION.md](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/EVALUATION.md#merkle-root-exclusion-exploratory).
 - Optionally runs a placebo check (`--placebo`, or the web UI option): the same
   analysis on a decoy window that ends before the wallet's first deposit, so the
   report shows how many leads chance alone produces for this wallet.
