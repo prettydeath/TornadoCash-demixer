@@ -21,6 +21,8 @@ from typing import Any, Callable
 
 import requests
 
+from .incomplete import lookup_failed
+
 # keccak256(signature)[:4], precomputed so the package needs no keccak library.
 # A wrong selector makes every genuine pool look like "not a Tornado pool";
 # tests/test_rpc.py re-derives them wherever a keccak implementation is installed.
@@ -143,21 +145,44 @@ def _has_contract_code(code: str) -> bool:
 def make_contract_check(rpc_url: str) -> Callable[[str], bool | None]:
     """Return ``check(address) -> True | False | None`` via ``eth_getCode``.
 
-    None means unknown (no endpoint, or the lookup failed). Memoised per address.
+    None means unknown (no endpoint, or the lookup failed). Answers are memoised
+    per address; a failed lookup is not: it is tried again on the next use, and
+    while it keeps failing the address is in ``check.failed`` (so a caller can tell
+    "lookup failed" from "no endpoint") and each first failure is appended to
+    ``check.errors`` as an :mod:`tornado_demix.incomplete` record.
     An EIP-7702 delegated account (code of exactly ``0xef0100`` plus a 20-byte
     address) is an externally owned account, not a contract: False.
     """
     if not rpc_url:
-        return lambda address: None
+
+        def unknown(address):
+            return None
+
+        unknown.failed = set()
+        unknown.errors = []
+        return unknown
     client = RpcClient(rpc_url)
     cache = {}
+    recorded = set()
 
     def check(address):
-        if address not in cache:
-            code = client.call("eth_getCode", [address, "latest"])
-            cache[address] = None if not isinstance(code, str) else _has_contract_code(code)
+        if address in cache:
+            return cache[address]
+        code = client.call("eth_getCode", [address, "latest"])
+        if not isinstance(code, str):
+            check.failed.add(address)
+            if address not in recorded:
+                recorded.add(address)
+                check.errors.append(
+                    lookup_failed("contract check (eth_getCode)", "no answer", address=address)
+                )
+            return None
+        check.failed.discard(address)
+        cache[address] = _has_contract_code(code)
         return cache[address]
 
+    check.failed = set()
+    check.errors = []
     return check
 
 
@@ -170,7 +195,8 @@ def make_gas_price_gate(
     chose the gas price) holds; see :func:`user_chosen_gas_price`. With no
     ``rpc_url`` it answers False for everything and says so once.
 
-    Results are memoised per block. Only withdrawals that already matched a
+    Results are memoised per block; a failed lookup is not (it is tried again on the
+    next use and recorded once in ``gate.errors``). Only withdrawals that already matched a
     deposit's gas price are asked about, so a run touches few blocks.
     """
     if not rpc_url:
@@ -179,16 +205,35 @@ def make_gas_price_gate(
                 "[!] no RPC endpoint for this network: the unique-gas-price "
                 "heuristic is disabled (it cannot be validated post-EIP-1559)"
             )
-        return lambda block_number: False
+
+        def off(block_number):
+            return False
+
+        off.errors = []
+        return off
 
     client = RpcClient(rpc_url)
     cache = {}
+    recorded = set()
 
     def gate(block_number):
         if not block_number:
             return False
-        if block_number not in cache:
-            cache[block_number] = user_chosen_gas_price(client.base_fee(block_number))
+        if block_number in cache:
+            return cache[block_number]
+        fee = client.base_fee(block_number)
+        if fee is UNKNOWN:
+            # not cached: tried again on the next use; the heuristic is off meanwhile
+            if block_number not in recorded:
+                recorded.add(block_number)
+                gate.errors.append(
+                    lookup_failed(
+                        "base fee (eth_getBlockByNumber)", "no answer", block=block_number
+                    )
+                )
+            return False
+        cache[block_number] = user_chosen_gas_price(fee)
         return cache[block_number]
 
+    gate.errors = []
     return gate

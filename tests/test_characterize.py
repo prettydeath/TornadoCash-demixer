@@ -63,22 +63,22 @@ def test_pool_inflows_are_detected_with_pool_key_and_value():
     assert info["inflow_totals"]["ETH"] == round(0.1 + 0.994, 6)
 
 
-def test_many_distinct_pools_classify_as_aggregator():
+def test_many_distinct_pools_classify_as_consolidator():
     internal = [
         _internal(P01, ADDR, 10**17, 1000, "0xa"),
         _internal(P1, ADDR, 10**18, 1100, "0xb"),
         _internal(P10, ADDR, 10**19, 1200, "0xc"),
     ]
     info = characterize_address(StubClient([], internal), ADDR, _network())
-    assert info["classification"] == "aggregator"
+    assert info["classification"] == "multi-pool consolidator"
     assert "3 distinct pool(s)" in info["classification_reason"]
 
 
-def test_aggregator_by_inflow_count_with_a_single_pool():
-    # The OR arm: >=10 inflows from just one pool is still an aggregator.
+def test_consolidator_by_inflow_count_with_a_single_pool():
+    # The OR arm: >=10 inflows from just one pool is still a consolidator.
     internal = [_internal(P1, ADDR, 10**18, 1000 + i, "0x%d" % i) for i in range(10)]
     info = characterize_address(StubClient([], internal), ADDR, _network())
-    assert info["classification"] == "aggregator"
+    assert info["classification"] == "multi-pool consolidator"
     assert info["distinct_pools"] == ["1 ETH"]
 
 

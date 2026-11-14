@@ -52,6 +52,13 @@ def classify(table: dict, chain_id: int, address: str) -> str:
     return row["protocol"] if row else "other"
 
 
+def listed(table: dict, chain_id, address: str) -> dict | None:
+    """The table row of a bridge address, or None (also for an unknown chain)."""
+    if chain_id is None:
+        return None
+    return table.get((int(chain_id), (address or "").lower()))
+
+
 # Calls that bring funds IN from the other chain (4byte.directory signatures). A
 # call to a bridge with one of these selectors is an arrival, not an exit.
 INBOUND_SELECTORS = {
@@ -109,7 +116,19 @@ WRAPPED_NATIVE = {
     137: "0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270",  # WPOL
 }
 
-SUPPORTED = {ACROSS}
+SUPPORTED = {ACROSS}  # protocols whose deposits are decoded and followed
+
+# State of a bridge hop (edge["bridge"]["state"]). Every state but "filled" ends the
+# branch; the five Across lookup outcomes are also the branch's end reason.
+FILLED = "filled"
+NOT_FOLLOWED = "not_followed"  # a listed bridge without a decoder: named, not followed
+NOT_DECODED = "deposit_not_decoded"  # a decoded protocol, but no deposit of this sender
+NOT_TIED = "deposit_not_tied"  # an Across deposit in the transaction, not this transfer
+FILL_NOT_FOUND = "fill_not_found"
+DEST_CHAIN_NOT_SUPPORTED = "destination_chain_not_supported"
+DEST_POOL_NOT_LISTED = "destination_pool_not_listed"
+LOOKUP_FAILED = "lookup_failed"
+DEPOSIT_EXPIRED = "deposit_expired_possible_refund"
 TOKEN_WRAPPED = {137}  # chains whose wrapped coin is an ordinary token (Polygon: WPOL)
 
 
@@ -122,11 +141,6 @@ def _address(word):
     """Address in a word or topic (int or hex string); None for a non-EVM bytes32."""
     value = int(word, 16) if isinstance(word, str) else word
     return "0x{:040x}".format(value) if value < 1 << 160 else None
-
-
-def is_bridge(table, chain_id, address):
-    """True for an address the table lists with a decoder (see SUPPORTED)."""
-    return classify(table, chain_id, address) in SUPPORTED
 
 
 def decode_across_deposits(logs, origin_chain_id=1, table=None):
@@ -175,16 +189,65 @@ def decode_across_deposits(logs, origin_chain_id=1, table=None):
 def decode_deposits(client, tx_hash, origin_chain_id=1, table=None, ts=None):
     """Bridge deposits made in transaction ``tx_hash`` (receipt read through ``client``).
 
-    ``ts`` is the transaction's timestamp; it bounds the later fill search.
+    ``ts`` is the transaction's timestamp; it bounds the later fill search. Each
+    deposit also carries ``tx_from``, the sender of the transaction (the receipt's
+    ``from``): through a periphery or router contract it can differ from the depositor.
     """
-    receipt = client.tx_receipt(tx_hash)
+    return decode_receipt_deposits(client.tx_receipt(tx_hash), tx_hash, origin_chain_id, table, ts)
+
+
+def decode_receipt_deposits(receipt, tx_hash, origin_chain_id=1, table=None, ts=None):
+    """decode_deposits over a receipt already read (None or a failed one: no deposits)."""
     if not receipt or receipt.get("status") == "0x0":
         return []
     logs = [dict(log, transactionHash=tx_hash) for log in receipt.get("logs") or []]
     deposits = decode_across_deposits(logs, origin_chain_id, table)
+    sender = (receipt.get("from") or "").lower() or None
     for d in deposits:
         d["ts"] = ts
+        d["tx_from"] = sender
     return deposits
+
+
+def bridge_emitters(receipt, chain_id, table, exclude=()):
+    """Bridge contracts of the table (not aggregators) that emitted a log in ``receipt``.
+
+    ``exclude`` lists addresses not to count (the contract the transfer went to).
+    """
+    skip = {a.lower() for a in exclude}
+    found = set()
+    for log in (receipt or {}).get("logs") or []:
+        addr = (log.get("address") or "").lower()
+        row = listed(table, chain_id, addr)
+        if row is not None and row["kind"] != "aggregator" and addr not in skip:
+            found.add(addr)
+    return found
+
+
+def destination_pools(table, chain_id):
+    """Across SpokePools listed on ``chain_id`` (where fills are emitted), sorted.
+
+    Rows whose role starts with "SpokePool (": not the v2 pool, not the periphery.
+    """
+    return sorted(
+        r["address"]
+        for (c, _a), r in table.items()
+        if c == int(chain_id) and r["protocol"] == ACROSS and r["role"].startswith("SpokePool (")
+    )
+
+
+def no_fill_state(deposit, now=None):
+    """End state of a deposit whose fill was not found.
+
+    DEPOSIT_EXPIRED when its fill deadline has passed and lay inside the search window
+    (an unfilled Across deposit is refunded after its deadline: the funds may be back
+    with the depositor), FILL_NOT_FOUND otherwise.
+    """
+    now = time.time() if now is None else now
+    ts, deadline = deposit.get("ts"), int(deposit.get("fill_deadline") or 0)
+    if ts and deadline and deadline < now and deadline <= ts + MAX_FILL_WAIT:
+        return DEPOSIT_EXPIRED
+    return FILL_NOT_FOUND
 
 
 def _execution_info(topic0, w):
@@ -241,9 +304,7 @@ def find_fill(dest_client, deposit, table=None):
     """
     table = load_bridges() if table is None else table
     dest = int(deposit["dest_chain_id"])
-    pools = sorted(
-        r["address"] for (c, _a), r in table.items() if c == dest and r["protocol"] == ACROSS
-    )
+    pools = destination_pools(table, dest)
     if not pools:
         return None
     topics = {

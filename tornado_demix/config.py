@@ -30,7 +30,7 @@ api.csv format (header required):
 wallets.csv format (header required, extra columns are ignored):
 
     address,label
-    0x019b5bb2051797e33f726d0e7a8cb9b9c2003ac2,case-42-wallet-1
+    0x1234567890abcdef1234567890abcdef12345678,case-42-wallet-1
 """
 
 from __future__ import annotations
@@ -112,6 +112,8 @@ def load_api_key(csv_path: str | None = None, service: str = "etherscan") -> str
     message if no key can be found.
     """
     path = resolve(csv_path or DEFAULT_API_CSV)
+    if csv_path and (not path or not os.path.exists(path)):
+        raise ConfigError("API key file not found: {}.".format(csv_path))
     key = None
     if path and os.path.exists(path):
         with open(path, newline="", encoding="utf-8-sig") as fh:
@@ -139,6 +141,57 @@ def is_address(value: str) -> bool:
     return bool(_ADDRESS_RE.fullmatch(value))
 
 
+def _keccak256():
+    """keccak-256 as ``bytes -> bytes``: pycryptodome when installed, else pure Python.
+
+    Never ``None``."""
+    try:
+        from Crypto.Hash import keccak
+    except ImportError:
+        from .keccak import keccak256
+
+        return keccak256
+    return lambda data: keccak.new(digest_bits=256, data=data).digest()
+
+
+def _eip55(body: str, keccak) -> str:
+    """EIP-55 mixed-case form of 40 hex digits (any input case)."""
+    body = body.lower()
+    digest = keccak(body.encode("ascii")).hex()
+    return "".join(
+        c.upper() if c.isalpha() and int(digest[i], 16) > 7 else c for i, c in enumerate(body)
+    )
+
+
+def normalize_address(value: str) -> str:
+    """Validate one address and return it lowercased.
+
+    All-lowercase and all-uppercase hex carry no checksum and are accepted. A
+    mixed-case address claims an EIP-55 checksum, which is verified (with
+    pycryptodome when installed, else with the bundled pure-Python keccak, so the
+    check always runs). A wrong checksum is refused, never silently lowercased: it is
+    the typo the checksum exists to catch.
+    """
+    addr = (value or "").strip()
+    if addr[:2] == "0X":
+        addr = "0x" + addr[2:]
+    if not is_address(addr):
+        raise ConfigError(
+            "{!r} is not a wallet address: expected 0x followed by 40 hex characters.".format(value)
+        )
+    body = addr[2:]
+    if body != body.lower() and body != body.upper():
+        keccak = _keccak256()
+        if _eip55(body, keccak) != body:
+            raise ConfigError(
+                "{} fails its EIP-55 checksum: a character was mistyped or the case was "
+                "changed. Check the address, or paste it in lowercase to skip the check.".format(
+                    addr
+                )
+            )
+    return addr.lower()
+
+
 def is_tx_hash(value: str) -> bool:
     """True for a 0x-prefixed string of exactly 64 hex digits."""
     return bool(re.fullmatch(r"0x[0-9a-fA-F]{64}", value))
@@ -160,11 +213,11 @@ def load_wallets(csv_path: str | None = None) -> list[str]:
     wallets = []
     with open(path, newline="", encoding="utf-8-sig") as fh:
         for row in csv.DictReader(fh):
-            addr = (row.get("address") or "").strip().lower()
+            addr = (row.get("address") or "").strip()
             if not addr or addr.startswith("#"):
                 continue
             if is_address(addr):
-                wallets.append(addr)
+                wallets.append(normalize_address(addr))
     if not wallets:
         raise ConfigError("No valid addresses in {}".format(path))
     return wallets

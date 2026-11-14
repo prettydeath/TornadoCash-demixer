@@ -12,7 +12,7 @@
     "tornado-cash",
     "blockchain-forensics",
     "ethereum",
-    "deanonymization",
+    "transaction-linking",
     "osint",
     "aml"
   ],

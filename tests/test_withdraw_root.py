@@ -1,6 +1,6 @@
 import pytest
 
-from tornado_demix.withdraw_root import root_from_input, withdrawal_root
+from tornado_demix.withdraw_root import candidate_roots, root_from_input, withdrawal_root
 
 SEL = "21a0adb6"  # any 4-byte selector
 ROOT = "11" * 32
@@ -118,3 +118,26 @@ def test_real_1_eth_withdrawals_root_is_in_the_root_index():
         got = withdrawal_root(client, {"tx_hash": tx_hash, "nullifier": nullifier})
         assert got is not None, kind
         assert roots.get("0x{:064x}".format(got)) == n_leaves, kind
+
+
+def test_every_occurrence_is_a_candidate_root():
+    old = "33" * 32
+    data = "0x" + SEL + word("e0") + old + NULL + word("0") + ROOT + NULL + word("0")
+    assert candidate_roots(data, "0x" + NULL) == [int(old, 16), int(ROOT, 16)]
+
+
+def test_several_candidates_have_no_single_root():
+    old = "33" * 32
+    data = "0x" + SEL + old + NULL + ROOT + NULL
+    assert root_from_input(data, "0x" + NULL) is None
+
+
+def test_repeated_identical_candidate_counts_once():
+    data = "0x" + SEL + ROOT + NULL + ROOT + NULL
+    assert candidate_roots(data, "0x" + NULL) == [int(ROOT, 16)]
+    assert root_from_input(data, "0x" + NULL) == int(ROOT, 16)
+
+
+def test_early_occurrence_does_not_hide_a_later_one():
+    data = "0x" + SEL + "11" * 10 + NULL + ROOT + NULL
+    assert candidate_roots(data, "0x" + NULL) == [int(ROOT, 16)]

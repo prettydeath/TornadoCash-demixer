@@ -5,10 +5,15 @@ run (exploratory sweeps included) is known and can feed a multiple-testing corre
 Records are chained: ``prev_hash`` is the SHA-256 of the previous line's exact bytes and
 ``hash`` covers the record itself, so an edited or deleted line is detected by
 :func:`verify_chain`. A truncated tail is not detectable from the file alone; keep a
-:func:`witness` (last seq + hash) somewhere else.
+:func:`witness` (last seq + hash) somewhere else and pass it to :func:`verify_chain`.
+A confirmatory record whose script hash the current lock does not list is reported by
+:func:`unlisted`, not as a broken chain (the lock should only ever be appended to). A last
+line that was cut off mid-write (no newline) is reported by :func:`partial_tail`; it does
+not stop later appends.
 
 A record is ``confirmatory`` only when the protocol lock lists the SHA-256 of the script that
-produced it; with no lock file everything is ``exploratory``. The status depends only on the script file's hash:
+produced it; with no lock file everything is ``exploratory``. The lock is looked up from the
+register's location (:func:`lock_for`), not from the working directory. The status depends only on the script file's hash:
 changes in library code the script calls are not covered. Stdlib only; the append is
 guarded by an exclusive lock on a sidecar file (msvcrt on Windows, fcntl elsewhere).
 """
@@ -117,6 +122,19 @@ def _last_line(fh):
         chunk *= 4
 
 
+def lock_for(register_path):
+    """Default protocol lock of a register, found from the register and not from the cwd.
+
+    A register in the standard layout ``<project>/.cache/registry/<file>`` uses
+    ``<project>/docs/PROTOCOL.lock``; any other register uses ``PROTOCOL.lock`` beside it.
+    """
+    folder = os.path.dirname(os.path.abspath(register_path))
+    parent = os.path.dirname(folder)
+    if os.path.basename(folder) == "registry" and os.path.basename(parent) == ".cache":
+        return os.path.join(os.path.dirname(parent), PROTOCOL_LOCK_DEFAULT)
+    return os.path.join(folder, "PROTOCOL.lock")
+
+
 def _resolve(path):
     return path or os.environ.get(ENV_PATH) or REGISTRY_PATH_DEFAULT
 
@@ -136,7 +154,7 @@ def record(test_id, script_path, params, result, *, path=None, lock_path=None):
         digest = sha256_file(script_path)
     except OSError:
         digest = None
-    lock = PROTOCOL_LOCK_DEFAULT if lock_path is None else lock_path
+    lock = lock_for(path) if lock_path is None else lock_path
     status = "confirmatory" if digest and digest in locked_hashes(lock) else "exploratory"
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     with _exclusive(path + ".lock"):
@@ -148,7 +166,13 @@ def record(test_id, script_path, params, result, *, path=None, lock_path=None):
                 try:
                     seq = int(json.loads(last)["seq"]) + 1
                 except (ValueError, KeyError, TypeError) as exc:
-                    raise RegistryError(f"{path}: last line is not a register record") from exc
+                    if not _unterminated(fh):
+                        raise RegistryError(f"{path}: last line is not a register record") from exc
+                    # cut off mid-write: it keeps its slot (verify_chain lists it), the
+                    # new record starts on its own line and the chain goes on
+                    seq = _line_count(fh)
+                if _unterminated(fh):
+                    fh.write(b"\n")
                 prev = _sha(last)
             rec = {
                 "seq": seq,
@@ -180,6 +204,20 @@ def record_safe(*args, **kwargs):
         return None
 
 
+def _unterminated(fh):
+    """True when the open binary file does not end with a newline."""
+    size = fh.seek(0, os.SEEK_END)
+    if size == 0:
+        return False
+    fh.seek(size - 1)
+    return fh.read(1) != b"\n"
+
+
+def _line_count(fh):
+    fh.seek(0)
+    return sum(1 for raw in fh.read().split(b"\n") if raw)
+
+
 def _records(path):
     """(line bytes, parsed record or None) per non-empty line."""
     with open(path, "rb") as fh:  # bytes, no encoding=
@@ -194,14 +232,58 @@ def _records(path):
             yield raw, rec
 
 
-def verify_chain(path):
-    """Seq numbers of broken records (hash, prev_hash or seq gap); [] = intact."""
+def partial_tail(path):
+    """Seq slot of a last line cut off mid-write (unparseable, no newline), else None."""
+    if not os.path.isfile(path):
+        return None
+    with open(path, "rb") as fh:  # bytes, no encoding=
+        data = fh.read()
+    if not data or data.endswith(b"\n"):
+        return None
+    tail = [x for x in data.split(b"\n") if x]
+    try:
+        rec = json.loads(tail[-1])
+    except ValueError:
+        return len(tail) - 1
+    return None if isinstance(rec, dict) else len(tail) - 1
+
+
+def unlisted(path, lock_path=None):
+    """Seq numbers of ``confirmatory`` records whose script hash the lock does not list.
+
+    Not a chain error: the lock may have been replaced or shortened after the record was
+    written. The lock should be append-only; an entry removed from it shows up here.
+    """
     if not os.path.isfile(path):
         return []
+    locked = locked_hashes(lock_for(path) if lock_path is None else lock_path)
+    return sorted(
+        rec["seq"]
+        for _raw, rec in _records(path)
+        if rec is not None
+        and rec.get("status") == "confirmatory"
+        and isinstance(rec.get("seq"), int)
+        and str(rec.get("script_sha256")) not in locked
+    )
+
+
+def verify_chain(path, witness=None):
+    """Seq numbers of broken records; [] = intact.
+
+    A record is broken when its hash, ``prev_hash`` or seq is wrong. With a ``witness`` ({"seq", "hash"} from :func:`witness`) a register that
+    lacks that record, or holds another one under that seq, is broken at the witness seq
+    (a truncated or rewritten tail). A half-written last line is not listed here, see
+    :func:`partial_tail`.
+    """
+    if not os.path.isfile(path):
+        return [witness["seq"]] if witness and witness.get("seq") is not None else []
+    tail = partial_tail(path)
     broken, prev, expected = set(), GENESIS, 0
+    hashes = {}
     for raw, rec in _records(path):
         if rec is None:
-            broken.add(expected)
+            if expected != tail:
+                broken.add(expected)
             prev, expected = _sha(raw), expected + 1
             continue
         seq = rec.get("seq")
@@ -213,15 +295,22 @@ def verify_chain(path):
             bad = True
         if bad or rec.get("prev_hash") != prev or seq != expected:
             broken.add(seq)
+        hashes[seq] = rec.get("hash")
         prev, expected = _sha(raw), seq + 1
+    if witness and witness.get("seq") is not None:
+        if hashes.get(witness["seq"]) != witness.get("hash"):
+            broken.add(witness["seq"])
     return sorted(broken)
 
 
 def witness(path):
     """``{"seq", "hash"}`` of the last record; keep it outside the register directory."""
     last, seen = None, False
+    tail = partial_tail(path)
     if os.path.isfile(path):
-        for _raw, rec in _records(path):
+        for n, (_raw, rec) in enumerate(_records(path)):
+            if n == tail:
+                continue
             last, seen = rec, True
     if not seen:
         return {"seq": None, "hash": GENESIS}

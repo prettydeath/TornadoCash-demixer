@@ -3,16 +3,16 @@
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23085804.svg)](https://doi.org/10.5281/zenodo.23085804)
 [![PyPI](https://img.shields.io/pypi/v/tornado-demix)](https://pypi.org/project/tornado-demix/)
 
-Probabilistic demixing of Tornado Cash deposits using only public on-chain data.
-The toolkit links a depositor wallet to likely withdrawal addresses and reports
+Transaction-linking heuristics for Tornado Cash deposits, using only public on-chain data.
+The toolkit ranks candidate withdrawal addresses for a depositor wallet and reports
 each candidate with an evidence band and the evidence behind it. A band needs a
 lead signal that stood above chance on real depositors: a linked address (a direct
 counterparty whose first withdrawal came within 72 hours of the deposit) or an
 early multi-pool profile match; two independent
 lead sources make a band `strong`. Amount+timing and gas-price matches turn up as
 often by chance as for real exits, so they are shown as context and never raise
-a band. It also groups exits paid out together, links wallets of one operator
-and follows withdrawn funds forward.
+a band. It also groups exits paid out together, groups wallets of one operator
+by shared candidates and follows withdrawn funds forward.
 
 Output is a set of leads for further investigation, not proof. Tornado Cash breaks
 the deposit-withdrawal link cryptographically; the tool looks for behavioural
@@ -54,7 +54,8 @@ traces users leave around it.
   candidate or an exit you already know (`--known-exit`) anchors it.
 - Finds the depositor's exchange deposit addresses and flags a recipient that
   sent funds to the same one (`shared_deposit`). Since 2.21 this is context
-  only: it is shown in the evidence but has no weight and never raises the band.
+  only: it is shown in the evidence but has no weight and never raises the band
+  (a post-hoc change, decided after the second hold-out and not tested on new data).
   On 1,000 random depositors it gave 27 real-window against 4 decoy hits when
   the deposit address swept to labelled exchange wallets (rule 2.17 sample), but
   in the second hold-out it was not above chance at 30 days (Ethereum 18 target
@@ -94,11 +95,18 @@ traces users leave around it.
 - Follows withdrawn funds forward over several hops with FIFO attribution and
   DEX-swap resolution, up to a labelled service (`trace`); each edge shows
   `FIFO amount [lower - upper]`, the share the traced funds can have under any
-  ordering. A deposit into an Across SpokePool (V3 and current events only) is
-  followed to the destination chain by its on-chain deposit id; `--arrival-tx`
+  ordering; every address has one ledger, so a transfer reached by several branches
+  is attributed once, and FIFO starts at the traced arrival. A deposit into an Across SpokePool (V3 and current events only) is
+  followed to the destination chain by its on-chain deposit id; an Arbitrum Inbox
+  deposit (retryable ticket or `depositEth`) is followed on Arbitrum from its L2
+  recipient once the L2 credit is found, and a ZKsync Bridgehub request shows its L2
+  recipient (ZKsync chains are not followed); `--arrival-tx`
   fixes the transaction that brought the start amount, which narrows the bounds.
 - Characterises an exit candidate: activity, pool inflows, next hops, a disposable
-  flag, optional address labels (`characterize`).
+  flag, optional address labels and the deposit-address check of each listed address
+  (`characterize`).
+- Checks whether one address behaves like a deposit address: exchange, service or
+  deposit-like (unlabelled sweep target), forwarder or smart account (`classify-address`).
 
 The method, thresholds and the reasoning behind them are in
 [docs/METHODOLOGY.md](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/METHODOLOGY.md).
@@ -159,6 +167,7 @@ The web UI and the evaluation tools live in the repository. From a checkout:
 python -m pip install .            # core: the tornado-demix command and the pool registry
 python -m pip install ".[web]"     # plus Flask; run the UI from a checkout
 python -m pip install -e ".[dev]"  # for development: tests and ruff
+python -m pip install -e ".[eval]" # plus numpy, scipy, statsmodels: the evaluation tools
 ```
 
 Dependencies and their version bounds are declared in `pyproject.toml`.
@@ -235,7 +244,7 @@ a claim by its source, not a finding of this tool.
 
 ```bash
 # one wallet: CSV files, an HTML report and the full result as JSON
-python -m tornado_demix demix 0x019b5bb2051797e33f726d0e7a8cb9b9c2003ac2 \
+python -m tornado_demix demix 0x1234567890abcdef1234567890abcdef12345678 \
     --network ethereum --out-dir out/demix --report out/demix.html --json out/demix.json
 
 # narrow the search to 6 hours after each voucher's last deposit
@@ -253,6 +262,8 @@ python -m tornado_demix demix <wallet> --rapid
 # several wallets
 python -m tornado_demix multi <wallet1> <wallet2> --report out/multi.html
 python -m tornado_demix multi --wallets-csv config/wallets.csv
+# intermediate wallets of one actor, also treated as one depositor (conditional on that assertion)
+python -m tornado_demix multi <wallet1> <wallet2> --group --json out/multi.json
 
 # split exits, one hop forward (resumable cache in --cache-dir)
 python -m tornado_demix cluster <wallet> --cache-dir .cache/case-42
@@ -260,13 +271,46 @@ python -m tornado_demix cluster <wallet> --cache-dir .cache/case-42
 # describe an exit candidate
 python -m tornado_demix characterize <address> --attribution-dir path/to/labels
 
+# is this address a deposit address (exchange / service / deposit-like), a forwarder or neither?
+python -m tornado_demix classify-address <address> --network polygon --labels-blockscout --json out/c.json
+
 # follow 10 ETH withdrawn to <address> in block 12000000 over up to 4 hops
 python -m tornado_demix trace <address> --amount 10 --start-block 12000000 --report out/trace.html
 ```
 
+Provider flags, shared by every command that reads the chain:
+
+- `--max-wait SECONDS` (default 120): the longest one call backs off on a transient
+  error (rate limit, HTTP 429/5xx, timeout), with exponential waits and jitter.
+  Permanent errors (rejected key, a chain the plan does not cover, a malformed
+  address) fail on the first answer with a one-line message.
+- `--pause SECONDS`: wait before every explorer call, for a free key shared with
+  other programs.
+- `--http-cache DIR`: keep explorer answers in DIR and reuse them. Only account and
+  log queries that end at least 64 blocks below the chain head are stored (such
+  rows no longer change); errors, partially indexed answers and the API key are
+  never stored.
+- `--progress-every N` (default 50): a `[*]` line on stderr every N explorer calls.
+- On a network with an `rpc_url` in `networks.csv`, `getLogs` falls back to JSON-RPC
+  `eth_getLogs` when the explorer fails after its retries (for example Blockscout
+  throttling). The node is asked in block spans that shrink when it reports a range
+  limit; block timestamps come from `eth_getBlockByNumber`. A log row read from a node
+  has no gas price, so the unique-gas-price signal has nothing to match on it; every
+  such list is listed as a notice ("read from the RPC node") in the CLI, HTML, JSON and
+  web output. `--max-wait` bounds the wall time of one call, request timeouts included.
+
 `python -m tornado_demix <command> --help` lists every option. A configuration or
 provider error exits with a non-zero status and a one-line message. Progress goes
 to stderr; the summary to stdout.
+
+### Reading the report
+
+The HTML report and the web UI share one layout. The **verdict card** on top answers in one sentence and counts leads, context-only and chance-level candidates and failed lookups (plus the placebo verdict and the exploratory and limitations badges).
+Sections follow in a fixed order: **Leads** (open), then Context, Chance-level candidates, Deposit addresses, Groups and clusters, Fee fingerprints, Method and limitations, Raw data (collapsed; counts in the sticky table of contents).
+**strong**: lead signals from two independent sources (an early direct link and an early multi-pool profile); **moderate**: one lead source.
+**weak**: no lead signal, either with a context-only signal (late direct link, withdrawal sender, shared deposit address) or on amount+timing and gas price alone, which are chance-level; the score only orders candidates within a band.
+Each candidate row opens an evidence timeline with full hashes; a trace ends with a totals line (end points + below threshold + failed lookups = start amount).
+Filters, search and copy buttons need JavaScript; without it every row is still in the page, and printing expands every section.
 
 ## Web UI
 
@@ -274,21 +318,25 @@ to stderr; the summary to stdout.
 python webui/app.py      # http://127.0.0.1:5000
 ```
 
-The form runs the same five analyses. For a demix run it shows the strongest
-band, the ranked candidates with their band and score, and for each candidate an
-**Evidence** panel listing every evidence family that was checked, whether it
-holds, and the numbers behind it. **Analysis parameters** lists the assumptions
-(voucher gap, window, thresholds) and the block ranges read. The CSV table, the
-HTML report and the full JSON result can be downloaded.
+The form runs the same six analyses (the sixth, classify, is the deposit-address check of one address); each mode shows only its own fields, and an input error is shown next to its field. The results page is the HTML report itself (same layout, see below): for each demix candidate an
+**Evidence timeline** lists the deposits, the withdrawals and every evidence family that was checked, whether it
+holds, and the numbers behind it. **Analysis parameters** (under Method and limitations) lists the assumptions
+(voucher gap, window, thresholds) and the block ranges read. The HTML report, the
+JSON result and the CSV table can be downloaded. With JavaScript on, a run
+goes to a background thread and the page shows a live status (elapsed time, explorer
+calls, cache hits, time spent waiting on the provider); without it the request runs
+to completion as before. One background run goes at a time (they share the API key's rate limit). The form's *Provider settings* are the flags above.
 
 For `trace`, enter one exit address, the amount to follow and optionally the
 block the funds arrived in, an ERC-20 token and the number of hops (up to 8). The
 page lists where the traced funds stop and why (labelled address, hop limit, a
-contract that paid nothing back, not moved on) and every edge with its attributed
-amount, swaps included; the HTML report, CSV and JSON can be downloaded.
+contract that paid nothing back, not moved on, `lookup_failed`, `below_threshold`,
+`tornado_redeposit`) and every edge with its attributed amount, swaps included; the
+HTML report, CSV and JSON can be downloaded. When a lookup failed, every analysis
+shows "N lookups failed — results may be incomplete" with the list.
 
-![demix in the web UI with the evidence panel open](https://raw.githubusercontent.com/prettydeath/TornadoCash-demixer/main/docs/img/demix-evidence.png)
-*A demix run on Avalanche: two vouchers and the evidence panel listing every family that was checked. The top candidate transacts directly with the depositor, but its first withdrawal came 358 h after the deposit; since 2.17 such a late direct link is context, so the candidate stays `weak`.*
+![demix in the web UI with an evidence timeline open](https://raw.githubusercontent.com/prettydeath/TornadoCash-demixer/main/docs/img/demix-evidence.png)
+*A demix run on the KuCoin depositor (case 4 below): one candidate row with its expanded evidence timeline (the 11 withdrawals and the counterparty link) and the list of every check that was made. The only check that holds is the withdrawal sent by the depositor's counterparty; it is context, so the candidate stays `weak`.*
 
 The UI binds to localhost and has no authentication (forms carry a CSRF token); see
 [SECURITY.md](https://github.com/prettydeath/TornadoCash-demixer/blob/main/SECURITY.md).
@@ -298,7 +346,7 @@ The UI binds to localhost and has no authentication (forms carry a CSRF token); 
 Five public cases with an external source of truth. Each can be re-run from the
 addresses shown (an Etherscan API key is enough; the Ronin labels need an
 attribution set). The screenshots are from the web UI; the CLI prints the same
-results. A new run can show slightly different counts as the chain grows and open
+results. There is no script in the repository that regenerates the images; most show the first page of the report (verdict, four figures, the diagram of how the money moved, the address table and the checks). A new run can show slightly different counts as the chain grows and open
 search windows are clamped to the current block.
 
 | # | Case | Analysis | What it shows | Source of truth |
@@ -326,7 +374,7 @@ to Circle: USDC and the Ronin Bridge. Without labels the same hops are shown
 unlabelled.
 
 ![Ronin exploiter in characterize](https://raw.githubusercontent.com/prettydeath/TornadoCash-demixer/main/docs/img/case-ronin.png)
-*`characterize` on the Ronin exploiter: attribution labels, no pool inflows, and the dominant next hops with the 12,595.3 ETH transfer to a second sanctioned address.*
+*First page of the `characterize` report for the Ronin exploiter: verdict "No pool inflows", the diagram of the eight next hops with USDC and the Ronin Bridge labelled, and the table ending in the 12,595.3 ETH transfer to a second sanctioned address.*
 
 ### 2. Wintermute attacker
 
@@ -339,7 +387,7 @@ One inflow of 9.9435 ETH from the 10 ETH pool on the day of the attack
 pattern of 98.6 % of laundering exits in the MixLaunder cases.
 
 ![Wintermute attacker in characterize](https://raw.githubusercontent.com/prettydeath/TornadoCash-demixer/main/docs/img/case-wintermute.png)
-*`characterize` on the Wintermute attacker: one pool inflow, classified as a possible personal exit and flagged disposable.*
+*First page of the `characterize` report for the Wintermute attacker: one 9.9435 ETH inflow from the 10 ETH pool, verdict "Possible personal exit", the eight next hops and the checks (the address was fresh, so it is flagged disposable as context).*
 
 ### 3. Beanstalk attacker
 
@@ -353,7 +401,7 @@ nothing corroborated: a careful operator leaves no lead, and the tool says so
 rather than naming an unrelated address.
 
 ![Beanstalk attacker in demix](https://raw.githubusercontent.com/prettydeath/TornadoCash-demixer/main/docs/img/case-beanstalk.png)
-*`demix` on the Beanstalk attacker: four vouchers, 271 notes, and a single weak count-match candidate.*
+*First page of the `demix` report for the Beanstalk attacker: 271 notes, verdict "No lead", and the one candidate, a `weak` count match at chance level.*
 
 ### 4. KuCoin hack (2020)
 
@@ -372,16 +420,16 @@ depositor's notes rather than the attacker's other deposits is unknown. The repo
 a flow diagram from the depositor through the pool to the candidates.
 
 ![KuCoin depositor in demix](https://raw.githubusercontent.com/prettydeath/TornadoCash-demixer/main/docs/img/case-kucoin.png)
-*`demix` on a KuCoin depositor: six moderate candidates, each an exit that received withdrawals sent by the depositor's counterparty; the evidence panel shows which families hold.*
+*First page of the `demix` report for a KuCoin depositor: verdict "No lead", the six addresses that received withdrawals sent by the depositor's counterparty (`linked_sender`), the diagram and the checks. All six are `weak`, context only; before 2.19 they were `moderate`.*
 
-![KuCoin case overview in the HTML report](https://raw.githubusercontent.com/prettydeath/TornadoCash-demixer/main/docs/img/case-kucoin-flow.png)
-*The case overview of the HTML report: depositor, pool and the six candidates, coloured by band.*
+![KuCoin case overview diagram in the HTML report](https://raw.githubusercontent.com/prettydeath/TornadoCash-demixer/main/docs/img/case-kucoin-flow.png)
+*"How the money moved" in the same report: the depositor, the 100 ETH pool, the counterparty (dashed) and the six addresses, each with the number of withdrawals it received.*
 
 With `--placebo` the same analysis also runs on a decoy window that ends a day
 before the first deposit, where no withdrawal can spend this depositor's notes:
 
-![Placebo check on the KuCoin depositor](https://raw.githubusercontent.com/prettydeath/TornadoCash-demixer/main/docs/img/case-kucoin-placebo.png)
-*The placebo check: six `moderate` leads in the real window, none in the decoy window, and no `weak` leads in either.*
+![Placebo check in the KuCoin verdict card](https://raw.githubusercontent.com/prettydeath/TornadoCash-demixer/main/docs/img/case-kucoin-placebo.png)
+*The Checks list of the same report. The Placebo line reads: six `weak` candidates in the real window, none in the decoy window (4.87 vs 0 per 1000 withdrawals searched); the six are context only (`linked_sender`), so they are not counted as leads.*
 
 ### 5. Harmony Bridge hack (2022)
 
@@ -398,7 +446,7 @@ python -m tornado_demix demix 0xe71d5fa89d1086d5c3b0ab03eeee2483d2d5ca97 \
 ```
 
 ![Harmony exit group from one known exit](https://raw.githubusercontent.com/prettydeath/TornadoCash-demixer/main/docs/img/case-harmony-groups.png)
-*An exit group anchored by one known exit: 22 addresses paid out in joint bursts, 20 of them on the investigators' list. Across all depositors, one known exit gives 23 addresses on average, 73 % of them on the list.*
+*The verdict ("No lead" for this depositor) and the Exit groups section of the report: one group of 22 addresses, 127 notes, paid out in joint bursts and anchored by one known exit. Across all depositors, one known exit gives 23 addresses on average, 73 % of them on the investigators' list.*
 
 **Shared funders.** Correlating the 14 depositors links all of them through five
 immediate funders, each of which was paid directly by the bridge exploiter
@@ -409,7 +457,7 @@ python -m tornado_demix multi --wallets-csv docs/cases/harmony_depositors.csv
 ```
 
 ![Harmony depositors linked by shared funders](https://raw.githubusercontent.com/prettydeath/TornadoCash-demixer/main/docs/img/case-harmony-funders.png)
-*`multi` on the 14 Harmony depositors: operator clusters linked by a shared funder, and the funders themselves.*
+*First page of the `multi` report for the 14 Harmony depositors: verdict "Operator cluster" (5 clusters link 14 of 14 wallets through shared funders), the diagram of the first 8 wallets and the pool, and the checks.*
 
 **Trace.** From an exit, `trace` follows the 100 ETH it received forward:
 
@@ -418,7 +466,28 @@ python -m tornado_demix trace 0x04bca8fa79f36749fa605597e9c9f6788c126944 --amoun
 ```
 
 ![Three-hop trace from a Harmony exit](https://raw.githubusercontent.com/prettydeath/TornadoCash-demixer/main/docs/img/case-harmony-trace.png)
-*`trace` from a Harmony exit: the 100 ETH moves through two intermediate addresses; the trace stops at the hop limit.*
+*First page of the `trace` report from a Harmony exit: 100 ETH, 3 edges, one stop at the hop limit, with the flow diagram and the checks.*
+
+### More public cases (2021-2025)
+
+Six further incidents with named depositors and published exit lists, run with the
+default settings (`demix`, 30-day window; `multi` without options). The exit lists
+come from investigators who matched by timing, amount and denomination, so they are
+not independent ground truth for this tool: "found" would mean agreement with their
+matching, not validation. Only the Deribit depositors come from a sworn document, the
+DOJ civil forfeiture complaint (D.D.C. 1:24-cv-02828). Result in short: the known
+exits fall inside the searched window almost every time, but only one of them (Garden
+Finance) was found, as a `weak` candidate at chance level. The table with the counts
+is in [docs/EVALUATION.md](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/EVALUATION.md).
+
+| Incident | Depositor(s) | Source |
+|---|---|---|
+| Steadefi, Aug 2023 | `0xe10d4a5bd440775226c7e1858f573e379d0aca36` | [steadefi.md](https://github.com/tayvano/lazarus-bluenoroff-research/blob/main/hacks-and-thefts/steadefi.md); UN Panel of Experts report S/2024/215 |
+| Coinshift, Aug 2023 | `0x68c4a151d436ec1c5448d225a97bd19cce4dfed0` | [coinshift.md](https://github.com/tayvano/lazarus-bluenoroff-research/blob/main/hacks-and-thefts/coinshift.md); [ZachXBT](https://zachxbt.mirror.xyz/B0-UJtxN41cJhpPtKv0v2LZ8u-0PwZ4ecMPEdX4l8vE) |
+| Deribit, Nov 2022 | `0xb0606f433496bf66338b8ad6b6d51fc4d84a44cd`, `0x3089df0e2349faea1c8ec4a08593c137da10fe2d` | DOJ complaint D.D.C. 1:24-cv-02828 (2024-10-04), quoted in [deribit.md](https://github.com/tayvano/lazarus-bluenoroff-research/blob/main/hacks-and-thefts/deribit.md) |
+| CoinMetro / Coinberry / Unibright, Jan 2021 | `0x0864b5ef4d8086cd0062306f39adea5da5bd2603`, `0x1031ffaf5d00c6bc1ee0978eb7ec196b1d164129` | [coinmetro.md](https://github.com/tayvano/lazarus-bluenoroff-research/blob/main/hacks-and-thefts/coinmetro.md); ZachXBT (link above) |
+| bZx, Nov-Dec 2021 | `0x20d9e73aafe69a3cd66ad7477de7358d0ed44b10` | [bZx.md](https://github.com/tayvano/lazarus-bluenoroff-research/blob/main/hacks-and-thefts/bZx.md); ZachXBT (link above) |
+| Garden Finance, Oct-Nov 2025 | `0x95f0564879d5e33000d53107adaea6809aaa3838`, `0xa9a166febace09fd620a3b85cbc6d40e535fbdf1`, `0x7c1cf2f256d2e83dee5ae15e7ac0f7f6197e780b` | [garden-finance.md](https://github.com/tayvano/lazarus-bluenoroff-research/blob/main/hacks-and-thefts/garden-finance.md) |
 
 The method on both public cases, with the numbers behind each claim, is in
 [docs/EVALUATION.md](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/EVALUATION.md); `python tools/real_cases.py` repeats it.
@@ -451,10 +520,10 @@ The method on both public cases, with the numbers behind each claim, is in
   rare to beat chance there; `strong` stayed rare (3 against 0). Details:
   [HOLDOUT_RESULTS.md](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/HOLDOUT_RESULTS.md)
 - The second hold-out (2.19 rule, 599 Ethereum and 400 Polygon depositors) found
-  a labelled shared deposit at 30 days at chance level: Ethereum 18 target
+  a labelled shared deposit at 30 days not above chance: Ethereum 18 target
   against 30 decoy leads (R 1.77, 0.16-3.91), Polygon 23 against 13 (R 0.58,
   0.00-3.16); the early direct link held (85 against 5 and 92 against 5). Since 2.21
-  the shared deposit address is context only. Details:
+  the shared deposit address is context only (post-hoc, untested). Details:
   [HOLDOUT2_RESULTS.md](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/HOLDOUT2_RESULTS.md)
 - On 31 depositor/exit pairs labelled through ENS (2019-2026), demix found 16 of
   the 21 pairs inside its window (measured before 2.17, when a direct link counted
@@ -478,8 +547,9 @@ The method on both public cases, with the numbers behind each claim, is in
   (every exit collected notes of several deposits); in KuCoin the linked withdrawal
   sender found 6 of the attacker's 35 exits in one depositor's window; since 2.19 these are context, not leads. Details: [docs/EVALUATION.md](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/EVALUATION.md)
 - Only Tornado Cash pools in the registry are covered. Other mixers are not
-  followed. Of the bridges only Across (V3 and current deposits) is followed across chains;
-  other bridges and aggregators end the branch, and `cluster` follows one hop only, and `trace`
+  followed. Of the bridges Across (V3 and current deposits) and native-ETH deposits
+  through the Arbitrum Inbox are followed across chains; ZKsync Bridgehub requests show
+  the L2 recipient and end there; other bridges and aggregators end the branch, and `cluster` follows one hop only, and `trace`
   follows funds by FIFO attribution, a convention that does not hold when an
   address mixes the traced funds with others.
 - BNB Smart Chain has no verified router in the registry, so routed deposits

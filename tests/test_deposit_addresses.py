@@ -221,11 +221,11 @@ def test_a_token_transfer_is_counted_once_not_as_txlist_call_plus_tokentx():
     fwd = 10**18 - 10**15
     lists = {
         ("txlist", DEPOSIT): [
-            tx(WALLET, DEPOSIT, h="0x01"),
             tx(DEPOSIT, TOKEN, value=0, h="0x02"),
             tx(DEPOSIT, TOKEN, value=0, h="0x03"),
         ],
         ("tokentx", DEPOSIT): [
+            tok(WALLET, DEPOSIT, h="0x01"),
             tok(DEPOSIT, HOT, value=fwd, h="0x02"),
             tok(DEPOSIT, HOT, value=fwd, h="0x03"),
         ],
@@ -360,8 +360,8 @@ def test_kind_is_exchange_or_service_by_the_label_category_of_the_sweep_target()
     lists = deposit_lists()
     ex = info_of(lists, LABELS)
     assert ex["kind"] == "exchange_deposit" and ex["evidence"] is True
-    unl = info_of(lists)
-    assert unl["kind"] == "exchange_deposit" and unl["evidence"] is False
+    unl = info_of(lists)  # an unlabelled busy target: deposit-like, service unknown
+    assert unl["kind"] == "deposit_like" and unl["evidence"] is False
     svc = info_of(lists, GAMBLE)
     assert svc["kind"] == "service_deposit"
     assert svc["evidence"] is False and svc["exchange"] == "" and svc["service"] == "somecasino"
@@ -444,6 +444,22 @@ def test_a_forwarder_needs_one_operator_contract_and_resolvable_lookups():
     assert classify_deposit_address(FakeClient(forwarder_lists()), DEPOSIT) is None  # no tx_info
 
 
+def test_outflow_rows_without_a_hash_do_not_count_towards_the_operator_share():
+    # 7 of 9 outflow transactions run by the operator (0.78) is below the share; a row
+    # with an empty hash must not turn it into 8 of 10
+    rows = [tok(WALLET, DEPOSIT, h=f"0xin{i}") for i in range(2)]
+    rows += [tok(DEPOSIT, HOT, h=f"0xop{i}") for i in range(7)]
+    rows += [tok(DEPOSIT, HOT, h=f"0xown{i}") for i in range(2)]
+    blank = tok(DEPOSIT, HOT)
+    blank["hash"] = ""
+    rows.append(blank)
+    own = [tx(DEPOSIT, HOT, h=f"0xown{i}") for i in range(2)]
+    lists = {("tokentx", DEPOSIT): rows, ("txlist", DEPOSIT): own}
+    infos = {f"0xop{i}": {"from": EXECUTOR, "to": OPERATOR} for i in range(7)}
+    info = classify_deposit_address(OpClient(lists, infos), DEPOSIT, busy=lambda a: False)
+    assert info is None or info["kind"] != "forwarder"
+
+
 def test_zero_value_or_single_operator_tx_never_make_a_forwarder():
     infos = {f"0xop{i}": {"from": EXECUTOR, "to": OPERATOR} for i in range(5)}
     zero = forwarder_lists(value=0)
@@ -457,7 +473,7 @@ def test_zero_value_or_single_operator_tx_never_make_a_forwarder():
 def test_self_sent_sweeps_are_not_a_forwarder_and_keep_their_kind():
     client = OpClient(deposit_lists(), {}, busy={HOT})
     info = classify_deposit_address(client, DEPOSIT, busy=client.busy.__contains__)
-    assert info["kind"] == "exchange_deposit" and client.info_calls == []
+    assert info["kind"] == "deposit_like" and client.info_calls == []
 
 
 def test_shared_hits_ignore_service_and_forwarder_kinds():
@@ -568,15 +584,18 @@ def test_a_contract_account_behind_an_entrypoint_is_a_smart_account_never_an_exc
     assert classify_deposit_address(ex, DEPOSIT, is_contract=lambda a: True, labels=LABELS) is None
 
 
-def test_an_api_error_from_tx_info_degrades_to_none_and_the_scan_continues():
+def test_an_api_error_from_tx_info_is_unknown_and_the_scan_continues():
     class Boom(OpClient):
         def tx_info(self, h):
             raise ApiError("explorer down")
 
-    assert classify_deposit_address(Boom(two_token_lists(), {}), DEPOSIT) is None
+    info = classify_deposit_address(Boom(two_token_lists(), {}), DEPOSIT)
+    assert info["kind"] == "unknown" and "explorer down" in info["error"]
     txs = [tx(WALLET, DEPOSIT)]
-    found = depositor_deposit_addresses(Boom(two_token_lists(), {}), WALLET, txs)
+    errors = []
+    found = depositor_deposit_addresses(Boom(two_token_lists(), {}), WALLET, txs, errors=errors)
     assert found == []
+    assert [(e["what"], e["address"]) for e in errors] == [("deposit address check", DEPOSIT)]
 
 
 def test_the_operator_executed_share_boundary_is_eighty_percent():
@@ -617,7 +636,7 @@ def test_a_blockscout_other_tag_on_the_sweep_target_is_not_a_service_but_exchang
     labels = merge_labels({}, {HOT: _bs("other", "Some Contract")})
     info = info_of(lists, labels)
     # the tag adds nothing: a busy unlabelled target, not a service, not evidence
-    assert info["kind"] == "exchange_deposit" and info["evidence"] is False
+    assert info["kind"] == "deposit_like" and info["evidence"] is False
     labels = merge_labels({}, {HOT: _bs("exchange", "binance")})
     info = info_of(lists, labels)
     assert info["kind"] == "exchange_deposit" and info["evidence"] is True
@@ -625,3 +644,78 @@ def test_a_blockscout_other_tag_on_the_sweep_target_is_not_a_service_but_exchang
     # the same tag from an attribution source keeps making a service deposit address
     svc = info_of(lists, {HOT: {"category": "other", "entity": "casino", "source": "attr"}})
     assert svc["kind"] == "service_deposit"
+
+
+# --- DEX / aggregator routers are never a forwarder's operator --------------------------
+
+ONEINCH_V2 = "0x111111125434b319222cdbf8c261674adb56f3ae"
+
+
+def test_a_dex_router_is_never_the_operator_of_a_forwarder():
+    # third parties (resolvers, bots) run swaps of the address through the router: the same
+    # row shape as a forwarder, but the router is the user's swap venue, not an operator
+    from tornado_demix.deposit_addresses import dex_routers
+
+    assert ONEINCH_V2 in dex_routers()
+    infos = {f"0xop{i}": {"from": EXECUTOR, "to": ONEINCH_V2} for i in range(5)}
+    assert classify_deposit_address(OpClient(forwarder_lists(), infos), DEPOSIT) is None
+    upper = {
+        f"0xop{i}": {"from": EXECUTOR, "to": ONEINCH_V2.upper().replace("0X", "0x")}
+        for i in range(5)
+    }
+    assert classify_deposit_address(OpClient(forwarder_lists(), upper), DEPOSIT) is None
+
+
+def test_the_router_table_has_a_source_for_every_row_and_the_named_routers():
+    import csv
+
+    from tornado_demix.deposit_addresses import DEX_ROUTERS_CSV, dex_routers
+
+    with open(DEX_ROUTERS_CSV, newline="", encoding="utf-8") as fh:
+        rows = list(csv.DictReader(fh))
+    assert rows and all(r["source_url"].startswith("https://") for r in rows)
+    assert all(len(r["address"]) == 42 and r["address"] == r["address"].lower() for r in rows)
+    protocols = {r["protocol"] for r in rows}
+    for name in (
+        "1inch",
+        "0x",
+        "uniswap",
+        "paraswap",
+        "cow",
+        "lifi",
+        "odos",
+        "kyberswap",
+        "metamask",
+    ):
+        assert name in protocols
+    assert len(dex_routers()) == len(rows)
+
+
+def test_a_relayer_contract_moving_tokens_out_of_many_per_user_addresses_is_a_forwarder():
+    # genuine pattern: one operator contract, over and over, for every per-user address
+    for user in ("0x" + "1" * 40, "0x" + "2" * 40):
+        rows = [tok(WALLET, user, h=f"0xin{user[2:4]}")]
+        rows += [tok(user, HOT, h=f"0xop{user[2:4]}{i}") for i in range(3)]
+        infos = {f"0xop{user[2:4]}{i}": {"from": EXECUTOR, "to": OPERATOR} for i in range(3)}
+        client = OpClient({("tokentx", user): rows, ("txlist", user): []}, infos)
+        info = classify_deposit_address(client, user)
+        assert info["kind"] == "forwarder" and info["operator"] == OPERATOR
+
+
+def test_an_address_that_sends_most_of_its_outflow_transactions_is_not_a_forwarder():
+    # the share is counted per transaction: one executed tx with many transfers does not
+    # outweigh the address's own transactions
+    rows = [tok(WALLET, DEPOSIT, h="0xin0")]
+    rows += [tok(DEPOSIT, HOT, h=f"0xop{i}") for i in range(2)]
+    rows += [tok(DEPOSIT, HOT, h=f"0xself{i}") for i in range(3)]
+    own = [tx(DEPOSIT, HOT, value=0, h=f"0xself{i}") for i in range(3)]
+    infos = {f"0xop{i}": {"from": EXECUTOR, "to": OPERATOR} for i in range(2)}
+    client = OpClient({("tokentx", DEPOSIT): rows, ("txlist", DEPOSIT): own}, infos)
+    assert classify_deposit_address(client, DEPOSIT) is None
+    # many transfers inside two executed transactions are still two transactions
+    rows = [tok(WALLET, DEPOSIT, h="0xin0")]
+    rows += [tok(DEPOSIT, HOT, h=f"0xop{i % 2}") for i in range(8)]
+    rows += [tok(DEPOSIT, HOT, h="0xself0") for _ in range(2)]
+    own = [tx(DEPOSIT, HOT, value=0, h="0xself0")]
+    client = OpClient({("tokentx", DEPOSIT): rows, ("txlist", DEPOSIT): own}, infos)
+    assert classify_deposit_address(client, DEPOSIT) is None  # 2 of 3 transactions: below 80 %

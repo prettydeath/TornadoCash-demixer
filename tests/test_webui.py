@@ -119,7 +119,14 @@ def test_an_unknown_analysis_is_rejected_not_silently_run_as_cluster(client):
 
 
 def test_the_real_analyses_are_accepted():
-    assert set(webapp.ANALYSES) == {"demix", "multi", "cluster", "characterize", "trace"}
+    assert set(webapp.ANALYSES) == {
+        "demix",
+        "multi",
+        "cluster",
+        "characterize",
+        "trace",
+        "classify",
+    }
 
 
 def test_characterize_needs_exactly_one_address(client):
@@ -233,7 +240,7 @@ def test_demix_view_shows_band_evidence_and_parameters(monkeypatch):
             "index.html",
             **{**webapp._base_context(), "result": {"kind": "demix", "blocks": blocks}},
         )
-    assert "Strongest band" in html and "Top confidence" not in html
+    assert 'data-count="band" data-value="' in html and "Top confidence" not in html
     assert "Analysis parameters" in html and "Evidence" in html
 
 
@@ -339,7 +346,7 @@ def test_multi_view_shows_consolidator_grades_strongest_first(monkeypatch):
         },
     }
     monkeypatch.setattr(webapp, "correlate", lambda *a, **k: corr)
-    monkeypatch.setattr(webapp, "build_multi_report", lambda corr, net: "<html></html>")
+    monkeypatch.setattr(webapp, "build_multi_report", lambda corr, net, **kw: "<html></html>")
     from tests.fixtures import demix_result as fx
 
     view, _table, _reports = webapp._run_multi(_QuietClient(), [a, b], fx.network(), 30, "events")
@@ -470,7 +477,21 @@ def test_trace_runs_renders_and_serves_its_report_and_json(client, monkeypatch):
     assert csv_text.startswith("hop,from,to,asset,attributed,value,kind,tx_hash")
     assert "FIFO 2.0 [0.5 – 2.0]" in body and "certain at least 0.5" in body
     assert "FIFO 2.0 [0.5 – 2.0]" in report
-    assert csv_text.splitlines()[0].endswith("tx_hash,chain,lower,upper,bounds_available")
+    assert csv_text.splitlines()[0].endswith(
+        "tx_hash,chain,lower,upper,bounds_available,history_incomplete,status,bridge"
+    )
+
+
+def test_trace_with_an_incomplete_history_is_never_called_certain(client, monkeypatch):
+    edge = {**_TRACE["edges"][0], "history_incomplete": True}
+    monkeypatch.setattr(webapp, "trace_funds", lambda *a, **kw: {**_TRACE, "edges": [edge]})
+    monkeypatch.setattr(webapp, "load_attribution", lambda *a, **k: {})
+    response, body = _post(client, analysis="trace", trace_amount="2")
+    assert "possible (history incomplete)" in body and "certain at least 0.5" not in body
+    report = client.get("/report/trace.html").get_data(as_text=True)
+    assert "possible (history incomplete)" in report and "certain at least 0.5" not in report
+    csv_text = client.get("/download.csv").get_data(as_text=True)
+    assert csv_text.splitlines()[1].endswith(",True,possible (history incomplete),")
 
 
 def test_known_exits_must_be_addresses(client):
@@ -531,7 +552,7 @@ def test_multi_honours_the_blockscout_labels(client, monkeypatch):
         }
 
     monkeypatch.setattr(webapp, "correlate", fake_correlate)
-    monkeypatch.setattr(webapp, "build_multi_report", lambda corr, net: "<html></html>")
+    monkeypatch.setattr(webapp, "build_multi_report", lambda corr, net, **kw: "<html></html>")
     sentinel = {"0x" + "9" * 40: {"category": "exchange", "entity": "x"}}
     monkeypatch.setattr(webapp, "_labels", lambda net: sentinel)
     response = client.post(
@@ -547,7 +568,7 @@ def test_multi_honours_the_blockscout_labels(client, monkeypatch):
 
 
 def test_blockscout_fetch_route_needs_csrf_and_known_network(client):
-    assert client.post("/labels/blockscout", data={"csrf": "wrong"}).status_code == 400
+    assert client.post("/labels/blockscout", data={"csrf": "wrong"}).status_code == 403
     r = client.post("/labels/blockscout", data={"network": "nowhere"})
     assert r.status_code == 302
     with client.session_transaction() as sess:

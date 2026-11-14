@@ -40,6 +40,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ens_labels import CACHE, _load, _log, api_keys  # noqa: E402
 from placebo_windows import narrow  # noqa: E402
 
+from tornado_demix.errors import ApiError, ApiKeyError  # noqa: E402
 from tornado_demix.etherscan import EtherscanClient  # noqa: E402
 from tornado_demix.heuristics import confidence_band, ranked_candidates  # noqa: E402
 from tornado_demix.networks import get_network  # noqa: E402
@@ -107,7 +108,13 @@ def main():
     _log(f"[*] {len(wd_rows)} withdrawals to labelled withdrawers")
     for _pool, _w, _ts, h in wd_rows:
         if h not in state["senders"]:
-            state["senders"][h] = (client.tx_sender(h) or "").lower()
+            try:
+                state["senders"][h] = (client.tx_sender(h) or "").lower()
+            except ApiKeyError:
+                raise
+            except ApiError as exc:  # not read: left out, so a re-run retries it
+                _log(f"  [!] sender of {h} not read: {exc}")
+                continue
             if len(state["senders"]) % 50 == 0:
                 _save(state)
     _save(state)

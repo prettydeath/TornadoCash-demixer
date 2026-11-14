@@ -57,3 +57,7 @@ chain_id,address,protocol,role,kind,source_url
 1,0x95fc37a27a2f68e3a647cdc081f0a89bb47c3012,mantle,"L1StandardBridge",contract,https://etherscan.io/address/0x95fC37A27a2f68e3A647CDc081F0A89bb47c3012#code
 1,0x8898b472c54c31894e3b9bb83cea802a5d0e63c6,connext,"ConnextDiamond",contract,https://etherscan.io/address/0x8898B472C54c31894e3B9bb83cEA802a5d0e63C6#code
 1,0x2a5c2568b10a0e826bfa892cf21ba7218310180b,hyphen,"LiquidityPool",contract,https://etherscan.io/address/0x2A5c2568b10A0E826BfA892Cf21BA7218310180b#code
+1,0x97ccdbea4632140639ad5ea9b944aa034eb15fd4,across,"SpokePoolPeriphery (deposits into the Ethereum SpokePool)",contract,https://etherscan.io/address/0x97ccdbea4632140639ad5ea9b944aa034eb15fd4#code
+10,0x6f26bf09b1c792e3228e5467807a900a503c0281,across,"SpokePool (crossChainContracts(10) on 2026-11-13)",contract,https://etherscan.io/address/0xc186fa914353c44b2e33ebe05f21846f1048beda#readProxyContract
+56,0x4e8e101924ede233c13e2d8622dc8aed2872d505,across,"SpokePool (crossChainContracts(56) on 2026-11-13)",contract,https://etherscan.io/address/0xc186fa914353c44b2e33ebe05f21846f1048beda#readProxyContract
+43114,0xfe9d541c92e4e90437c7152a00244886de37a658,across,"SpokePool (crossChainContracts(43114) on 2026-11-13)",contract,https://etherscan.io/address/0xc186fa914353c44b2e33ebe05f21846f1048beda#readProxyContract

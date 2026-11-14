@@ -6,6 +6,7 @@ from tests.fixtures import demix_result as fx
 from tornado_demix import root_exclusion
 from tornado_demix.constants import TOPIC_DEPOSIT, TOPIC_WITHDRAWAL, ZERO_ADDRESS
 from tornado_demix.demix import run_demix
+from tornado_demix.errors import ApiError
 from tornado_demix.heuristics import candidate_reason, ranked_candidates
 
 RELAYER = "0x" + "cc" * 20
@@ -115,12 +116,17 @@ class RootClient:
         return {"input": _input(root, nullifier)}
 
 
-def _index(monkeypatch, mapping):
+def _index(monkeypatch, mapping, history=100, leaves=41):
+    """Root index of the fake pool: ``leaves`` insertions, one per block from block 1."""
     roots = {"0x" + format(r, "064x"): n for r, n in mapping.items()}
+    blocks = [1 + i for i in range(leaves)]
     monkeypatch.setattr(
         root_exclusion,
         "cached_root_index",
-        lambda client, pool, end_block, cache_dir, chain=None: {"roots": roots},
+        lambda client, pool, end_block, cache_dir, chain=None: {"roots": roots, "blocks": blocks},
+    )
+    monkeypatch.setattr(
+        root_exclusion, "root_history_size", lambda client, pool, cache_dir, chain=None: history
     )
 
 
@@ -447,3 +453,144 @@ def test_partly_excluded_candidate_that_loses_its_count_match_is_listed(monkeypa
     from tornado_demix.report_html import build_html_report
 
     assert "Dropped after recount" in build_html_report(data, fx.network())
+
+
+def _multicall_input(first_root, real_root, nullifier):
+    """A wrapper call: a no-op first call carrying [root][nullifier], then the withdrawal."""
+    decoy = "00000000" + format(first_root, "064x") + nullifier
+    real = SEL + _word("e0") + format(real_root, "064x") + nullifier + _word("0") * 3
+    return "0x" + "82ad56cb" + _word("20") + _word("2") + decoy + real
+
+
+class MulticallClient(RootClient):
+    """Every winner withdrawal is wrapped; first call carries ``first``, the real one 999."""
+
+    def __init__(self, first, **kwargs):
+        super().__init__({}, **kwargs)
+        self.first = first
+
+    def tx_info(self, tx_hash):
+        self.tx_info_calls.append(tx_hash)
+        nullifier = tx_hash[2:]
+        return {"input": _multicall_input(self.first, 999, nullifier)}
+
+
+def test_multicall_forged_old_root_does_not_exclude(monkeypatch):
+    # old root 501 (5 leaves) is 36 insertions behind: outside a history of 30; the real
+    # root 999 holds 40 leaves. The forged first occurrence must not exclude the withdrawal.
+    _index(monkeypatch, {501: 5, 999: 40}, history=30)
+    client = MulticallClient(501, extra_txs=[_tx(WINNER, 0.5, 1050, 15, "0xfund")])
+    data = run_demix(client, fx.WALLET, network=fx.network(), root_check=True)
+    assert WINNER in _addresses(data)
+    assert data["heuristics"]["root_excluded"] == []
+    assert data["root_check"]["roots_found"] == 3
+
+
+def test_two_valid_candidates_leave_the_root_unknown(monkeypatch):
+    # both roots are inside a history of 100: which one proved the withdrawal is unknown
+    _index(monkeypatch, {501: 5, 999: 40}, history=100)
+    client = MulticallClient(501, extra_txs=[_tx(WINNER, 0.5, 1050, 15, "0xfund")])
+    data = run_demix(client, fx.WALLET, network=fx.network(), root_check=True)
+    assert WINNER in _addresses(data)
+    rc = data["root_check"]
+    assert rc["roots_ambiguous"] == 3 and rc["roots_found"] == 0
+    assert data["heuristics"]["root_excluded"] == []
+
+
+def test_root_older_than_the_history_is_unknown_not_excluded(monkeypatch):
+    # 5 leaves, 41 inserted: 36 behind. History 100 accepts it (excluded), history 30 does not.
+    _index(monkeypatch, {501: 5, 999: 40}, history=100)
+    wide = run_demix(
+        _linked_client({0: 501, 1: 501, 2: 501}), fx.WALLET, network=fx.network(), root_check=True
+    )
+    assert len(wide["heuristics"]["root_excluded"]) == 3
+    _index(monkeypatch, {501: 5, 999: 40}, history=30)
+    narrow = run_demix(
+        _linked_client({0: 501, 1: 501, 2: 501}), fx.WALLET, network=fx.network(), root_check=True
+    )
+    assert narrow["heuristics"]["root_excluded"] == []
+    assert WINNER in _addresses(narrow)
+    assert narrow["root_check"]["roots_outside_history"] == 3
+    assert narrow["root_check"]["history_sizes"] == {"0.1 ETH": 30}
+
+
+def _unreadable(client, pool, cache_dir, chain=None):
+    raise ApiError("eth_call not answered")
+
+
+def test_history_size_unreadable_leaves_the_pool_unchecked_with_an_error_record(monkeypatch):
+    # no default is substituted: a too-small guess would reject a real older root
+    _index(monkeypatch, {501: 5, 999: 40})
+    monkeypatch.setattr(root_exclusion, "root_history_size", _unreadable)
+    data = run_demix(
+        _linked_client({0: 501, 1: 501, 2: 501}), fx.WALLET, network=fx.network(), root_check=True
+    )
+    rc = data["root_check"]
+    assert data["heuristics"]["root_excluded"] == []
+    assert rc["unchecked_pools"] == ["0.1 ETH"] and rc["incomplete"] is True
+    assert rc["history_sizes"] == {} and "history_default" not in rc
+    notes = [e for e in data["errors"] if e["what"].startswith("ROOT_HISTORY_SIZE")]
+    assert len(notes) == 1 and notes[0]["kind"] == "lookup_failed"
+    assert notes[0]["what"] == "ROOT_HISTORY_SIZE" and notes[0]["address"]
+    assert data["error_count"] == len(data["errors"]) >= 1
+
+
+def test_no_default_history_size_exists():
+    assert not hasattr(root_exclusion, "DEFAULT_HISTORY_SIZE")
+
+
+def test_failed_tree_and_transaction_reads_are_recorded_in_errors(monkeypatch):
+    def no_tree(client, pool, end_block, cache_dir, chain=None):
+        raise ApiError("log list has a gap")
+
+    monkeypatch.setattr(root_exclusion, "cached_root_index", no_tree)
+    data = run_demix(
+        _linked_client({0: 501, 1: 501, 2: 501}), fx.WALLET, network=fx.network(), root_check=True
+    )
+    tree = [e for e in data["errors"] if e["what"] == "merkle tree"]
+    assert len(tree) == 1 and "gap" in tree[0]["error"]
+
+    _index(monkeypatch, {501: 5, 999: 40})
+    client = _linked_client({0: 501, 1: 501, 2: 501})
+
+    def failing(tx_hash):
+        raise ApiError("transaction {} not read".format(tx_hash))
+
+    client.tx_info = failing
+    data = run_demix(client, fx.WALLET, network=fx.network(), root_check=True)
+    txs = [e for e in data["errors"] if e["what"] == "root check transaction"]
+    assert len(txs) == 3 and all(e["tx"].startswith("0x") for e in txs)
+
+
+def test_cache_without_insertion_blocks_is_unchecked(monkeypatch):
+    monkeypatch.setattr(
+        root_exclusion,
+        "cached_root_index",
+        lambda client, pool, end_block, cache_dir, chain=None: {"roots": {}},
+    )
+    data = run_demix(
+        _linked_client({0: 501, 1: 501, 2: 501}), fx.WALLET, network=fx.network(), root_check=True
+    )
+    assert data["root_check"]["unchecked_pools"] == ["0.1 ETH"]
+
+
+def test_history_sizes_and_unknown_causes_are_shown_in_every_view(monkeypatch, capsys):
+    from tornado_demix import cli
+    from tornado_demix.report_html import build_html_report
+    from webui import app as webapp
+
+    _index(monkeypatch, {501: 5, 999: 40}, history=30)
+    data = run_demix(
+        _linked_client({0: 501, 1: 501, 2: 501}), fx.WALLET, network=fx.network(), root_check=True
+    )
+    html = build_html_report(data, fx.network())
+    assert "ROOT_HISTORY_SIZE: 0.1 ETH 30" in html and "outside the pool's root history 3" in html
+    view = webapp._root_check_view(data, fx.network())
+    assert view["history"] == "0.1 ETH 30" and view["outside_history"] == 3
+    assert data["root_check"]["roots_outside_history"] == 3  # JSON export carries the counts
+    monkeypatch.setattr(cli.config, "load_api_key", lambda path: "stub-key")
+    monkeypatch.setattr(cli, "EtherscanClient", lambda *a, **kw: object())
+    monkeypatch.setattr(cli, "run_demix", lambda *a, **kw: data)
+    cli.cmd_demix(cli.build_parser().parse_args(["demix", fx.WALLET, "--root-check"]))
+    out = capsys.readouterr().out
+    assert "[0.1 ETH] ROOT_HISTORY_SIZE 30" in out and "outside the pool's root history 3" in out

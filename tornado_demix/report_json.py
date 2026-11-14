@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import datetime, timezone
 
@@ -12,6 +13,7 @@ from .heuristics import (
     MIN_FIELD_SIZE,
     ranked_candidates,
 )
+from .incomplete import summary as incomplete_summary
 from .report_csv import (
     _fmt_hours,
     _ts,
@@ -89,6 +91,8 @@ def demix_json(data: dict, attribution: dict[str, dict] | None = None) -> str:
         "generated_utc": datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "assumptions": analysis_assumptions(data),
         "candidates": ranked_candidates(data, attribution=attribution),
+        # "N lookups failed - results may be incomplete", or "" (tornado_demix.incomplete)
+        "incomplete": incomplete_summary(data),
         "result": data,
     }
     return json.dumps(doc, indent=1, default=_json_default, sort_keys=True)
@@ -101,7 +105,86 @@ def write_demix_json(data: dict, path: str, attribution: dict[str, dict] | None 
     return path
 
 
+def json_sha256(text: str) -> str:
+    """SHA-256 of a JSON export as written to disk (UTF-8)."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def write_demix_json_hashed(
+    data: dict, path: str, attribution: dict[str, dict] | None = None
+) -> tuple[str, str]:
+    """Write :func:`demix_json` to ``path``; return ``(path, SHA-256 of the file)``."""
+    text = demix_json(data, attribution=attribution)
+    # newline="": the bytes on disk are the bytes that were hashed, on Windows too
+    with open(path, "w", encoding="utf-8", newline="") as fh:
+        fh.write(text)
+    return path, json_sha256(text)
+
+
 def _json_default(value):
     if isinstance(value, (set, frozenset)):
         return sorted(value)
     raise TypeError(f"{type(value).__name__} is not JSON serialisable")
+
+
+def multi_json(corr: dict) -> str:
+    """A multi-wallet correlation as JSON: the cross-wallet findings, each wallet's
+    ranked candidates and raw result, and the group view (``null`` without ``--group``).
+
+    ``addr_detail`` (keyed by tuples) is left out; the per-wallet results hold the same
+    counts.
+    """
+    from . import __version__
+
+    results = corr.get("results") or {}
+    group = corr.get("group")
+    group_doc = None
+    if group is not None:
+        group_doc = {
+            "caveat": group.get("caveat", ""),
+            "wallets": group.get("wallets", []),
+            "profile": group.get("profile", {}),
+            "candidates": _ranked_if_scored(group),
+            "exact_k": group.get("exact_k", []),
+            "exact_k_caveat": group.get("exact_k_caveat", ""),
+            "notices": group.get("notices", []),
+            "result": group,
+        }
+    doc = {
+        "tool": f"tornado-demix {__version__}",
+        "generated_utc": datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "wallets": sorted(results),
+        "incomplete": incomplete_summary(corr),
+        "errors": corr.get("errors", []),
+        "truncated": corr.get("truncated", []),
+        "shared_candidates": corr.get("strong", []),
+        "soft_overlaps": corr.get("soft", []),
+        "fingerprints": corr.get("fingerprints", {}),
+        "profile_matches": corr.get("profile_matches", {}),
+        "cross_profile": corr.get("cross_profile", {}),
+        "consolidator_grades": corr.get("consolidator_grades", {}),
+        "sync_groups": corr.get("sync_groups", []),
+        "shared_funders": corr.get("shared_funders", {}),
+        "operator_clusters": corr.get("operator_clusters", []),
+        "per_wallet": {
+            wallet: {"candidates": _ranked_if_scored(data), "result": data}
+            for wallet, data in results.items()
+        },
+        "group": group_doc,
+    }
+    return json.dumps(doc, indent=1, default=_json_default, sort_keys=True)
+
+
+def _ranked_if_scored(data: dict) -> list[dict]:
+    """Ranked candidates of a run, or [] for a summary without withdrawal detail."""
+    if all("detail" in res for res in (data.get("denoms") or {}).values()):
+        return ranked_candidates(data)
+    return []
+
+
+def write_multi_json(corr: dict, path: str) -> tuple[str, str]:
+    """Write :func:`multi_json` to ``path``; return ``(path, SHA-256 of the file)``."""
+    text = multi_json(corr)
+    with open(path, "w", encoding="utf-8", newline="") as fh:
+        fh.write(text)
+    return path, json_sha256(text)

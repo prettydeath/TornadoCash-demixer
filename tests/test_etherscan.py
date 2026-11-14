@@ -7,7 +7,7 @@ from tornado_demix.errors import ApiError
 from tornado_demix.etherscan import MAX_BLOCK, EtherscanClient
 
 DAI = "0x6b175474e89094c44da98b954eedeac495271d0f"
-WALLET = "0x019b5bb2051797e33f726d0e7a8cb9b9c2003ac2"
+WALLET = "0x1234567890abcdef1234567890abcdef12345678"
 POOL = "0xd4b88df4d29f5cedd6857912842cff3b20c8cfa3"
 
 
@@ -201,11 +201,12 @@ def test_call_raises_on_a_proxy_error_object():
         client.call({"module": "proxy", "action": "eth_getTransactionByHash", "txhash": "0xbad"})
 
 
-def test_tx_sender_swallows_a_proxy_error_as_none():
-    """tx_sender's contract is None on failure, so an ApiError becomes None."""
+def test_tx_sender_raises_on_a_proxy_error_instead_of_reading_as_unknown():
+    """A failed lookup is not an unknown hash: with no RPC to fall back on it raises."""
     err = {"jsonrpc": "2.0", "id": 1, "error": {"code": -32602, "message": "invalid argument"}}
     client = _proxy_client([err, err, err])
-    assert client.tx_sender("0xbad") is None
+    with pytest.raises(ApiError):
+        client.tx_sender("0xbad")
 
 
 def test_current_block_reads_the_proxy_hex_number():
@@ -336,7 +337,7 @@ def test_get_logs_splits_on_hex_block_numbers_and_dedupes_by_log_index(small_pag
         ("0xc", "0x1"),
         ("0xd", "0x0"),
     ]
-    assert [q["fromBlock"] for q in client.queries if q["page"] == 1] == [0, 16]
+    assert [q["fromBlock"] for q in client.queries if q["page"] == 1] == [0, 16, 17]
 
 
 def test_an_error_with_a_null_result_is_retried_not_read_as_empty():
@@ -507,7 +508,7 @@ def test_a_block_that_overflows_every_page_is_reported(monkeypatch, capsys):
             return [{"hash": "0x%d" % i, "blockNumber": "7"} for i in range(2)]
 
     Full("KEY").fetch_all("txlist", WALLET, 7, 9)
-    assert "block 7 holds more than 2 rows" in capsys.readouterr().err
+    assert "block 7 holds at least 2 rows" in capsys.readouterr().err
 
 
 def test_first_activity_takes_the_earlier_of_the_two_lists():
@@ -578,10 +579,14 @@ def test_current_block_raises_when_every_source_fails():
 
 
 def test_a_provider_without_the_proxy_is_probed_once():
+    # without the proxy module and without an RPC node the sender cannot be read:
+    # an error, not an unknown hash
     client = _compat_client([BLOCKSCOUT_NO_PROXY], retries=3)
-    assert client.tx_sender("0xa") is None
+    with pytest.raises(ApiError):
+        client.tx_sender("0xa")
     assert len(client.session.calls) == 1  # one attempt, not `retries`
-    assert client.tx_sender("0xb") is None
+    with pytest.raises(ApiError):
+        client.tx_sender("0xb")
     assert len(client.session.calls) == 1  # the proxy is not asked again
 
 
@@ -591,15 +596,16 @@ def test_tx_sender_falls_back_to_the_rpc_node(monkeypatch):
 
     def fake_rpc(method, params):
         seen.append((method, params))
-        return {"from": SENDER}
+        return True, {"from": SENDER}
 
-    monkeypatch.setattr(client, "_rpc", fake_rpc)
+    monkeypatch.setattr(client, "_rpc_result", fake_rpc)
     assert client.tx_sender("0xdead") == SENDER.lower()
     assert seen == [("eth_getTransactionByHash", ["0xdead"])]
 
 
-def test_tx_sender_is_none_without_proxy_and_rpc():
-    assert _compat_client([BLOCKSCOUT_NO_PROXY]).tx_sender("0xdead") is None
+def test_tx_sender_raises_without_proxy_and_rpc():
+    with pytest.raises(ApiError):
+        _compat_client([BLOCKSCOUT_NO_PROXY]).tx_sender("0xdead")
 
 
 def test_the_rpc_helper_posts_json_rpc_and_survives_a_failure(monkeypatch):
@@ -679,3 +685,230 @@ def test_get_logs_ands_the_indexed_topics_with_topic0():
     seen.clear()
     client.get_logs("0xAbC", "0xt0", 1, 2)
     assert not any(k.startswith("topic") and k != "topic0" for k in seen[0])
+
+
+class _ScriptedClient(EtherscanClient):
+    """Serves the given pages in order, then empty pages; records the queries."""
+
+    def __init__(self, pages):
+        EtherscanClient.__init__(self, "KEY")
+        self.pages = list(pages)
+        self.queries = []
+
+    def call(self, params):
+        self.queries.append(dict(params))
+        return self.pages.pop(0) if self.pages else []
+
+
+def _log_row(i, block):
+    return {"transactionHash": "0x%04x" % i, "logIndex": "0x0", "blockNumber": hex(block)}
+
+
+def test_a_short_page_that_is_not_the_last_does_not_end_the_walk():
+    sizes = [1000, 999, 386]
+    pages, n = [], 0
+    for size in sizes:
+        pages.append([_log_row(n + i, 100 + n + i) for i in range(size)])
+        n += size
+    client = _ScriptedClient(pages)
+
+    got = client.get_logs(POOL, "0xtopic", 0, 10**6)
+
+    assert len(got) == 1000 + 999 + 386
+    assert client.truncated == []
+
+
+def test_the_walk_stops_on_the_first_empty_page_and_an_empty_first_page_is_empty():
+    client = _ScriptedClient([])
+    assert client.fetch_all("txlist", WALLET) == []
+    assert len(client.queries) == 1
+    assert client.truncated == []
+
+
+def test_rows_repeated_across_the_cursor_boundary_are_deduped(small_pages):
+    rows = [{"hash": "0x%d" % i, "blockNumber": str(b)} for i, b in enumerate([1, 2, 3, 3, 3, 4])]
+    client = _RangeClient(rows, "blockNumber", "startblock", "endblock")
+    got = client.fetch_all("txlist", WALLET)
+    assert sorted(r["hash"] for r in got) == sorted(r["hash"] for r in rows)
+    assert len(got) == len(rows)
+
+
+def test_a_block_beyond_the_page_window_is_flagged_on_the_client(small_pages, capsys):
+    rows = [{"hash": "0x%d" % i, "blockNumber": "7"} for i in range(5)]
+    client = _RangeClient(rows, "blockNumber", "startblock", "endblock")
+
+    client.fetch_all("txlist", WALLET, start_block=7, end_block=7)
+
+    assert len(client.truncated) == 1
+    note = client.truncated[0]
+    assert note["block"] == 7
+    assert note["action"] == "txlist"
+    assert note["limit"] == 4
+    assert "truncated" in capsys.readouterr().err
+
+
+def test_more_than_ten_thousand_rows_in_one_block_set_the_flag():
+    class Full(EtherscanClient):
+        def call(self, params):
+            if params["page"] > 10:  # the page * offset <= 10000 window
+                raise AssertionError("page beyond the window")
+            return [
+                {"hash": "0x%d-%d" % (params["page"], i), "blockNumber": "7"} for i in range(1000)
+            ]
+
+    client = Full("KEY")
+    got = client.fetch_all("txlist", WALLET, 7, 9)
+    assert len(got) == 10_000
+    assert [n["block"] for n in client.truncated] == [7]
+
+
+def test_token_transfers_and_internal_txs_use_the_same_walk():
+    pages = [
+        [{"hash": "0xa", "blockNumber": "1", "tokenDecimal": "18", "value": "1"}] * 1,
+        [{"hash": "0xb", "blockNumber": "2", "tokenDecimal": "18", "value": "1"}],
+    ]
+    client = _ScriptedClient(pages)
+    got = client.token_transfers(WALLET)
+    assert [r["hash"] for r in got] == ["0xa", "0xb"]
+
+
+def test_a_capped_deposit_address_page_is_reported(monkeypatch):
+    import tornado_demix.deposit_addresses as da
+
+    monkeypatch.setattr(da, "MAX_DEPOSIT_TXS", 2)
+
+    class Capped:
+        truncated: list = []
+
+        def call(self, params):
+            return [{"hash": "0x1"}, {"hash": "0x2"}]
+
+    client = Capped()
+    client.truncated = []
+    rows = da._rows(client, "tokentx", WALLET)
+    assert len(rows) == 2
+    assert client.truncated and client.truncated[0]["action"] == "tokentx"
+
+
+def test_a_txlist_at_the_deposit_cap_is_not_a_truncation_note(monkeypatch):
+    import tornado_demix.deposit_addresses as da
+
+    monkeypatch.setattr(da, "MAX_DEPOSIT_TXS", 2)
+
+    class Capped:
+        def __init__(self):
+            self.truncated = []
+
+        def call(self, params):
+            return [{"hash": "0x1"}, {"hash": "0x2"}]
+
+    client = Capped()
+    assert da.classify_deposit_address(client, WALLET) is None
+    assert client.truncated == []
+
+
+def test_a_provider_ignoring_page_does_not_loop_or_flag(small_pages):
+    class Stuck(EtherscanClient):
+        def __init__(self):
+            EtherscanClient.__init__(self, "KEY")
+            self.n = 0
+
+        def call(self, params):
+            self.n += 1
+            return [{"hash": "0xa", "blockNumber": "5"}, {"hash": "0xb", "blockNumber": "5"}]
+
+    client = Stuck()
+    got = client.fetch_all("txlist", WALLET)
+    assert [r["hash"] for r in got] == ["0xa", "0xb"]
+    assert client.n == 2
+    assert client.truncated == []
+
+
+def test_a_short_last_page_combined_with_a_cursor_pass(small_pages):
+    # window 2x2: page 2 of the first pass is full, the continuation ends on a short page
+    rows = [{"hash": "0x%d" % i, "blockNumber": str(b)} for i, b in enumerate([1, 1, 2, 3, 4])]
+    client = _RangeClient(rows, "blockNumber", "startblock", "endblock")
+    got = client.fetch_all("txlist", WALLET)
+    assert sorted(r["hash"] for r in got) == sorted(r["hash"] for r in rows)
+    assert client.truncated == []
+
+
+def test_the_truncation_wording_is_a_lower_bound(small_pages, capsys):
+    rows = [{"hash": "0x%d" % i, "blockNumber": "7"} for i in range(5)]
+    _RangeClient(rows, "blockNumber", "startblock", "endblock").fetch_all("txlist", WALLET, 7, 7)
+    assert "at least 4 rows" in capsys.readouterr().err
+
+
+def test_eth_call_returns_the_proxy_answer():
+    client = _proxy_client([{"jsonrpc": "2.0", "id": 1, "result": "0x" + format(30, "064x")}])
+    assert int(client.eth_call(POOL, "0xcd87a3b4"), 16) == 30
+    sent = client.session.calls[0]
+    assert sent["action"] == "eth_call" and sent["tag"] == "latest" and sent["to"] == POOL
+
+
+def test_eth_call_raises_when_no_source_answers():
+    err = {"jsonrpc": "2.0", "id": 1, "error": {"code": -32000, "message": "execution reverted"}}
+    client = _proxy_client([err, err, err])
+    with pytest.raises(ApiError):
+        client.eth_call(POOL, "0xcd87a3b4")
+
+
+T1 = "0x" + "00" * 31 + "01"
+T2 = "0x" + "00" * 29 + "4636e4"
+
+
+def _topic_log(i, t1, t2):
+    return {
+        "transactionHash": "0x%04x" % i,
+        "logIndex": "0x0",
+        "blockNumber": hex(100 + i),
+        "topics": ["0xt0", t1, t2, "0x" + "00" * 32],
+    }
+
+
+class _Recorded:
+    def __init__(self, payload):
+        self.payload, self.sent = payload, []
+
+    def get(self, url, params=None, timeout=None):
+        self.sent.append(dict(params))
+        payload = self.payload
+
+        class R:
+            def json(self):
+                return payload
+
+        return R()
+
+
+def test_blockscout_log_query_drops_the_indexed_topic_filters_and_filters_locally():
+    """Blockscout answers "No logs found" to a getLogs query with topic1/topic2 filters
+    even when matching logs exist (observed on optimism.blockscout.com, 2026-11-13): the
+    query goes out with topic0 only and the indexed topics are matched here."""
+    rows = [_topic_log(1, T1, T2), _topic_log(2, T1, "0x" + "00" * 32), _topic_log(3, T2, T2)]
+    client = EtherscanClient(
+        "", pause=0, base_url="https://optimism.blockscout.com/api", style="compat"
+    )
+    client.session = _Recorded({"status": "1", "message": "OK", "result": rows})
+    got = client.get_logs("0xAbC", "0xt0", 1, 2, topics={1: T1, 2: T2})
+    assert [r["transactionHash"] for r in got] == ["0x0001"]
+    first = client.session.sent[0]
+    assert first["topic0"] == "0xt0"
+    assert not any(k.startswith("topic") and k != "topic0" for k in first)
+
+
+def test_etherscan_log_query_keeps_the_topic_filters_and_still_checks_the_rows():
+    rows = [_topic_log(1, T1, T2), _topic_log(2, T2, T2)]
+    client = EtherscanClient("k", pause=0)
+    client.session = _Recorded({"status": "1", "message": "OK", "result": rows})
+    got = client.get_logs("0xAbC", "0xt0", 1, 2, topics={1: T1, 2: T2})
+    assert [r["transactionHash"] for r in got] == ["0x0001"]
+    assert client.session.sent[0]["topic1"] == T1
+
+
+def test_log_rows_without_topics_under_a_topic_filter_are_a_failed_lookup():
+    rows = [{"transactionHash": "0x01", "logIndex": "0x0", "blockNumber": "0x65"}]
+    client = EtherscanClient("k", pause=0)
+    client.session = _Recorded({"status": "1", "message": "OK", "result": rows})
+    with pytest.raises(ApiError):
+        client.get_logs("0xAbC", "0xt0", 1, 2, topics={1: T1})

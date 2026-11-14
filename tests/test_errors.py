@@ -117,10 +117,13 @@ def test_missing_api_key_raises_configerror(tmp_path, monkeypatch):
 def test_no_library_module_raises_systemexit():
     """cli.py is the only place allowed to end the process."""
     offenders = []
-    for name in sorted(os.listdir("tornado_demix")):
+    package = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tornado_demix"
+    )
+    for name in sorted(os.listdir(package)):
         if not name.endswith(".py") or name == "cli.py":
             continue
-        full = os.path.join("tornado_demix", name)
+        full = os.path.join(package, name)
         for lineno, line in enumerate(open(full, encoding="utf-8"), 1):
             if "raise SystemExit" in line:
                 offenders.append("{}:{}".format(full, lineno))

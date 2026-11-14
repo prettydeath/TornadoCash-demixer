@@ -24,7 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from tornado_demix import registry  # noqa: E402
 
 
-def summarize(path):
+def summarize(path, witness=None):
     """Chain check and counts per status, test family (test_id up to the first dot) and script."""
     status, family, script = Counter(), Counter(), Counter()
     total = 0
@@ -39,7 +39,9 @@ def summarize(path):
     return {
         "path": path,
         "total": total,
-        "broken": registry.verify_chain(path),
+        "broken": registry.verify_chain(path, witness=witness),
+        "partial_tail": registry.partial_tail(path),
+        "unlisted": registry.unlisted(path),
         "by_status": dict(status),
         "by_family": dict(family),
         "by_script": dict(script),
@@ -67,6 +69,9 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("path", nargs="?", default=None, help="register file")
     ap.add_argument("--witness", metavar="OUT", help="write {seq, hash} of the last record to OUT")
+    ap.add_argument(
+        "--check-witness", metavar="FILE", help="verify the register against a stored witness"
+    )
     ap.add_argument("--lock", nargs="+", metavar="SCRIPT", help="write a protocol lock for these")
     ap.add_argument("--out", default=registry.PROTOCOL_LOCK_DEFAULT, help="lock file to write")
     args = ap.parse_args(argv)
@@ -82,9 +87,17 @@ def main(argv=None):
         os.makedirs(os.path.dirname(os.path.abspath(args.witness)), exist_ok=True)
         with open(args.witness, "w", encoding="utf-8") as fh:
             json.dump(registry.witness(path), fh)
-    s = summarize(path)
+    stored = None
+    if args.check_witness:
+        with open(args.check_witness, encoding="utf-8") as fh:
+            stored = json.load(fh)
+    s = summarize(path, stored)
     print(f"register: {s['path']}\nrecords: {s['total']}")
     print("chain: " + ("intact" if not s["broken"] else f"BROKEN at seq {s['broken']}"))
+    if s["unlisted"]:
+        print(f"confirmatory records not listed in the current lock: seq {s['unlisted']}")
+    if s["partial_tail"] is not None:
+        print(f"last line (seq {s['partial_tail']}) is half-written: reported, appends continue")
     for title, key in (("status", "by_status"), ("family", "by_family"), ("script", "by_script")):
         print(f"by {title}:")
         for k, v in sorted(s[key].items(), key=lambda kv: str(kv[0])):

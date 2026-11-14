@@ -12,7 +12,10 @@ fewer than 5 leads.
 Works for any network directory (ethereum, polygon, arbitrum): it only reads
 <dir>/target/*.json and <dir>/decoy/*.json.
 
-Writes <dir>/holdout_summary.json and <dir>/HOLDOUT.md.
+Writes <dir>/holdout_summary.json and <dir>/HOLDOUT.md. Both also count the failed
+lookups of every run (``errors`` of a run_demix result, see tornado_demix.incomplete):
+a lookup that failed can change that side's counts.
+Runs written before the field existed show "n/a".
 
 Usage
 -----
@@ -224,9 +227,39 @@ def load_runs(base):
     return runs
 
 
+def _failed(data, key="errors"):
+    """Number of failed lookups (or cut-off lists) a run recorded; None if it has no record."""
+    return len(data.get(key) or []) if key in data else None
+
+
+def failed_lookups(runs):
+    """Failed lookups per run and in total, target and decoy side (see the module doc)."""
+    per_run = []
+    for target, decoy in runs:
+        per_run.append(
+            {
+                "wallet": target.get("wallet") or decoy.get("wallet") or "",
+                "target": _failed(target),
+                "decoy": _failed(decoy),
+                "target_truncated": _failed(target, "truncated"),
+                "decoy_truncated": _failed(decoy, "truncated"),
+            }
+        )
+    return {
+        "target": sum(r["target"] or 0 for r in per_run),
+        "decoy": sum(r["decoy"] or 0 for r in per_run),
+        "runs_with_failures": sum(1 for r in per_run if (r["target"] or 0) + (r["decoy"] or 0)),
+        "runs_without_record": sum(
+            1 for r in per_run if r["target"] is None and r["decoy"] is None
+        ),
+        "per_run": per_run,
+    }
+
+
 def build(runs, boot=2000, seed=SEED, windows=None):
     windows = windows or WINDOWS
     out = {"depositors": len(runs), "boot": boot, "seed": seed, "windows": {}}
+    out["failed_lookups"] = failed_lookups(runs)
     for wname, hours in windows.items():
         pairs = [(tally(narrow(t, hours)), tally(narrow(d, hours))) for t, d in runs]
         res = analyze(pairs, boot, seed, window=wname)
@@ -282,7 +315,36 @@ def render(summary, title="Hold-out placebo"):
                 f"| {n} | {combos['target'].get(n, 0)} | {combos['decoy'].get(n, 0)} |"
                 for n in names
             ]
+    lines += _render_failed(summary.get("failed_lookups"))
     return "\n".join(lines) + "\n"
+
+
+def _na(x):
+    return "n/a" if x is None else str(x)
+
+
+def _render_failed(fl):
+    """The failed-lookups section: totals and one row per run."""
+    if not fl:
+        return []
+    lines = [
+        "",
+        "## Failed lookups per run",
+        "",
+        f"Target {fl['target']}, decoy {fl['decoy']}; runs with a failure: "
+        f"{fl['runs_with_failures']}; runs written before failures were recorded: "
+        f"{fl['runs_without_record']} (n/a). A failed lookup can change that side's counts.",
+        "",
+        "| wallet | target failed lookups | decoy failed lookups | target lists cut off | "
+        "decoy lists cut off |",
+        "|---|---|---|---|---|",
+    ]
+    lines += [
+        f"| {r['wallet']} | {_na(r['target'])} | {_na(r['decoy'])} | "
+        f"{_na(r['target_truncated'])} | {_na(r['decoy_truncated'])} |"
+        for r in fl["per_run"]
+    ]
+    return lines
 
 
 def main(argv=None):

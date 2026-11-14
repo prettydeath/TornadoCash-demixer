@@ -17,6 +17,8 @@ from tornado_demix.networks import load_networks
 # assertion is still made on every release build.
 tomllib = pytest.importorskip("tomllib", reason="stdlib from Python 3.11")
 
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PYPROJECT = os.path.join(ROOT, "pyproject.toml")
 EXPECTED_POOLS = 56
 EXPECTED_NETWORKS = 8
 
@@ -26,7 +28,7 @@ def test_the_registry_lives_inside_the_package():
 
 
 def test_pyproject_declares_the_registry_as_package_data():
-    with open("pyproject.toml", "rb") as fh:
+    with open(PYPROJECT, "rb") as fh:
         config = tomllib.load(fh)
     patterns = config["tool"]["setuptools"]["package-data"]["tornado_demix"]
     assert any(p.endswith(".csv") for p in patterns), patterns
@@ -36,7 +38,7 @@ def test_every_packaged_data_file_is_covered_by_those_patterns():
     """A new data file that no pattern matches is silently left out of the wheel."""
     import fnmatch
 
-    with open("pyproject.toml", "rb") as fh:
+    with open(PYPROJECT, "rb") as fh:
         patterns = tomllib.load(fh)["tool"]["setuptools"]["package-data"]["tornado_demix"]
     for root, _dirs, files in os.walk(PACKAGE_DATA):
         rel_root = os.path.relpath(root, os.path.dirname(PACKAGE_DATA))

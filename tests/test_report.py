@@ -199,7 +199,7 @@ def test_deposited_tile_renders_per_asset_not_a_cross_asset_sum():
     html = build_html_report(_mixed_asset_eth_data(), _mixed_asset_network())
     # The Deposited figure is rendered per asset, using the same sorted
     # 'asset:value' form the cluster path uses (never a single fused number).
-    assert "DAI:100000; ETH:1" in html
+    assert "100,000 DAI; 1 ETH" in html
     # Both assets appear in the Deposited figure.
     assert "ETH" in html and "DAI" in html
     # It never sums 1 + 100000 across assets into a single meaningless total.
@@ -486,9 +486,9 @@ def _linked_bsc_data():
 
 def test_demix_report_leads_with_most_likely_and_band_badges():
     html = build_html_report(_linked_bsc_data(), _bsc_network())
-    assert "Most likely candidates" in html
-    # The section leads before Deposits.
-    assert html.index("Most likely candidates") < html.index(">Deposits<")
+    assert 'id="r-leads"' in html
+    # The Leads section comes before the deposits (raw data).
+    assert html.index('id="r-leads"') < html.index(">Deposits<")
     # A band badge appears, and the ranked table now has a Band column.
     assert 'class="badge' in html
     assert "<th>Band</th>" in html
@@ -710,7 +710,7 @@ def _char_info():
         "inflow_totals": {"ETH": 243.2},
         "distinct_pools": ["0.1 ETH", "1 ETH", "10 ETH", "100 ETH"],
         "top_next_hops": [{"address": fx.WALLET, "count": 8, "total_value": 0.8}],
-        "classification": "aggregator",
+        "classification": "multi-pool consolidator",
         "classification_reason": "collects 21 pool withdrawals across 4 distinct pools",
     }
 
@@ -720,7 +720,7 @@ def test_characterize_report_shows_class_inflows_and_next_hop():
 
     html = build_characterize_report(_char_info(), _bsc_network())
     assert "exit-candidate characterisation" in html
-    assert "aggregator" in html
+    assert "multi-pool consolidator" in html
     assert "0.1 ETH" in html
     assert "243.2 ETH" in html
     assert "Dominant next hops" in html
@@ -797,7 +797,8 @@ def test_demix_report_states_its_parameters_and_block_ranges():
 
 def test_demix_report_leads_with_the_band_not_a_percentage():
     html = build_html_report(_linked_bsc_data(), _bsc_network())
-    assert "Strongest band" in html
+    # the band word on the first page carries the strongest band
+    assert 'data-count="band" data-value="moderate"' in html
     assert "Top confidence" not in html
     assert "% confidence" not in html
 
@@ -934,7 +935,7 @@ def test_the_fresh_note_says_it_is_not_scored():
     assert "10 day(s)" in old and "not scored" in old
 
 
-def test_demix_report_opens_with_a_case_overview_and_flow_diagram():
+def test_demix_report_opens_with_the_flow_diagram_on_its_first_page():
     from tornado_demix.heuristics import ranked_candidates
 
     data = _linked_bsc_data()
@@ -942,9 +943,11 @@ def test_demix_report_opens_with_a_case_overview_and_flow_diagram():
     top = ranked_candidates(data)[0]
     data["fresh_addresses"][top["address"]] = {"fresh": True, "history_hours": 2}
     html = build_html_report(data, _bsc_network())
-    assert html.index("Case overview") < html.index("Most likely candidates")
-    svg = html[html.index('<svg class="flow"') : html.index("</svg>")]
+    page1 = html[html.index('class="p1"') : html.index('class="toc"')]
+    leads = html[html.index('id="r-leads"') : html.index('id="r-context"')]
+    assert "<svg" not in leads  # the diagram is on the first page only, not repeated
+    svg = page1[page1.index("<svg") : page1.index("</svg>")]
     assert "Depositor" in svg and "pool</text>" in svg
-    assert top["address"][:6] in svg and "fresh" in svg
-    assert "#0f766e" in svg or "#b45309" in svg
-    assert "fresh addresses (context, not scored)" in html
+    assert f"<title>{top['address']}</title>" in svg and "fresh" in svg
+    # band colours come from the stylesheet, so the diagram follows the theme
+    assert 'class="e-strong"' in svg or 'class="e-lead"' in svg

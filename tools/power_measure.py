@@ -30,7 +30,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from ens_labels import CACHE, _log, api_keys  # noqa: E402
 
-from tornado_demix.demix import wallet_counterparties  # noqa: E402
+from tornado_demix.demix import native_counterparty_rows, wallet_counterparties  # noqa: E402
+from tornado_demix.deposit_addresses import own_token_transfers  # noqa: E402
 from tornado_demix.etherscan import EtherscanClient  # noqa: E402
 from tornado_demix.networks import get_network  # noqa: E402
 from tornado_demix.power import REASONS, window_detectability  # noqa: E402
@@ -60,10 +61,11 @@ def collect(network, wallets, path, workers_keys):
         i, w = i_w
         client = clients[i % len(clients)]
         try:
-            txs = client.outgoing_txs(w) + client.internal_txs(w)
+            native = client.outgoing_txs(w)
+            rows = native_counterparty_rows(w, native) + client.internal_txs(w)
             if not native_only:
-                txs = txs + client.token_transfers(w)
-            return w, sorted(wallet_counterparties(w, txs))
+                rows = rows + own_token_transfers(w, native, client.token_transfers(w))
+            return w, sorted(wallet_counterparties(w, rows))
         except Exception as exc:  # noqa: BLE001 - one unreadable wallet must not stop the run
             _log(f"  {w}: {type(exc).__name__}")
             return w, None

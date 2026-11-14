@@ -15,13 +15,24 @@ artefact of the shared window, not evidence of a link.
 
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 
-from .demix import run_demix
+from .demix import (
+    _log,
+    _set_count_candidates,
+    analyze_denom,
+    analyze_denom_events,
+    cluster_vouchers,
+    run_demix,
+)
+from .errors import ApiError, ApiKeyError, BlockLookupError
 from .etherscan import EtherscanClient
 from .graph import WALLET_SPECIFIC_SIGNALS, cluster_wallets
-from .heuristics import credit_profile_match
+from .heuristics import apply_heuristics, credit_profile_match, wallet_profile
+from .honest import EXACT_K_CAVEAT, GROUP_VIEW_CAVEAT
+from .incomplete import attach, lookup_failed, mark, truncated_since
 from .networks import ETHEREUM, Network
+from .rpc import make_contract_check, make_gas_price_gate
 
 # Wallets whose deposits chain together within this gap form one synchronised
 # batch. That is a coordination lead in its own right, and it is also why a
@@ -48,14 +59,24 @@ def correlate(
     max_voucher_span_hours: float | None = None,
     labels: dict[str, dict] | None = None,
     deposit_addresses: bool = True,
+    group: bool = False,
+    exact_k: bool = False,
+    exact_k_windows: int | None = None,
 ) -> dict:
     """Run demix on every wallet and compute cross-wallet correlations.
 
     Returns a dict with keys: results, strong, soft, addr_detail, fingerprints,
-    profile_matches, cross_profile. ``exit_window_hours`` narrows each wallet's
+    profile_matches, cross_profile, and ``errors`` (every wallet's failed lookups,
+    each tagged with ``wallet``), ``error_count`` and ``truncated``. ``exit_window_hours`` narrows each wallet's
     withdrawal search to that many hours after its deposits (see
     :func:`tornado_demix.demix.voucher_windows`).
+
+    ``group`` adds ``corr["group"]``: the wallets treated as one depositor
+    (:func:`group_view`); the per-wallet results do not change. ``exact_k`` (with
+    ``group``) adds the exploratory exact-k detector with ``exact_k_windows`` base
+    windows per pool (default :data:`EXACT_K_BASE_WINDOWS`).
     """
+    start_mark = mark(client)
     results = {}  # wallet -> run_demix output
     cand_members = defaultdict(lambda: defaultdict(set))  # pool_key -> addr -> wallets
     qual_members = defaultdict(lambda: defaultdict(set))  # pool_key -> addr -> wallets
@@ -114,14 +135,38 @@ def correlate(
         "cross_profile": cross_profile,
     }
     corr["sync_groups"] = deposit_synchronicity(results)
-    corr["shared_funders"] = shared_funders(client, results, labels)
+    funder_errors: list[dict] = []
+    corr["shared_funders"] = shared_funders(client, results, labels, funder_errors)
     # The grades are the single source of truth for whether a consolidator is a
     # window-overlap artefact; the graph clustering honours the same flag.
     corr["consolidator_grades"] = grade_consolidators(
         cross_profile, results, fingerprints, wallet_deposit_spans(results)
     )
     corr["operator_clusters"] = cluster_wallets(corr)
-    return corr
+    group_errors: list[dict] = []
+    if group:
+        corr["group"] = group_view(
+            client,
+            results,
+            window_days=window_days,
+            fee_lo=fee_lo,
+            fee_hi=fee_hi,
+            gap_hours=gap_hours,
+            mode=mode,
+            network=network,
+            exit_window_hours=exit_window_hours,
+            max_voucher_span_hours=max_voucher_span_hours,
+            exact_k=exact_k,
+            exact_k_windows=exact_k_windows,
+        )
+        group_errors = [dict(e, wallet=GROUP_KEY) for e in corr["group"].get("errors", [])]
+    # every wallet's failed lookups, tagged with the wallet (tornado_demix.incomplete)
+    errors = (
+        [dict(e, wallet=wallet) for wallet, data in results.items() for e in data.get("errors", [])]
+        + funder_errors
+        + group_errors
+    )
+    return attach(corr, errors, truncated_since(client, start_mark))
 
 
 # A funder with this many transactions is a service or a busy wallet that pays
@@ -129,13 +174,15 @@ def correlate(
 BUSY_FUNDER_TXS = 200
 
 
-def shared_funders(client, results, labels=None):
+def shared_funders(client, results, labels=None, errors=None):
     """Immediate funders shared by two or more depositor wallets.
 
     Returns {funder: sorted wallets}. A labelled funder (an exchange, a bridge)
     and a busy one (BUSY_FUNDER_TXS or more transactions) are left out: they fund
     many unrelated users. MixLaunder: 90.1 % of laundering deposit addresses
     share an immediate funder with another deposit address of the same case.
+    A funder whose busy check fails is kept (unchecked) and, when ``errors`` is a
+    list, the failure is appended to it.
     """
     labels = labels or {}
     by_funder = defaultdict(set)
@@ -146,7 +193,17 @@ def shared_funders(client, results, labels=None):
     for funder, wallets in sorted(by_funder.items()):
         if len(wallets) < 2 or labels.get(funder):
             continue
-        if hasattr(client, "has_at_least_txs") and client.has_at_least_txs(funder, BUSY_FUNDER_TXS):
+        try:
+            busy = hasattr(client, "has_at_least_txs") and client.has_at_least_txs(
+                funder, BUSY_FUNDER_TXS
+            )
+        except ApiKeyError:
+            raise
+        except ApiError as exc:
+            busy = False  # unchecked: kept, and listed as a failed lookup
+            if errors is not None:
+                errors.append(lookup_failed("funder busy check", exc, address=funder))
+        if busy:
             continue
         out[funder] = sorted(wallets)
     return out
@@ -199,7 +256,7 @@ def deposit_synchronicity(results, gap_hours=SYNC_GAP_HOURS):
         for ws, first, last in groups
         if len(ws) >= 2
     ]
-    out.sort(key=lambda g: (-len(g["wallets"]), g["span_seconds"]))
+    out.sort(key=lambda g: (-len(g["wallets"]), g["span_seconds"], g["first_ts"], g["wallets"]))
     return out
 
 
@@ -297,7 +354,7 @@ def _shared(membership):
         for addr, wallets in addr_map.items():
             if len(wallets) >= 2:
                 shared.append((pool_key, addr, sorted(wallets)))
-    shared.sort(key=lambda entry: (-len(entry[2]), entry[0]))
+    shared.sort(key=lambda entry: (-len(entry[2]), entry[0], entry[1]))
     return shared
 
 
@@ -356,3 +413,321 @@ def _profile_match(fingerprints, addr_detail):
         addr: sorted(wallets) for addr, wallets in addr_profile_wallets.items() if len(wallets) >= 2
     }
     return profile_matches, cross_profile
+
+
+# ---- group view: the given wallets treated as one depositor -----------------------
+
+# The tag of the group view's failed lookups in ``corr["errors"]``.
+GROUP_KEY = "group"
+
+# Exact-k detector (exploratory): base windows read per pool, and the hard cap. Each
+# base window costs two block-by-time lookups plus the pages of one log read of the
+# pool over a window as long as the group window.
+EXACT_K_BASE_WINDOWS = 6
+EXACT_K_MAX_WINDOWS = 20
+# The base windows of one pool together span at most this long; a longer group window
+# gets fewer base windows (none when one window alone is longer), reported in the row.
+EXACT_K_MAX_BASE_DAYS = 365
+
+# A group window longer than this gets a notice: wallets that deposited months apart
+# make one window of months, a huge recipient field (the count gate rarely passes) and
+# a costly log read. A judgement call, not measured.
+GROUP_LONG_WINDOW_DAYS = 90
+
+
+def _analyze(client, pool, span, window_days, fee_lo, fee_hi, mode, exit_window_hours, notes):
+    """One pool over the window of ``span`` (a voucher-shaped dict), in either mode."""
+    if mode == "events":
+        return analyze_denom_events(client, pool, [span], window_days, exit_window_hours, notes)
+    return analyze_denom(
+        client, pool, [span], window_days, fee_lo, fee_hi, exit_window_hours, notes
+    )
+
+
+def group_view(
+    client: EtherscanClient,
+    results: dict[str, dict],
+    window_days: int = 30,
+    fee_lo: float = 0.90,
+    fee_hi: float = 0.995,
+    gap_hours: float = 24,
+    mode: str = "events",
+    network: Network = ETHEREUM,
+    exit_window_hours: float | None = None,
+    max_voucher_span_hours: float | None = None,
+    exact_k: bool = False,
+    exact_k_windows: int | None = None,
+) -> dict:
+    """The wallets of ``results`` treated as ONE depositor.
+
+    Their deposits are merged (copies, each tagged with ``wallet``) and clustered into
+    vouchers as for one wallet; each pool is searched over ONE window, from the group's
+    first deposit into it to the window end after its last one. Then the existing rules
+    run on the merged notes: the count-candidate gate with the voucher-order check
+    (:func:`tornado_demix.demix._set_count_candidates`) and every signal of
+    :func:`tornado_demix.heuristics.apply_heuristics`, the early profile included. A
+    direct link counts against the union of the wallets' filtered counterparties and
+    the wallets themselves. Withdrawal senders and shared deposit addresses (context
+    only) are not recomputed.
+
+    Merging is the analyst's assertion that the wallets are one actor; the result is
+    conditional on it (``caveat``). The per-wallet results are not touched.
+
+    Returns a run_demix-shaped dict (``deposits``, ``vouchers``, ``denoms`` with
+    signals, ``unresolved``, ``params``) plus ``wallets``, ``profile``, ``caveat``,
+    ``exact_k`` (rows of :func:`exact_k_rows`, empty unless ``exact_k``) and
+    ``errors`` / ``error_count`` / ``truncated`` of this step. A pool whose read fails
+    is listed in ``unresolved`` and its failure in ``errors``; it is not fatal.
+    """
+    start_mark = mark(client)
+    errors: list[dict] = []
+    wallets = sorted(results)
+    deposits = sorted(
+        (
+            dict(d, wallet=wallet)
+            for wallet, data in results.items()
+            for d in data.get("deposits", [])
+        ),
+        key=lambda d: (d["ts"], d.get("wallet", ""), str(d.get("tx") or d.get("hash") or "")),
+    )
+    params = {
+        "window_days": window_days,
+        "fee_window": [fee_lo, fee_hi],
+        "gap_hours": gap_hours,
+        "mode": mode,
+        "network": network.name,
+        "currency": network.currency,
+        "exit_window_hours": exit_window_hours,
+        "voucher_order": True,
+        "group": True,
+    }
+    out = {
+        "wallet": "",
+        "wallets": wallets,
+        "caveat": GROUP_VIEW_CAVEAT,
+        "params": params,
+        "deposits": deposits,
+        "vouchers": [],
+        "denoms": {},
+        "unresolved": [],
+        "profile": {},
+        "exact_k": [],
+        "exact_k_caveat": EXACT_K_CAVEAT,
+        "notices": [],
+    }
+    if not deposits:
+        return attach(out, errors, truncated_since(client, start_mark))
+    _log("[*] Group view: {} wallets, {} deposits".format(len(wallets), len(deposits)))
+
+    vouchers = cluster_vouchers(
+        deposits, gap_hours=gap_hours, max_span_hours=max_voucher_span_hours
+    )
+    denoms = {}
+    spans = {}
+    for pool_key in sorted({v["pool_key"] for v in vouchers}):
+        pool = network.by_key[pool_key]
+        own = [d for d in deposits if d["pool_key"] == pool_key]
+        # One window per pool: a single voucher-shaped span over every merged note.
+        span = {
+            "pool_key": pool_key,
+            "count": len(own),
+            "first_ts": own[0]["ts"],
+            "last_ts": own[-1]["ts"],
+        }
+        try:
+            denoms[pool_key] = _analyze(
+                client, pool, span, window_days, fee_lo, fee_hi, mode, exit_window_hours, errors
+            )
+            spans[pool_key] = span
+        except ApiKeyError:
+            raise
+        except (BlockLookupError, ApiError) as exc:
+            _log("  [group {}] SKIPPED - {}".format(pool_key, exc))
+            out["unresolved"].append({"pool_key": pool_key, "reason": str(exc)})
+            errors.append(lookup_failed("group window ({})".format(pool_key), exc))
+
+    for pool_key, res in denoms.items():
+        for w in res.get("windows", []):
+            days = (w["end_ts"] - w["first_ts"]) / 86400
+            if days > GROUP_LONG_WINDOW_DAYS:
+                out["notices"].append(
+                    f"{pool_key}: the group window spans {days:.0f} days (more than "
+                    f"{GROUP_LONG_WINDOW_DAYS}); the wallets deposited far apart, so the "
+                    "recipient field is large, a count match rarely passes the gate and the "
+                    "log read is costly"
+                )
+                _log("  [group {}] [!] window of {:.0f} days".format(pool_key, days))
+
+    order_params = {"window_days": window_days, "exit_window_hours": exit_window_hours}
+    for pool_key, res in denoms.items():
+        _set_count_candidates(res, vouchers, order_params, pool_key)
+    out["vouchers"] = vouchers
+    out["denoms"] = denoms
+    out["profile"] = wallet_profile(out)
+
+    counterparties = set(wallets)
+    for data in results.values():
+        counterparties.update(data.get("counterparty_addresses", []))
+    is_contract = make_contract_check(network.rpc_url)
+    gas_gate = make_gas_price_gate(network.rpc_url)
+    apply_heuristics(out, counterparties, gas_gate=gas_gate, is_contract=is_contract)
+    errors += getattr(is_contract, "errors", [])
+    errors += getattr(gas_gate, "errors", [])
+
+    if exact_k:
+        out["exact_k"] = exact_k_rows(
+            client,
+            out,
+            spans,
+            network,
+            window_days=window_days,
+            fee_lo=fee_lo,
+            fee_hi=fee_hi,
+            mode=mode,
+            exit_window_hours=exit_window_hours,
+            n_windows=exact_k_windows,
+            errors=errors,
+        )
+    return attach(out, errors, truncated_since(client, start_mark))
+
+
+def exact_k_rows(
+    client,
+    group: dict,
+    spans: dict[str, dict],
+    network: Network,
+    window_days: int = 30,
+    fee_lo: float = 0.90,
+    fee_hi: float = 0.995,
+    mode: str = "events",
+    exit_window_hours: float | None = None,
+    n_windows: int | None = None,
+    errors: list | None = None,
+) -> list[dict]:
+    """Exploratory: "exactly k notes of a pool within the group window", with an empirical base.
+
+    For every pool where the group deposited k >= 2 notes: ``observed`` is the number
+    of recipients that received exactly k withdrawals in the group window (the events
+    already read). The base is the same count in ``n_windows`` earlier windows of the
+    same length in the same pool, back to back and not overlapping the group window
+    (window i ends one second before window i-1 starts). A window with no withdrawal at
+    all (before the pool existed, or a dead pool) is not comparable and is skipped
+    (``empty_windows``); a window whose read fails is skipped and recorded in ``errors``.
+    Reports ``base_counts``, ``base_mean``, ``n_ge_observed`` (base windows with at
+    least ``observed`` such recipients) and ``p_ge_observed``, the smoothed empirical
+    tail (n_ge_observed + 1) / (base_windows + 1), so a handful of windows never reads
+    as "impossible" (None without a usable window). ``observed`` and the base counts
+    both count only withdrawals timed inside their window. Context only: never scored,
+    never a lead.
+
+    Cost: up to ``n_windows`` (capped at :data:`EXACT_K_MAX_WINDOWS`) extra log reads
+    per pool, each with two block-by-time lookups and as many pages as the window holds,
+    and the base windows of a pool span at most :data:`EXACT_K_MAX_BASE_DAYS` days
+    together (``capped_windows`` in the row says how many were dropped for that).
+    """
+    n = EXACT_K_BASE_WINDOWS if n_windows is None else int(n_windows)
+    n = max(1, min(n, EXACT_K_MAX_WINDOWS))
+    rows = []
+    for pool_key, k in sorted(group.get("profile", {}).items()):
+        res = group["denoms"].get(pool_key)
+        span = spans.get(pool_key)
+        if k < 2 or res is None or span is None:
+            continue
+        window = res["windows"][0]
+        length = window["end_ts"] - window["first_ts"]
+        if length <= 0:
+            continue
+        # Timed inside the window, as the base windows are (the block bounds can reach
+        # one block outside it).
+        inside = Counter(
+            addr
+            for addr, recs in res["detail"].items()
+            for r in recs
+            if window["first_ts"] <= r["ts"] <= window["end_ts"]
+        )
+        observed = sum(1 for c in inside.values() if c == k)
+        pool = network.by_key[pool_key]
+        n_pool = min(n, int(EXACT_K_MAX_BASE_DAYS * 86400 // length))
+        counts, empty, failed = [], 0, 0
+        for i in range(1, n_pool + 1):
+            shifted = dict(
+                span,
+                first_ts=span["first_ts"] - i * length,
+                last_ts=span["last_ts"] - i * length - 1,
+            )
+            try:
+                base = _analyze(
+                    client,
+                    pool,
+                    shifted,
+                    window_days,
+                    fee_lo,
+                    fee_hi,
+                    mode,
+                    exit_window_hours,
+                    None,
+                )
+            except ApiKeyError:
+                raise
+            except (BlockLookupError, ApiError) as exc:
+                failed += 1
+                if errors is not None:
+                    errors.append(lookup_failed("exact-k base window ({})".format(pool_key), exc))
+                continue
+            # Adjacent windows share a boundary block; only withdrawals timed inside
+            # this window count, so none is counted in two windows.
+            lo, hi = shifted["first_ts"], window["first_ts"] - (i - 1) * length - 1
+            per = Counter(
+                addr for addr, recs in base["detail"].items() for r in recs if lo <= r["ts"] <= hi
+            )
+            if not per:
+                empty += 1
+                continue
+            counts.append(sum(1 for c in per.values() if c == k))
+        usable = len(counts)
+        n_ge = sum(1 for c in counts if c >= observed)
+        rows.append(
+            {
+                "pool_key": pool_key,
+                "k": k,
+                "window_hours": round(length / 3600, 2),
+                "observed": observed,
+                "requested_windows": n,
+                "capped_windows": n - n_pool,
+                "max_base_days": EXACT_K_MAX_BASE_DAYS,
+                "base_windows": usable,
+                "empty_windows": empty,
+                "failed_windows": failed,
+                "base_counts": counts,
+                "base_mean": round(sum(counts) / usable, 4) if usable else None,
+                "n_ge_observed": n_ge,
+                "p_ge_observed": round((n_ge + 1) / (usable + 1), 4) if usable else None,
+                "context": True,
+            }
+        )
+    return rows
+
+
+def exact_k_tail_text(row: dict) -> str:
+    """The smoothed tail of an exact-k row with its window count, or "n/a"."""
+    if row.get("p_ge_observed") is None:
+        return "n/a"
+    return "{:.2f} (smoothed, {} of n={})".format(
+        row["p_ge_observed"], row.get("n_ge_observed", 0), row["base_windows"]
+    )
+
+
+def exact_k_skips(row: dict) -> str:
+    """The base windows an exact-k row did not use, and why ("" when none)."""
+    parts = []
+    if row.get("capped_windows"):
+        parts.append(
+            "{} dropped by the {}-day base cap".format(
+                row["capped_windows"], row.get("max_base_days", EXACT_K_MAX_BASE_DAYS)
+            )
+        )
+    if row.get("empty_windows"):
+        parts.append("{} empty skipped".format(row["empty_windows"]))
+    if row.get("failed_windows"):
+        parts.append("{} failed".format(row["failed_windows"]))
+    return ", ".join(parts)

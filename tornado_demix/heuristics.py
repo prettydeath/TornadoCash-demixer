@@ -9,6 +9,7 @@ The score orders candidates; the band describes the structure of the evidence.
 from __future__ import annotations
 
 from collections import Counter
+from datetime import datetime, timezone
 from typing import Callable
 
 from .attribution import format_label, label_of
@@ -243,12 +244,13 @@ def apply_heuristics(
                     gas_matches.append((pool_key, addr, gp, r["hash"]))
                     break
 
+            # Every withdrawal the depositor's side sent is recorded, so the evidence
+            # can say how many of them it sent, not just that one was.
             for r in recs:
                 sender = withdrawal_senders.get((r.get("hash") or "").lower())
                 if sender:
                     sig.add("linked_sender")
                     sender_hits.append((pool_key, addr, sender, r["hash"]))
-                    break
 
             if addr != wallet and shared_deposits.get(addr):
                 sig.add("shared_deposit")
@@ -359,47 +361,143 @@ def _score(signals, discrimination):
     return round(1 - product, 4)
 
 
+def _plural(count: int, noun: str) -> str:
+    """ "1 withdrawal", "2 withdrawals"."""
+    return f"{count} {noun if count == 1 else noun + 's'}"
+
+
+def _duration(seconds: float) -> str:
+    """A delay in words: "5 min", "3.2 h", "100 h (4.2 days)"."""
+    if seconds < 3600:
+        return f"{max(round(seconds / 60), 0)} min"
+    hours = seconds / 3600
+    if hours < 10:
+        return f"{hours:.1f} h"
+    if hours < 48:
+        return f"{hours:.0f} h"
+    return f"{hours:.0f} h ({hours / 24:.1f} days)"
+
+
+def numbered_deposits(data: dict) -> list[tuple[int, dict]]:
+    """The depositor's deposits as ``[(n, deposit)]``, numbered 1.. in time order.
+
+    The one numbering every report uses: the deposits table lists them as D1, D2, ...
+    and the evidence of each candidate refers to them by these numbers."""
+    deps = sorted(enumerate(data.get("deposits") or []), key=lambda x: (x[1].get("ts") or 0, x[0]))
+    return [(n, dep) for n, (_i, dep) in enumerate(deps, 1)]
+
+
+def _numbers_text(numbers: list[int]) -> str:
+    """[1, 2, 3, 7] as "D1–D3, D7"."""
+    out, run = [], []
+    for n in sorted(numbers):
+        if run and n == run[-1] + 1:
+            run.append(n)
+            continue
+        if run:
+            out.append(f"D{run[0]}" if len(run) == 1 else f"D{run[0]}–D{run[-1]}")
+        run = [n]
+    if run:
+        out.append(f"D{run[0]}" if len(run) == 1 else f"D{run[0]}–D{run[-1]}")
+    return ", ".join(out)
+
+
+def voucher_deposit_numbers(data: dict, voucher: dict) -> list[int]:
+    """The deposit numbers (see :func:`numbered_deposits`) of one voucher."""
+    hashes = {d.get("hash") for d in voucher.get("deposits") or [] if d.get("hash")}
+    first = voucher.get("first_ts")
+    last = voucher.get("last_ts", first)
+    out = []
+    for n, dep in numbered_deposits(data):
+        if dep.get("pool_key") != voucher.get("pool_key"):
+            continue
+        if hashes:
+            if dep.get("hash") in hashes:
+                out.append(n)
+        elif first is not None and first <= (dep.get("ts") or 0) <= last:
+            out.append(n)
+    return out
+
+
+def _voucher_text(data: dict, voucher: dict) -> str:
+    """ "the 24-note voucher of the 100 ETH pool (deposits D1–D24)"."""
+    nums = voucher_deposit_numbers(data, voucher)
+    where = f" (deposits {_numbers_text(nums)})" if nums else ""
+    return f"the {voucher['count']}-note voucher of the {voucher['pool_key']} pool{where}"
+
+
+def _link_text(data: dict, address: str) -> str:
+    """ "tx 0x…" of the transaction that makes ``address`` a direct counterparty, or a
+    plain statement that the run did not record it (never an invented hash)."""
+    link = (data.get("counterparty_links") or {}).get(address)
+    if link and link.get("tx"):
+        if link.get("ts"):
+            when = datetime.fromtimestamp(link["ts"], tz=timezone.utc).strftime("%Y-%m-%d")
+            return f"tx {link['tx']}, first transaction between them on {when}"
+        return f"tx {link['tx']}"
+    return "linking transaction not recorded in this run"
+
+
+def _last_deposit_before(data: dict, pool_key: str, ts: int):
+    """``(last deposit ts, its deposit number)`` of the latest voucher of the pool that
+    ended before ``ts``; ``(None, None)`` when no voucher did."""
+    best = None
+    for v in data.get("vouchers", []):
+        last = v.get("last_ts", v.get("first_ts"))
+        if v.get("pool_key") == pool_key and last is not None and last <= ts:
+            if best is None or last > best.get("last_ts", best.get("first_ts")):
+                best = v
+    if best is None:
+        return None, None
+    last = best.get("last_ts", best.get("first_ts"))
+    nums = voucher_deposit_numbers(data, best)
+    return last, (nums[-1] if nums else None)
+
+
+def _delay_text(data: dict, pool_key: str, recs: list[dict]) -> str:
+    """ "first withdrawal 5 min after the voucher's last deposit (D2)", or ""."""
+    stamps = sorted(r["ts"] for r in recs if r.get("ts"))
+    if not stamps:
+        return ""
+    last, num = _last_deposit_before(data, pool_key, stamps[0])
+    if last is None:
+        return "first withdrawal before any of the pool's vouchers ended"
+    ref = f" (D{num})" if num else ""
+    return f"first withdrawal {_duration(stamps[0] - last)} after the voucher's last deposit{ref}"
+
+
+# How each signal counts, appended to its line of the "why" text.
+_REASON_STATUS = {
+    "linked": "lead signal",
+    "early_profile": "lead signal",
+    "count_match": "scored for ordering only, never raises the band",
+    "self_relayed": "scored for ordering only, never raises the band",
+    "gas_price": "scored for ordering only, never raises the band",
+    "profile_match": "scored for ordering only, never raises the band",
+    "linked_late": "context only, not scored",
+    "linked_sender": "context only, not scored",
+    "shared_deposit": "context only, not scored",
+    "root_excluded": "note, context only",
+    "root_partial": "note, context only",
+}
+
+
 def candidate_reason(row: dict) -> str:
-    """Return a short, human sentence explaining why an address was chosen."""
-    bits = []
-    if "count_match" in row["signals"]:
-        bits.append(
-            f"received exactly {row['hits']} withdrawals, matching a {row['hits']}-note voucher"
-        )
-    else:
-        bits.append(f"received {row['hits']} qualifying withdrawal(s)")
-    if row.get("self_relayed"):
-        bits.append(f"{row['self_relayed']} of them self-relayed (recipient paid gas)")
-    if "gas_price" in row["signals"]:
-        bits.append("reused one of the wallet's deposit gas prices")
-    if "linked" in row["signals"]:
-        bits.append("transacts directly with the depositor outside Tornado")
-    if "linked_late" in row["signals"]:
-        bits.append(
-            "transacts directly with the depositor, but first withdrew more than "
-            f"{EARLY_EXIT_HOURS} h after the last deposit (context only)"
-        )
-    if "root_excluded" in row["signals"]:
-        bits.append(
-            "some withdrawals to it were excluded by their Merkle root and are not counted "
-            "(context only)"
-        )
-    if "root_partial" in row["signals"]:
-        bits.append(
-            "some of the wallet's notes were not yet in the tree at the root of a withdrawal "
-            "to it; nothing was removed (context only)"
-        )
-    if "linked_sender" in row["signals"]:
-        bits.append("a withdrawal to it was sent by the depositor or its direct counterparty")
-    if "shared_deposit" in row["signals"]:
-        bits.append("sent funds to the same exchange deposit address as the depositor")
-    if "early_profile" in row["signals"]:
-        bits.append(
-            f"received the wallet's full note profile within {EARLY_PROFILE_HOURS} h "
-            "of the last deposit in each pool"
-        )
-    text = "; ".join(bits)
-    return text[0].upper() + text[1:] + "."
+    """Why an address was chosen: every signal that fired for it, each with its concrete
+    evidence (sender, transactions, counts) and how it counts. Built from the row's
+    evidence lines (:func:`candidate_evidence`), so it never names a signal that did not
+    fire and never falls back to generic wording."""
+    held = [e for e in row.get("evidence") or [] if e["holds"]]
+    if not held:
+        return "No signal fired for this address."
+    parts = []
+    for e in held:
+        detail = e["detail"]
+        status = _REASON_STATUS.get(e["signal"], "context only, not scored")
+        parts.append(f"{e['label'][0].upper() + e['label'][1:]}: {detail} ({status}).")
+    if not set(row["signals"]) & LEAD_SIGNALS:
+        parts.append("No lead signal.")
+    return " ".join(parts)
 
 
 EVIDENCE_LABEL = {
@@ -417,18 +515,17 @@ EVIDENCE_LABEL = {
 }
 
 
-def _linked_detail(data, signals, address):
+def _linked_detail(data, signals, address, pool_key, recs):
     own = address == (data.get("wallet") or "").lower()
+    who = (
+        "is the depositor's own address"
+        if own
+        else f"is a direct counterparty of the depositor ({_link_text(data, address)}): it "
+        "transacts directly with the depositor outside Tornado"
+    )
     if "linked" in signals:
-        if own:
-            return (
-                f"is the depositor's own address; first withdrawal within {EARLY_EXIT_HOURS} h "
-                "of the last deposit"
-            )
-        return (
-            "transacts directly with the depositor outside Tornado; first withdrawal "
-            f"within {EARLY_EXIT_HOURS} h of the last deposit"
-        )
+        delay = _delay_text(data, pool_key, recs)
+        return f"{who}; {delay}, within {EARLY_EXIT_HOURS} h"
     if "linked_late" in signals:
         return "a direct link, but withdrawn late: see the next line"
     if own:
@@ -445,7 +542,11 @@ def _late_detail(data, pool_key, address):
         if pk == pool_key and addr == address
     ]
     own = address == (data.get("wallet") or "").lower()
-    who = "is the depositor's own address" if own else "transacts directly with the depositor"
+    who = (
+        "is the depositor's own address"
+        if own
+        else f"is a direct counterparty of the depositor ({_link_text(data, address)})"
+    )
     hours = hits[0] if hits else None
     when = (
         f"its first withdrawal came {hours:.0f} h after the last deposit"
@@ -458,17 +559,35 @@ def _late_detail(data, pool_key, address):
     )
 
 
-def _sender_detail(data, pool_key, address):
+def _sender_detail(data, pool_key, address, hits_total):
     hits = [
         (sender, tx)
         for pk, addr, sender, tx in data.get("heuristics", {}).get("linked_senders", [])
         if pk == pool_key and addr == address
     ]
     if not hits:
-        return "no withdrawal to it was sent by the depositor or its counterparties"
-    sender = hits[0][0]
-    who = "the depositor" if sender == (data.get("wallet") or "").lower() else sender
-    return f"withdrawal {hits[0][1]} was sent by {who}"
+        return "no withdrawal to it was sent by the depositor or one of its direct counterparties"
+    wallet = (data.get("wallet") or "").lower()
+    by_sender: dict[str, list[str]] = {}
+    for sender, tx in hits:
+        by_sender.setdefault(sender, []).append(tx)
+    parts = []
+    for sender, txs in by_sender.items():
+        n = len(txs)
+        who = (
+            f"the depositor itself ({sender})"
+            if sender == wallet
+            else f"{sender}, which is a direct counterparty of the depositor "
+            f"({_link_text(data, sender)})"
+        )
+        first = f"tx {txs[0]}" if n == 1 else f"first tx {txs[0]}"
+        parts.append(
+            f"{n} of {_plural(hits_total, 'withdrawal')} to this address "
+            f"{'was' if n == 1 else 'were'} sent by {who}: that address signed the "
+            f"withdrawal {'transaction' if n == 1 else 'transactions'} and paid the gas, "
+            f"no relayer service did ({first})"
+        )
+    return "; ".join(parts)
 
 
 def _deposit_detail(data, pool_key, address):
@@ -484,7 +603,7 @@ def _deposit_detail(data, pool_key, address):
     for dep in hits[0]:
         row = info.get(dep, {})
         target = row.get("exchange") or "a hot wallet"
-        parts.append(f"{dep[:10]}…, swept to {target}")
+        parts.append(f"{dep}, swept to {target}")
     return (
         "sent funds to the same exchange deposit address as the depositor ("
         + "; ".join(parts)
@@ -504,14 +623,15 @@ def _root_detail(data, pool_key, address, kind):
     part = [e for e in h.get("root_partial", []) if e[0] == pool_key and e[1] == address]
     if kind == "root_excluded" and gone:
         return (
-            f"{len(gone)} withdrawal(s) excluded by their Merkle root (the tree held none of "
-            "the wallet's notes in this pool) and not counted"
+            f"{_plural(len(gone), 'withdrawal')} excluded by their Merkle root (the tree held "
+            "none of the wallet's notes in this pool) and not counted"
         )
     if kind == "root_partial" and part:
         n_root = min(e[3] for e in part)
         return (
-            f"{len(part)} withdrawal(s) prove against a root that was missing some of the "
-            f"wallet's notes (leaf >= {n_root}) at that time; nothing removed, all still counted"
+            f"{_plural(len(part), 'withdrawal')} {'proves' if len(part) == 1 else 'prove'} against a root that was missing some "
+            f"of the wallet's notes (leaf >= {n_root}) at that time; nothing removed, all "
+            "still counted"
         )
     return ""
 
@@ -526,8 +646,8 @@ def _early_profile_detail(data, signals):
     text = _profile_text(data, profile)
     if "early_profile" in signals:
         return (
-            f"received the wallet's full profile {text} within {EARLY_PROFILE_HOURS} h "
-            "of the last deposit in each pool"
+            f"received the wallet's full note profile within {EARLY_PROFILE_HOURS} h "
+            f"of the last deposit in each pool ({text})"
         )
     return (
         f"did not receive the wallet's full profile {text} within {EARLY_PROFILE_HOURS} h "
@@ -548,10 +668,40 @@ def _withdrawal_delay_hours(data, pool_key, recs):
     return (stamps[0] - max(last)) / 3600.0 if last else None
 
 
+def _tx_list(hashes: list[str], limit: int = 3) -> str:
+    """ "0xa, 0xb, 0xc and 4 more" (full hashes)."""
+    shown = ", ".join(hashes[:limit])
+    more = len(hashes) - limit
+    return shown + (f" and {more} more" if more > 0 else "")
+
+
+def _gas_detail(data, pool_key, address):
+    gas = [
+        (gp, tx)
+        for pk, addr, gp, tx in data.get("heuristics", {}).get("gas_price_matches", [])
+        if pk == pool_key and addr == address
+    ]
+    if not gas:
+        return "no deposit gas price reused (or not checkable after EIP-1559)"
+    gp, tx = gas[0]
+    same = [(n, d) for n, d in numbered_deposits(data) if d.get("gas_price") == gp]
+    same.sort(key=lambda x: (x[1].get("pool_key") != pool_key, x[0]))
+    text = f"self-relayed withdrawal {tx} paid {gp / 1e9:.3f} gwei"
+    if same:
+        n, dep = same[0]
+        ref = f"deposit D{n} (tx {dep['hash']})" if dep.get("hash") else f"deposit D{n}"
+        text += f", the gas price of {ref}"
+        if len(same) > 1:
+            text += f"; also used by {_numbers_text([m for m, _d in same[1:]])}"
+    return text + f"; a price used by at most {MAX_GAS_PRICE_SHARE} withdrawals in the window"
+
+
 def candidate_evidence(data: dict, pool_key: str, address: str) -> list[dict]:
     """Every evidence line for one candidate, including those that do not hold.
 
     Each item: {signal, label, family, holds, detail}. Attribution is not evidence.
+    A line that holds names its concrete evidence (counts, transactions, addresses,
+    deposit numbers of :func:`numbered_deposits`).
     """
     res = data["denoms"][pool_key]
     signals = set(res.get("signals", {}).get(address, []))
@@ -562,12 +712,17 @@ def candidate_evidence(data: dict, pool_key: str, address: str) -> list[dict]:
     sharing = sum(1 for c in res.get("field_counts", res["counts"]).values() if c == hits)
     disc = res.get("discrimination", {}).get(address, 0.0)
 
-    sizes = [v["count"] for v in data.get("vouchers", []) if v["pool_key"] == pool_key]
-    what = f"a {hits}-note voucher" if hits in sizes else f"all {hits} notes of the pool's vouchers"
+    sized = [
+        v for v in data.get("vouchers", []) if v["pool_key"] == pool_key and v["count"] == hits
+    ]
+    if sized:
+        what = " or ".join(_voucher_text(data, v) for v in sized)
+    else:
+        what = f"all {hits} notes of the pool's vouchers"
     if hits in targets:
         count_detail = (
-            f"{hits} withdrawal(s) = {what}; {sharing} of {field} "
-            f"recipients in the window share this count; disc {disc:.2f} "
+            f"received {_plural(hits, 'withdrawal')} = {what} within its window; {sharing} of "
+            f"{field} recipients in the window share this count; discrimination {disc:.2f} "
             f"(counted from {MIN_COUNT_DISCRIMINATION:.2f})"
         )
         delay = _withdrawal_delay_hours(data, pool_key, recs)
@@ -581,32 +736,27 @@ def candidate_evidence(data: dict, pool_key: str, address: str) -> list[dict]:
                 "this size (some precede its deposits)"
             )
     else:
+        sizes = ", ".join(map(str, targets)) or "none"
         count_detail = (
-            f"{hits} withdrawal(s); voucher size(s) {', '.join(map(str, targets)) or '-'}"
+            f"{_plural(hits, 'withdrawal')}, no voucher of that size "
+            f"(voucher {'size' if len(targets) == 1 else 'sizes'}: {sizes})"
         )
 
-    n_self = sum(1 for r in recs if r.get("self_relayed"))
-    gas = [
-        gp
-        for pk, addr, gp, _tx in data.get("heuristics", {}).get("gas_price_matches", [])
-        if pk == pool_key and addr == address
+    selfs = [
+        r["hash"] for r in sorted(recs, key=lambda r: r.get("ts") or 0) if r.get("self_relayed")
     ]
     lines = [
         ("count_match", count_detail),
         (
             "self_relayed",
-            f"{n_self} of {hits} withdrawal(s) sent without a relayer"
-            if n_self
-            else "every withdrawal went through a relayer",
+            f"{len(selfs)} of {_plural(hits, 'withdrawal')} sent without a relayer (the "
+            f"recipient paid the gas): {_tx_list(selfs)}"
+            if selfs
+            else "no withdrawal was self-relayed (sent by the recipient itself)",
         ),
-        (
-            "gas_price",
-            f"withdrawal gas price {gas[0] / 1e9:.3f} gwei equals a deposit's"
-            if gas
-            else "no deposit gas price reused (or not checkable after EIP-1559)",
-        ),
-        ("linked", _linked_detail(data, signals, address)),
-        ("linked_sender", _sender_detail(data, pool_key, address)),
+        ("gas_price", _gas_detail(data, pool_key, address)),
+        ("linked", _linked_detail(data, signals, address, pool_key, recs)),
+        ("linked_sender", _sender_detail(data, pool_key, address, hits)),
         ("shared_deposit", _deposit_detail(data, pool_key, address)),
         ("early_profile", _early_profile_detail(data, signals)),
     ]
@@ -624,9 +774,84 @@ def candidate_evidence(data: dict, pool_key: str, address: str) -> list[dict]:
             "family": METHOD_FAMILY[signal],
             "holds": signal in signals,
             "detail": detail,
+            "short": _short_evidence(data, signal, pool_key, address, recs, hits, disc)
+            if signal in signals
+            else "",
         }
         for signal, detail in lines
     ]
+
+
+def _short_evidence(data, signal, pool_key, address, recs, hits, disc) -> str:
+    """One short phrase for a fired signal (the one-line "why", see
+    :func:`candidate_reason_short`); still concrete: counts, deposit numbers, addresses."""
+    if signal == "count_match":
+        return f"{_plural(hits, 'withdrawal')} = a {hits}-note voucher, discrimination {disc:.2f}"
+    if signal == "self_relayed":
+        n = sum(1 for r in recs if r.get("self_relayed"))
+        return f"{n} of {_plural(hits, 'withdrawal')} self-relayed"
+    if signal == "gas_price":
+        gps = [
+            gp
+            for pk, a, gp, _tx in data.get("heuristics", {}).get("gas_price_matches", [])
+            if pk == pool_key and a == address
+        ]
+        nums = [n for n, d in numbered_deposits(data) if gps and d.get("gas_price") == gps[0]]
+        return f"gas price of deposit D{nums[0]}" if nums else "gas price of a deposit"
+    if signal in ("linked", "linked_late"):
+        own = address == (data.get("wallet") or "").lower()
+        who = "the depositor's own address" if own else "direct counterparty of the depositor"
+        delay = _delay_text(data, pool_key, recs).replace("first withdrawal ", "")
+        delay = delay.replace(" after the voucher's last deposit", " after the last deposit")
+        return f"{who}, first withdrawal {delay}" + (" (late)" if signal == "linked_late" else "")
+    if signal == "linked_sender":
+        return _sender_summary(data, pool_key, address, hits)
+    if signal == "shared_deposit":
+        hits_ = [
+            addrs
+            for pk, a, addrs in data.get("heuristics", {}).get("shared_deposits", [])
+            if pk == pool_key and a == address
+        ]
+        deps = ", ".join(hits_[0]) if hits_ else ""
+        return f"shared exchange deposit address {deps}".strip()
+    if signal == "early_profile":
+        return f"full note profile within {EARLY_PROFILE_HOURS} h"
+    if signal == "profile_match":
+        return "full multi-pool fingerprint"
+    return "Merkle-root note"
+
+
+def candidate_reason_short(row: dict) -> str:
+    """The "why" in one line: each fired signal as a short concrete phrase, context
+    signals marked. For summaries (the report's first page); the full text is
+    :func:`candidate_reason`."""
+    held = [e for e in row.get("evidence") or [] if e["holds"]]
+    if not held:
+        return "No signal fired."
+    parts = []
+    for e in held:
+        text = e.get("short") or e["label"]
+        if e["signal"] in CONTEXT_SIGNALS | NOTE_SIGNALS:
+            text += " (context)"
+        elif e["signal"] in LEAD_SIGNALS:
+            text += " (lead)"
+        parts.append(text)
+    return "; ".join(parts)
+
+
+def _sender_summary(data: dict, pool_key: str, address: str, hits: int) -> str:
+    """ "29 of 29 withdrawals sent by 0x…" for the method breakdown table."""
+    wallet = (data.get("wallet") or "").lower()
+    by_sender = Counter(
+        sender
+        for pk, addr, sender, _tx in data.get("heuristics", {}).get("linked_senders", [])
+        if pk == pool_key and addr == address
+    )
+    return "; ".join(
+        f"{n} of {_plural(hits, 'withdrawal')} sent by "
+        + ("the depositor itself" if sender == wallet else f"direct counterparty {sender}")
+        for sender, n in by_sender.items()
+    )
 
 
 def method_breakdown(data: dict) -> list[dict]:
@@ -665,7 +890,7 @@ def method_breakdown(data: dict) -> list[dict]:
                     "self_relayed": f"{n_self}/{hits} withdrawals self-relayed",
                     "gas_price": "gas price equals a deposit's",
                     "linked": "direct counterparty of the depositor",
-                    "linked_sender": "withdrawal sent by the depositor or its counterparty",
+                    "linked_sender": _sender_summary(data, pool_key, addr, hits),
                     "shared_deposit": "sent to an exchange deposit address the depositor also used",
                     "early_profile": "received the wallet's full profile within 72 h",
                 }[s]
@@ -712,6 +937,17 @@ METHOD_FAMILY = {
 # were 18 target against 30 decoy leads on Ethereum, R 1.77 (0.16-3.91), and 23
 # against 13 on Polygon, R 0.58 (0.00-3.16); not above chance).
 CONTEXT_SIGNALS = frozenset({"linked_late", "linked_sender", "shared_deposit"})
+
+# What is known about each context signal, in running text. The one source for every
+# generated "how to read" text (a test pins that the keys equal CONTEXT_SIGNALS).
+CONTEXT_VERDICT = {
+    "linked_late": "did not beat chance on real depositors",
+    "linked_sender": "did not beat chance on real depositors",
+    "shared_deposit": (
+        "not shown above chance at 30 days; post-hoc, untested "
+        "(at 72 h: Ethereum 14/2, Polygon 23/0)"
+    ),
+}
 
 # A note on a candidate, not evidence for it: some of its withdrawals were excluded by
 # their Merkle root (tornado_demix.root_exclusion). Never scored, never a lead, never
@@ -782,9 +1018,9 @@ def band_rationale(band: str, signals: set[str]) -> str:
         )
     if "shared_deposit" in signals:
         return (
-            "no lead signal; a shared exchange deposit address did not beat chance in the "
-            "second hold-out (30 days: 18 against 30 decoy leads on Ethereum, 23 against 13 "
-            "on Polygon), so it is context only"
+            "no lead signal; a shared exchange deposit address is "
+            f"{CONTEXT_VERDICT['shared_deposit']}; at 30 days 18 against 30 decoy leads on "
+            "Ethereum and 23 against 13 on Polygon, so it is context only"
         )
     if "linked_late" in signals:
         return (
@@ -811,11 +1047,15 @@ def cross_method(data: dict, min_methods: int = 2) -> list[dict]:
     """Addresses selected by two or more *independent* methods.
 
     Independence is by family (:data:`METHOD_FAMILY`), not by signal name.
-    ``n_methods`` counts families; ``methods`` still lists every individual
-    method that fired, so the report can show all of them.
+    ``n_methods`` counts families; ``methods`` lists every individual method of
+    those families that fired. Context-only and note signals (family "context":
+    a late link, the withdrawal sender, a shared deposit address, a Merkle-root
+    note) are neither evidence nor independent, so they are left out of both.
     """
     agg = {}
     for m in method_breakdown(data):
+        if METHOD_FAMILY.get(m["method"], m["method"]) == "context":
+            continue
         for r in m["rows"]:
             key = (r["address"], r["pool_key"])
             e = agg.setdefault(
@@ -855,12 +1095,62 @@ def cross_method(data: dict, min_methods: int = 2) -> list[dict]:
     return out
 
 
+def candidate_kind(row: dict) -> str:
+    """Which kind a ranked candidate is, the one classification every output uses (CLI
+    summary, HTML report, web UI): ``lead`` (strong or moderate), ``context`` (weak with
+    a context-only signal) or ``chance`` (weak on amount+timing or gas price alone)."""
+    if row["band"] in ("strong", "moderate"):
+        return "lead"
+    if set(row["signals"]) & CONTEXT_SIGNALS:
+        return "context"
+    return "chance"
+
+
+def profile_match_kind(fingerprint: dict) -> str:
+    """Kind of a multi-wallet profile match, on the same scale as :func:`candidate_kind`:
+    a wallet's full fingerprint over two or more pools is ``context``; a single-pool
+    "fingerprint" is just the count match, so ``chance``."""
+    return "context" if len(fingerprint or {}) >= 2 else "chance"
+
+
+_KIND_PHRASE = {"context": "context-only", "chance": "chance-level"}
+
+
 def conclusion(data: dict) -> str:
-    """Summarise the outcome as labelled lines: the top candidate, the evidence
-    families behind it, the candidate count per band, and the limits."""
+    """Summarise the outcome as labelled lines: the top candidate (or, with no lead,
+    the tied weak candidates, named context-only or chance-level by
+    :func:`candidate_kind`), the evidence families behind it, the
+    candidate count per band, and the limits."""
     cands = ranked_candidates(data)
     lines = []
-    if cands:
+    if cands and cands[0]["band"] == "weak":
+        # No lead signal anywhere: every candidate is weak (context only or
+        # chance-level), and the score only orders signals that real depositors
+        # and decoys show equally often. Say so instead of naming a "top" one.
+        best = f"{cands[0]['confidence']:.2f}"
+        tied = sorted(
+            (c for c in cands if f"{c['confidence']:.2f}" == best),
+            key=lambda c: (-c["hits"], c["address"]),
+        )
+        kinds = {candidate_kind(c) for c in tied}
+        phrase = _KIND_PHRASE[kinds.pop()] if len(kinds) == 1 else "weak"
+        lines.append(
+            f"No lead. Highest-scoring {phrase} candidates ({len(tied)} tied at score {best}): "
+            + ", ".join(f"{c['address']} ({c['pool_key']})" for c in tied[:5])
+            + (f" and {len(tied) - 5} more" if len(tied) > 5 else "")
+            + "."
+        )
+        lines.append(
+            "Order within a tie: more withdrawals first, then address (ascending); "
+            "the order carries no meaning."
+        )
+        lines.append(f"Basis of the first: {candidate_reason(tied[0])}")
+        n_ctx = sum(1 for c in cands if candidate_kind(c) == "context")
+        lines.append(
+            f"Candidates: 0 strong, 0 moderate, {len(cands)} weak ({n_ctx} context only, "
+            f"{len(cands) - n_ctx} chance-level)."
+        )
+    elif cands:
         top = cands[0]
         families = sorted(
             {

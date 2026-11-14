@@ -229,7 +229,7 @@ def test_labels_route_all_and_failure(web, monkeypatch):
 
 def test_labels_route_requires_csrf(web, monkeypatch):
     monkeypatch.setattr(webapp, "fetch_attribution", lambda *a, **k: pytest.fail("fetched"))
-    assert web.post("/labels/fetch", data={"network": "bsc"}).status_code == 400
+    assert web.post("/labels/fetch", data={"network": "bsc"}).status_code == 403
 
 
 def test_labels_route_unknown_network_is_a_message(web):

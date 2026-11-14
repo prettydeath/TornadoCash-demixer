@@ -180,4 +180,6 @@ def test_a_late_link_is_not_an_independent_family():
     data = apply_heuristics(_data(200), counterparties={LINKED})
     assert all(r["address"] != LINKED for r in cross_method(data))
     text = conclusion(data)
-    assert "context" not in text.split("Evidence families:")[1].split("\n")[0]
+    # A late link alone is no lead: no top candidate and no family is named.
+    assert text.startswith("No lead.")
+    assert "Evidence families" not in text

@@ -119,7 +119,7 @@ def test_malformed_body_raises():
         ("Crypto.com 3", "name", "exchange", "Crypto.com"),
         ("KuCoin: Hot", "name", "exchange", "KuCoin"),
         ("Kraken 4", "name", "exchange", "Kraken"),
-        ("Gate.io: Wallet", "name", "exchange", "Gate"),
+        ("Gate.io: Wallet", "name", "other", "Gate.io: Wallet"),
         ("Huobi 12", "name", "exchange", "HTX"),
         ("HTX: Hot Wallet", "name", "exchange", "HTX"),
         ("binance: cold", "name", "exchange", "Binance"),
@@ -208,15 +208,6 @@ def test_fetch_and_cache_accumulates(tmp_path):
     bl.fetch_and_cache(137, [a], session=s1, directory=str(tmp_path))
     s2 = _Session(tags_for=lambda x: [{"name": "Coinbase 9"}] if x.lower() == b else [])
     assert set(bl.fetch_and_cache(137, [b], session=s2, directory=str(tmp_path))) == {a, b}
-
-
-def test_keccak_missing_gives_clear_error(monkeypatch):
-    def boom():
-        raise bl.KeccakMissing("install tornado-demix[labels]")
-
-    monkeypatch.setattr(bl, "_load_keccak", boom)
-    with pytest.raises(bl.KeccakMissing):
-        bl.to_checksum("0x" + "1" * 40)
 
 
 @pytest.mark.live

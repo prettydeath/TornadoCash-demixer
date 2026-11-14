@@ -10,7 +10,7 @@ from tornado_demix import cluster
 from tornado_demix.networks import Network
 from tornado_demix.pools import Pool
 
-WALLET = "0x019b5bb2051797e33f726d0e7a8cb9b9c2003ac2"
+WALLET = "0x1234567890abcdef1234567890abcdef12345678"
 
 ETH_POOL = "0x47ce0c6ed5b0ce3d3a51fdb1c52dc66a7c3c2936"
 BNB_POOL = "0x84443cfd09a48af6ef360c6976c5392ac5023a1f"

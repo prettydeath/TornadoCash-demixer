@@ -4,125 +4,86 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>TornadoCash Demixer</title>
-<script>try{document.documentElement.setAttribute('data-theme',localStorage.getItem('tcd-theme')||'light');}catch(e){document.documentElement.setAttribute('data-theme','light');}</script>
-<style>
-  :root{ --bg:#0b0f19; --panel:#111827; --line:#24304a; --ink:#e5e9f0; --muted:#8b97ad;
-         --accent:#2dd4bf; --accent-dim:#134e4a; --flag:#f0a35e; --radius:10px;
-         --input-bg:#0b1120; --hover:#0e1626; --btn-ink:#04241f;
-         --err-bg:#2a1720; --err-line:#7f2333; --err-ink:#fbcfd6;
-         --mod-bg:#3a2a12; --weak-bg:#141c2c; color-scheme:dark; }
-  :root[data-theme="light"]{
-         --bg:#f5f7fa; --panel:#ffffff; --line:#e2e6ee; --ink:#1b2432; --muted:#5c6675;
-         --accent:#0d9488; --accent-dim:#d5f3ee; --flag:#c2610c;
-         --input-bg:#f8fafc; --hover:#eef2f7; --btn-ink:#ffffff;
-         --err-bg:#fdecef; --err-line:#f2b8c1; --err-ink:#8a1c2b;
-         --mod-bg:#fbeecf; --weak-bg:#eef1f6; color-scheme:light; }
-  *{ box-sizing:border-box; }
-  [hidden]{ display:none !important; }
-  body{ margin:0; padding:2.5rem 1.25rem; background:var(--bg); color:var(--ink);
-        font:15px/1.6 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif; }
-  .wrap{ max-width:1120px; margin:0 auto; }
-  h1{ margin:0 0 .3rem; font-size:1.55rem; font-weight:600; letter-spacing:-.01em; }
-  h2{ font-size:1.05rem; font-weight:600; margin:2rem 0 .6rem; }
-  h3{ font-size:.95rem; font-weight:600; margin:1.3rem 0 .5rem; color:var(--muted); }
-  .sub{ color:var(--muted); margin-bottom:1.5rem; font-size:.92rem; }
-  form{ background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); padding:1.1rem; }
-  .row{ display:flex; gap:.8rem; flex-wrap:wrap; align-items:flex-end; margin-top:.9rem; }
-  label{ display:block; font-size:.72rem; text-transform:uppercase; letter-spacing:.04em;
-         color:var(--muted); margin-bottom:.35rem; }
-  textarea,input,select{ background:var(--input-bg); color:var(--ink); border:1px solid var(--line);
-        border-radius:8px; padding:.55rem .65rem; font-size:.9rem; font-family:inherit; }
-  textarea:focus,input:focus,select:focus{ outline:none; border-color:var(--accent);
-        box-shadow:0 0 0 3px rgba(45,212,191,.15); }
-  textarea{ width:100%; min-height:110px; font-family:ui-monospace,Menlo,monospace;
-            font-size:.82rem; resize:vertical; }
-  button{ background:var(--accent); color:var(--btn-ink); border:0; border-radius:8px;
-          padding:.6rem 1.2rem; font-weight:600; cursor:pointer; }
-  @media (prefers-reduced-motion:no-preference){
-    button{ transition:transform .1s ease, filter .12s ease; }
-    tbody tr{ transition:background .12s ease; }
-    a{ transition:color .12s ease; } }
-  button:hover{ filter:brightness(1.06); }
-  button:active{ transform:translateY(1px); }
-  table{ width:100%; border-collapse:collapse; margin:.4rem 0 1.1rem; table-layout:fixed; }
-  th{ text-align:left; font-size:.68rem; text-transform:uppercase; letter-spacing:.04em;
-      color:var(--muted); font-weight:600; padding:.5rem .6rem; border-bottom:1px solid var(--line); }
-  td{ padding:.5rem .6rem; font-size:.84rem; border-bottom:1px solid var(--line);
-      vertical-align:top; overflow-wrap:anywhere; }
-  tbody tr:hover{ background:var(--hover); }
-  .num{ font-family:ui-monospace,Menlo,monospace; font-variant-numeric:tabular-nums; }
-  .mono{ font-family:ui-monospace,Menlo,monospace; font-size:.79rem; overflow-wrap:anywhere; }
-  a{ color:var(--accent); text-decoration:none; } a:hover{ text-decoration:underline; }
-  .err{ background:var(--err-bg); border:1px solid var(--err-line); color:var(--err-ink);
-        padding:.75rem .95rem; border-radius:8px; margin-top:1rem; }
-  .note{ color:var(--muted); font-size:.8rem; margin-top:.4rem; }
-  .flag{ color:var(--accent); font-weight:600; }
-  .pill{ display:inline-block; background:var(--hover); border:1px solid var(--line); border-radius:999px;
-         padding:.08rem .55rem; font-size:.72rem; color:var(--muted); margin:1px 2px 1px 0; }
-  .chip{ display:inline-block; background:var(--hover); border:1px solid var(--line); border-radius:999px;
-         padding:.15rem .65rem; font-size:.74rem; color:var(--muted); }
-  .card{ background:var(--panel); border:1px solid var(--line); border-radius:var(--radius);
-         padding:1rem 1.15rem; margin-bottom:1.1rem; }
+<script nonce="{{ csp_nonce }}">try{var t=localStorage.getItem('tcd-theme');if(t==='light'||t==='dark'){document.documentElement.setAttribute('data-theme',t);}}catch(e){}</script>
+<style>{{ report_css|safe }}
+  /* The console around the report: the form, the job box and the downloads. */
+  .console{ max-width:1180px; margin:0 auto; padding:1.2rem 1.25rem 0; }
+  .console h1{ margin:.1rem 0 .2rem; }
+  .sub{ color:var(--muted); margin-bottom:1rem; font-size:.88rem; max-width:80ch; }
+  form.run{ background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); padding:1rem 1.1rem; }
+  fieldset{ border:0; margin:0; padding:0; min-width:0; }
+  legend{ font-size:.8rem; color:var(--muted); margin-bottom:.35rem; padding:0; }
+  .modes{ display:flex; flex-wrap:wrap; gap:.4rem; }
+  .modes label{ display:flex; flex-direction:column; gap:.05rem; border:1px solid var(--line); border-radius:6px;
+    padding:.45rem .7rem; cursor:pointer; background:var(--bg); min-width:9.5rem; font-size:.86rem; color:var(--ink); }
+  .modes label small{ color:var(--muted); font-size:.74rem; }
+  .modes input{ position:absolute; opacity:0; width:1px; height:1px; }
+  .modes input:checked + label{ border-color:var(--accent); background:var(--accent-soft); }
+  .modes input:focus-visible + label{ outline:2px solid var(--accent); outline-offset:2px; }
+  .row{ display:flex; gap:.8rem; flex-wrap:wrap; align-items:flex-end; margin-top:.8rem; }
+  .field label{ display:block; font-size:.8rem; color:var(--soft); margin-bottom:.25rem; }
+  .check{ font-size:.82rem; color:var(--soft); display:flex; align-items:center; gap:.35rem; }
+  .check input{ width:auto; margin:0; }
+  textarea,input,select{ background:var(--bg); color:var(--ink); border:1px solid var(--line);
+    border-radius:6px; padding:.45rem .55rem; font-size:.88rem; font-family:inherit; }
+  textarea{ width:100%; min-height:6.5rem; font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.8rem; resize:vertical; }
+  textarea.single{ min-height:2.6rem; height:2.6rem; }
+  [aria-invalid="true"]{ border-color:var(--fail); }
+  .ferr{ color:var(--fail); font-size:.8rem; margin-top:.25rem; }
+  button.go{ background:var(--accent); color:var(--panel); border:0; border-radius:6px; padding:.55rem 1.2rem;
+    font-weight:650; cursor:pointer; font-size:.9rem; }
   .btn{ display:inline-block; background:transparent; color:var(--accent); border:1px solid var(--line);
-        border-radius:8px; padding:.42rem .85rem; font-size:.82rem; cursor:pointer; }
+    border-radius:6px; padding:.32rem .7rem; font-size:.82rem; cursor:pointer; font-family:inherit; }
   .btn:hover{ border-color:var(--accent); text-decoration:none; }
-  .conf{ display:flex; align-items:center; gap:.5rem; white-space:nowrap; }
-  .conf b{ font-family:ui-monospace,monospace; font-size:.8rem; min-width:2.3rem; }
-  .cbar{ display:block; height:3px; width:56px; border-radius:2px;
-         background:linear-gradient(90deg,var(--accent) var(--w),var(--hover) var(--w)); }
-  .conf .pct{ color:var(--muted); font-weight:400; font-size:.72rem; }
-  .badge{ display:inline-block; white-space:nowrap; border-radius:999px; padding:.08rem .5rem; font-size:.62rem;
-          font-weight:700; letter-spacing:.06em; text-transform:uppercase; border:1px solid var(--line); }
-  .badge.strong{ background:var(--accent-dim); color:var(--accent); border-color:var(--accent); }
-  .badge.moderate{ background:var(--mod-bg); color:var(--flag); border-color:var(--flag); }
-  .badge.weak{ background:var(--weak-bg); color:var(--muted); border-color:var(--line); }
-  .eyebrow{ font-size:.66rem; letter-spacing:.14em; text-transform:uppercase; color:var(--accent); font-weight:600; }
-  .metrics{ display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:1px;
-            background:var(--line); border:1px solid var(--line); border-radius:var(--radius);
-            overflow:hidden; margin:.9rem 0 .2rem; }
-  .metric{ background:var(--panel); padding:.75rem .9rem; }
-  .metric .k{ font-size:.64rem; letter-spacing:.07em; text-transform:uppercase; color:var(--muted); }
-  .metric .v{ font-family:ui-monospace,monospace; font-size:1.25rem; font-weight:600;
-              margin-top:.15rem; font-variant-numeric:tabular-nums; }
-  .metric .s{ font-size:.7rem; color:var(--muted); }
-  .callout{ background:var(--hover); border:1px solid var(--line); border-left:3px solid var(--accent);
-            border-radius:0 var(--radius) var(--radius) 0; padding:.85rem 1rem; color:var(--ink);
-            font-size:.86rem; line-height:1.6; margin-top:.8rem; }
-  .themebtn{ position:fixed; top:1rem; right:1rem; z-index:20; }
-  details.ev summary, details.params summary{ cursor:pointer; color:var(--muted); font-size:.76rem; margin-top:.25rem; }
-  details.params{ margin:.8rem 0 .4rem; }
-  details.params summary{ font-size:.85rem; }
-  details.ev ul{ list-style:none; margin:.3rem 0 0; padding:0; font-size:.78rem; }
-  details.ev li{ padding:.08rem 0; }
-  details.ev .ev-yes b{ color:var(--accent); }
-  details.ev .ev-no{ color:var(--muted); }
+  .err{ background:var(--fail-soft); border:1px solid var(--fail); color:var(--ink); padding:.65rem .85rem;
+    border-radius:6px; margin-top:.8rem; }
+  .note{ color:var(--muted); font-size:.8rem; margin-top:.5rem; }
+  .chip{ display:inline-block; background:var(--head); border:1px solid var(--line); border-radius:999px;
+    padding:0 .6rem; font-size:.76rem; color:var(--soft); font-weight:400; }
+  details.more{ margin-top:.7rem; }
+  details.more > summary{ cursor:pointer; color:var(--muted); font-size:.82rem; }
+  .job{ margin-top:.8rem; background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:.6rem .8rem; font-size:.85rem; }
+  .prog{ height:4px; border-radius:2px; background:var(--line); overflow:hidden; margin-top:.45rem; }
+  .prog span{ display:block; height:100%; width:30%; background:var(--accent); }
+  @media (prefers-reduced-motion:no-preference){ .prog span{ animation:slide 1.4s ease-in-out infinite; } }
+  @keyframes slide{ 0%{ transform:translateX(-100%); } 100%{ transform:translateX(340%); } }
+  .downloads{ display:flex; flex-wrap:wrap; gap:.4rem; margin:.5rem 0; }
+  .result{ border-top:2px solid var(--line); margin-top:1.4rem; padding-top:.4rem; }
+  .result .rhead{ background:transparent; border:0; margin:0; }
+  .result .rhead .sheet, .result main.sheet{ padding-left:0; padding-right:0; }
+  .console{ position:relative; }
+  .themebtn{ position:absolute; top:1.2rem; right:1.25rem; }
 </style>
 </head>
 <body>
-<button id="themeToggle" class="btn themebtn" type="button" title="Toggle light / dark theme">◐ Theme</button>
-<div class="wrap">
-  <div class="eyebrow">Forensic demix console · research use</div>
+<div class="console">
+  <button id="themeToggle" class="btn themebtn noprint" type="button" title="Switch between light and dark">Theme</button>
+  <div class="kicker">tornado-demix console, research use</div>
   <h1>TornadoCash Demixer</h1>
-  <div class="sub">Tornado Cash forensics over public on-chain data: evidence-banded exit leads, exit groups, operator clusters, tracing.</div>
+  <div class="sub">Tornado Cash forensics over public on-chain data: evidence-banded exit leads, exit groups, operator clusters, tracing. Every result is a lead to corroborate, not proof.</div>
 
-  <form method="post">
+  <form method="post" class="run noprint">
     <input type="hidden" name="csrf" value="{{ csrf }}">
-    <div>
-      <label for="wallets">Depositor wallets, one address per line (max {{ max_wallets }})</label>
-      <textarea id="wallets" name="wallets" placeholder="0x019b5bb2051797e33f726d0e7a8cb9b9c2003ac2&#10;0x450cc23c0bc13d46288deb36913fdaaee49fcd99" required>{{ wallets_raw }}</textarea>
+    <input type="hidden" name="async" id="asyncFlag" value="">
+    <fieldset>
+      <legend>Analysis</legend>
+      <div class="modes" id="analysis">
+        {% for m in modes %}
+        <input type="radio" name="analysis" id="mode-{{ m.key }}" value="{{ m.key }}" {% if analysis==m.key %}checked{% endif %}
+               data-label="{{ m.label }}" data-ph="{{ m.placeholder }}" data-single="{{ '1' if m.single else '' }}">
+        <label for="mode-{{ m.key }}">{{ m.title }}<small>{{ m.hint }}</small></label>
+        {% endfor %}
+      </div>
+    </fieldset>
+    {% set mode = modes_by_key.get(analysis, modes_by_key['demix']) %}
+    <div class="field" style="margin-top:.8rem">
+      <label for="wallets" id="walletsLabel">{{ mode.label }}</label>
+      <textarea id="wallets" name="wallets" class="{{ 'single' if mode.single else '' }}" placeholder="{{ mode.placeholder }}" required
+        {% if error_field == 'wallets' %}aria-invalid="true" aria-describedby="wallets-err"{% endif %}>{{ wallets_raw }}</textarea>
+      {% if error_field == 'wallets' %}<div class="ferr" id="wallets-err" role="alert">{{ error }}</div>{% endif %}
     </div>
     <div class="row">
-      <div>
-        <label for="analysis">Analysis</label>
-        <select id="analysis" name="analysis">
-          <option value="demix" {% if analysis=='demix' %}selected{% endif %}>demix, per wallet</option>
-          <option value="multi" {% if analysis=='multi' %}selected{% endif %}>multi, correlate wallets</option>
-          <option value="cluster" {% if analysis=='cluster' %}selected{% endif %}>cluster, split exits</option>
-          <option value="characterize" {% if analysis=='characterize' %}selected{% endif %}>characterize, one exit address</option>
-          <option value="trace" {% if analysis=='trace' %}selected{% endif %}>trace, follow funds from one exit</option>
-        </select>
-      </div>
-      <div>
+      <div class="field">
         <label for="network">Network</label>
         <select id="network" name="network">
           {% for n in networks %}
@@ -130,85 +91,120 @@
           {% endfor %}
         </select>
       </div>
-      <div>
+      <div class="field" id="windowFields" {% if analysis not in ('demix', 'multi', 'cluster') %}hidden{% endif %}>
         <label for="window_days">Window (days)</label>
-        <input id="window_days" name="window_days" type="number" min="1" max="365"
-               value="{{ window_days }}" style="width:6.5rem">
+        <input id="window_days" name="window_days" type="number" min="1" max="365" value="{{ window_days }}" style="width:6.5rem"
+          {% if error_field == 'window_days' %}aria-invalid="true" aria-describedby="window_days-err"{% endif %}>
+        {% if error_field == 'window_days' %}<div class="ferr" id="window_days-err" role="alert">{{ error }}</div>{% endif %}
       </div>
-      <div>
+      <div class="field" id="exitFields" {% if analysis not in ('demix', 'multi') %}hidden{% endif %}>
         <label for="exit_window" title="End the withdrawal search N hours after each voucher's last deposit. Cuts the recipient field so a count match discriminates and fast exits stand out; misses withdrawals delayed longer than N. Leave blank for the full window.">Exit window (h)</label>
-        <input id="exit_window" name="exit_window" type="number" min="0" step="0.5"
-               placeholder="off" value="{{ exit_window }}" style="width:6.5rem">
+        <input id="exit_window" name="exit_window" type="number" min="0" step="0.5" placeholder="off" value="{{ exit_window }}" style="width:6.5rem"
+          {% if error_field == 'exit_window' %}aria-invalid="true" aria-describedby="exit_window-err"{% endif %}>
+        {% if error_field == 'exit_window' %}<div class="ferr" id="exit_window-err" role="alert">{{ error }}</div>{% endif %}
       </div>
-      <div>
-        <label for="labels_blockscout" title="Also use cached Blockscout metadata tags as an extra label source (demix, multi, characterize, trace). In the deposit-address search only a Blockscout exchange tag counts. Fill the cache first with the form below the results or: tornado-demix labels blockscout --network NAME --addresses-file F. Blockscout tags are often copied from Etherscan, so they do not corroborate an Etherscan-derived label. Needs the labels extra.">
-          <input id="labels_blockscout" name="labels_blockscout" type="checkbox" value="1" {% if labels_blockscout %}checked{% endif %} style="width:auto;margin-right:.3rem">Blockscout labels (cached)</label>
+      <div class="field">
+        <label class="check" for="labels_blockscout" title="Also use cached Blockscout metadata tags as an extra label source (demix, multi, characterize, trace). In the deposit-address search only a Blockscout exchange tag counts. Fill the cache first with the form below the results or: tornado-demix labels blockscout --network NAME --addresses-file F. Blockscout tags are often copied from Etherscan, so they do not corroborate an Etherscan-derived label. Needs the labels extra.">
+          <input id="labels_blockscout" name="labels_blockscout" type="checkbox" value="1" {% if labels_blockscout %}checked{% endif %}>Blockscout labels (cached)</label>
       </div>
-      <button type="submit">Analyse</button>
+      <button type="submit" class="go">Run analysis</button>
     </div>
     <div class="row" id="demixFields" {% if analysis not in ('demix', '') %}hidden{% endif %}>
-      <div style="flex:1">
-        <label for="known_exits" title="Exits already known from the investigation. The recipients withdrawn with them in joint bursts (their exit group) are listed; context, not scored.">Known exits (optional, demix)</label>
-        <input id="known_exits" name="known_exits" class="mono" style="width:100%"
-               placeholder="0x…, 0x…" value="{{ known_exits }}">
+      <div class="field" style="flex:1">
+        <label for="known_exits" title="Exits already known from the investigation. The recipients withdrawn with them in joint bursts (their exit group) are listed; context, not scored.">Known exits (optional)</label>
+        <input id="known_exits" name="known_exits" class="mono" style="width:100%" placeholder="0x…, 0x…" value="{{ known_exits }}"
+          {% if error_field == 'known_exits' %}aria-invalid="true" aria-describedby="known_exits-err"{% endif %}>
+        {% if error_field == 'known_exits' %}<div class="ferr" id="known_exits-err" role="alert">{{ error }}</div>{% endif %}
       </div>
-      <div>
-        <label for="placebo" title="Also run the same search on a decoy window that ends a day before the first deposit, where no withdrawal can belong to this wallet, and compare the leads found there with the real ones. Doubles the explorer calls.">
-          <input id="placebo" name="placebo" type="checkbox" value="1" {% if placebo %}checked{% endif %} style="width:auto;margin-right:.3rem">Placebo check (doubles explorer calls)</label>
-      </div>
-      <div>
-        <label for="deposit_addresses" title="Look for deposit addresses (exchange, service, forwarder, smart account) the depositor sent funds to, and for withdrawal recipients that sent to the same one (context only, not a lead). Costs up to about 50 explorer calls per wallet.">
-          <input id="deposit_addresses" name="deposit_addresses" type="checkbox" value="1" {% if deposit_addresses %}checked{% endif %} style="width:auto;margin-right:.3rem">Deposit addresses</label>
-      </div>
-      <div>
-        <label for="root_check" title="Exploratory. Read the Merkle root of each candidate withdrawal and drop the withdrawals whose root predates every note of the depositor in that pool; a candidate with all withdrawals excluded leaves the ranking. At most 200 transaction lookups per wallet. The first run builds a root index per pool (about 30 minutes for a large one) and caches it, so the request can take that long.">
-          <input id="root_check" name="root_check" type="checkbox" value="1" {% if root_check %}checked{% endif %} style="width:auto;margin-right:.3rem">Merkle-root check (exploratory)</label>
-      </div>
+      <label class="check" for="placebo" title="Also run the same search on a decoy window that ends a day before the first deposit, where no withdrawal can spend this wallet's notes (it may still contain the depositor's earlier activity), and compare the leads found there with the real ones. Doubles the explorer calls.">
+        <input id="placebo" name="placebo" type="checkbox" value="1" {% if placebo %}checked{% endif %}>Placebo check (doubles explorer calls)</label>
+      <label class="check" for="deposit_addresses" title="Look for deposit addresses (exchange, service, forwarder, smart account) the depositor sent funds to, and for withdrawal recipients that sent to the same one (context only, not a lead). Costs up to about 50 explorer calls per wallet.">
+        <input id="deposit_addresses" name="deposit_addresses" type="checkbox" value="1" {% if deposit_addresses %}checked{% endif %}>Deposit addresses</label>
+      <label class="check" for="root_check" title="Exploratory. Read the Merkle root of each candidate withdrawal and drop the withdrawals whose root predates every note of the depositor in that pool; a candidate with all withdrawals excluded leaves the ranking. At most 200 transaction lookups per wallet. The first run builds a root index per pool (about 30 minutes for a large one) and caches it, so the request can take that long.">
+        <input id="root_check" name="root_check" type="checkbox" value="1" {% if root_check %}checked{% endif %}>Merkle-root check (exploratory)</label>
+    </div>
+    <div class="row" id="multiFields" {% if analysis!='multi' %}hidden{% endif %}>
+      <label class="check" for="group" title="Also treat the wallets as ONE depositor: merged deposits, one window per pool, count match and early profile on the merged notes. Conditional on your assertion that they are one actor; the per-wallet results do not change.">
+        <input id="group" name="group" type="checkbox" value="1" {% if group %}checked{% endif %}>Group view (wallets as one depositor)</label>
+      <label class="check" for="exact_k" title="Exploratory, needs the group view. Recipients with exactly the group's k notes of a pool in the group window, against earlier windows of the same length in the same pool. Up to 6 extra log reads per pool, spanning at most a year of pool history; never scored.">
+        <input id="exact_k" name="exact_k" type="checkbox" value="1" {% if exact_k %}checked{% endif %}>Exact-k base rate (exploratory)</label>
+    </div>
+    <div class="row" id="charFields" {% if analysis!='characterize' %}hidden{% endif %}>
+      <label class="check" for="deposit_check" title="Run the deposit-address check (exchange, service or deposit-like deposit address, forwarder, smart account) on the address and on each listed next hop. Up to about 70 explorer calls in the worst case; context only.">
+        <input id="deposit_check" name="deposit_check" type="checkbox" value="1" {% if deposit_check %}checked{% endif %}>Deposit-address check of listed addresses</label>
     </div>
     <div class="row" id="traceFields" {% if analysis!='trace' %}hidden{% endif %}>
-      <div>
+      <div class="field">
         <label for="trace_amount" title="Amount the exit address received and you want to follow, e.g. 10 for ten 1 ETH notes.">Amount to follow</label>
-        <input id="trace_amount" name="trace_amount" type="number" min="0" step="any"
-               placeholder="e.g. 10" value="{{ trace_amount }}" style="width:8rem">
+        <input id="trace_amount" name="trace_amount" type="number" min="0" step="any" placeholder="e.g. 10" value="{{ trace_amount }}" style="width:8rem"
+          {% if error_field == 'trace' %}aria-invalid="true" aria-describedby="trace-err"{% endif %}>
       </div>
-      <div>
+      <div class="field">
         <label for="trace_start_block" title="Block the funds arrived in; earlier outgoing transfers are not attributed. 0 = from the start.">Start block</label>
-        <input id="trace_start_block" name="trace_start_block" type="number" min="0"
-               placeholder="0" value="{{ trace_start_block }}" style="width:9rem">
+        <input id="trace_start_block" name="trace_start_block" type="number" min="0" placeholder="0" value="{{ trace_start_block }}" style="width:9rem">
       </div>
-      <div>
+      <div class="field">
         <label for="trace_token" title="ERC-20 contract of the amount; leave empty for the network's native currency.">Token (optional)</label>
-        <input id="trace_token" name="trace_token" placeholder="native currency"
-               value="{{ trace_token }}" style="width:22rem" class="mono">
+        <input id="trace_token" name="trace_token" placeholder="native currency" value="{{ trace_token }}" style="width:22rem" class="mono">
       </div>
-      <div>
+      <div class="field">
         <label for="trace_arrival_tx" title="Transaction that brought the amount to the address. Without it the arrival is matched by amount; equal inflows leave it ambiguous and the bounds widest.">Arrival transaction (optional)</label>
-        <input id="trace_arrival_tx" name="trace_arrival_tx" placeholder="0x... (matched by amount if empty)"
-               value="{{ trace_arrival_tx }}" style="width:34rem" class="mono">
+        <input id="trace_arrival_tx" name="trace_arrival_tx" placeholder="0x... (matched by amount if empty)" value="{{ trace_arrival_tx }}" style="width:34rem;max-width:100%" class="mono">
       </div>
-      <div>
+      <div class="field">
         <label for="trace_max_hops">Hops (1–{{ max_trace_hops }})</label>
-        <input id="trace_max_hops" name="trace_max_hops" type="number" min="1" max="{{ max_trace_hops }}"
-               placeholder="{{ default_hops }}" value="{{ trace_max_hops }}" style="width:5.5rem">
+        <input id="trace_max_hops" name="trace_max_hops" type="number" min="1" max="{{ max_trace_hops }}" placeholder="{{ default_hops }}" value="{{ trace_max_hops }}" style="width:5.5rem">
       </div>
+      {% if error_field == 'trace' %}<div class="ferr" id="trace-err" role="alert" style="flex-basis:100%">{{ error }}</div>{% endif %}
     </div>
+    <details class="more" {% if error_field == 'provider' %}open{% endif %}>
+      <summary>Provider settings (retries, pause, response cache)</summary>
+      <div class="row">
+        <div class="field">
+          <label for="max_wait" title="Longest one explorer call backs off on a transient error (rate limit, HTTP 5xx, timeout) before giving up. Permanent errors (invalid key, chain not on the plan, bad address) fail at once. Default 120.">Longest backoff (s)</label>
+          <input id="max_wait" name="max_wait" type="number" min="0" max="{{ max_wait_limit }}" step="1" placeholder="120" value="{{ max_wait }}" style="width:7rem">
+        </div>
+        <div class="field">
+          <label for="pause" title="Wait before every explorer call; for a free key shared with other programs.">Pause between calls (s)</label>
+          <input id="pause" name="pause" type="number" min="0" max="{{ pause_limit }}" step="0.1" placeholder="0" value="{{ pause }}" style="width:7rem">
+        </div>
+        <div class="field" style="flex:1">
+          <label for="http_cache" title="Directory that keeps explorer answers for reuse. Only queries ending at least 64 blocks below the chain head are stored; errors and the API key never are. Leave blank for no cache.">HTTP cache directory (optional)</label>
+          <input id="http_cache" name="http_cache" class="mono" style="width:100%" placeholder="e.g. .cache/http" value="{{ http_cache }}">
+        </div>
+      </div>
+      {% if error_field == 'provider' %}<div class="ferr" role="alert">{{ error }}</div>{% endif %}
+    </details>
   </form>
-  <div class="note">Results are probabilistic leads, not proof. Several wallets on a busy pool can take a
+  {% if job %}
+  <div id="jobBox" class="job noprint" role="status" data-job="{{ job }}">
+    <b>Running.</b> <span id="jobText">starting</span>
+    <div class="prog" aria-hidden="true"><span></span></div>
+    <noscript><br>Reload <a href="/?job={{ job }}">this link</a> to check whether it has finished.</noscript>
+  </div>
+  {% endif %}
+  <div class="note noprint">Results are probabilistic leads, not proof. Several wallets on a busy pool can take a
     few minutes. Add networks in <span class="mono">config/networks.csv</span>.</div>
 
-  {% if error %}<div class="err">{{ error }}</div>{% endif %}
-  <details class="note">
+  {% if error and (not error_field or (error_field in field_modes and analysis not in field_modes[error_field])) %}<div class="err" role="alert">{{ error }}</div>{% endif %}
+  <details class="more noprint">
     <summary>Fill the Blockscout label cache</summary>
     <form method="post" action="/labels/blockscout">
       <input type="hidden" name="csrf" value="{{ csrf }}">
-      <label for="bs_network">Network</label>
-      <select id="bs_network" name="network">
-        {% for n in networks %}<option value="{{ n }}" {% if network==n %}selected{% endif %}>{{ n }}</option>{% endfor %}
-      </select>
-      <label for="bs_addresses">Addresses (optional; empty = the addresses of the last result)</label>
-      <textarea id="bs_addresses" name="addresses" class="mono" rows="3" style="width:100%" placeholder="0x…"></textarea>
-      <button class="btn" type="submit">Fetch Blockscout tags</button>
-      <br>Sends the addresses to metadata.services.blockscout.com (third party), 20 per call, at most {{ blockscout_max }} addresses. Tick "Blockscout labels (cached)" to use them in the next analysis.
+      <div class="row">
+        <div class="field">
+          <label for="bs_network">Network</label>
+          <select id="bs_network" name="network">
+            {% for n in networks %}<option value="{{ n }}" {% if network==n %}selected{% endif %}>{{ n }}</option>{% endfor %}
+          </select>
+        </div>
+        <div class="field" style="flex:1">
+          <label for="bs_addresses">Addresses (optional; empty = the addresses of the last result)</label>
+          <textarea id="bs_addresses" name="addresses" class="mono single" rows="3" placeholder="0x…"></textarea>
+        </div>
+        <button class="btn" type="submit">Fetch Blockscout tags</button>
+      </div>
+      <div class="note">Sends the addresses to metadata.services.blockscout.com (third party), 20 per call, at most {{ blockscout_max }} addresses. Tick "Blockscout labels (cached)" to use them in the next analysis.</div>
     </form>
   </details>
 
@@ -217,396 +213,80 @@
   {% endif %}
 
   {% if result %}
-    <h2>Results <span class="chip">{{ result.n_wallets }} wallet(s) · {{ result.network }} · {{ result.kind }}</span></h2>
+    <h2>Results <span class="chip">{{ result.n_wallets }} {{ 'wallet' if result.n_wallets == 1 else 'wallets' }} · {{ result.network }} · {{ result.kind }}</span></h2>
     {% if result.skipped %}
       <div class="note">Skipped invalid entries: <span class="mono">{{ result.skipped|join(', ') }}</span></div>
     {% endif %}
-    {% if result.has_csv %}<a class="btn" href="/download.csv">Download CSV</a>{% endif %}
-    {% if result.report_key %}<a class="btn" href="/report/{{ result.report_key }}.html">Download report</a>{% endif %}
-
-    {% if result.kind == 'demix' %}
-      {% if result.no_labels %}
-        <form method="post" action="/labels/fetch" class="note">
-          <input type="hidden" name="csrf" value="{{ csrf }}">
-          No attribution set loaded for {{ result.network }}: exchange deposit addresses are shown as context only and the shared-deposit signal cannot fire. Download the public label set:
-          <button class="btn" type="submit" name="network" value="{{ result.network }}">{{ result.network }}</button>
-          <button class="btn" type="submit" name="network" value="all">all networks</button>
-          <br>Third-party data (<a href="https://github.com/prettydeath/wallet-attribution" target="_blank" rel="noopener">prettydeath/wallet-attribution</a>); each upstream source keeps its own licence.
-        </form>
-      {% endif %}
-      {% for b in result.blocks %}
-        <div class="card">
-          <h3 class="mono">{{ b.wallet }}
-            <a class="btn" style="float:right;padding:.3rem .7rem;margin-left:.4rem" href="/result/{{ b.wallet }}.json">JSON</a>
-            <a class="btn" style="float:right;padding:.3rem .7rem" href="/report/{{ b.wallet }}.html">Download report</a>
-          </h3>
-          {% if b.unresolved %}
-            <div class="note">
-              {{ b.unresolved|length }} pool(s) could NOT be searched — the block
-              window would not resolve, so this is not the same as finding
-              nothing:
-              {% for u in b.unresolved %}<br><b>{{ u.pool_key }}</b>: {{ u.reason }}{% endfor %}
-            </div>
-          {% endif %}
-          {% if b.no_deposits %}
-            <div class="note">No Tornado.Cash deposits found.</div>
-          {% else %}
-            <div class="metrics">
-              <div class="metric"><div class="k">Deposited</div><div class="v">{{ b.deposited }}</div><div class="s">{{ b.n_notes }} notes</div></div>
-              <div class="metric"><div class="k">Vouchers</div><div class="v">{{ b.vouchers|length }}</div><div class="s">denomination groups</div></div>
-              <div class="metric"><div class="k">Candidates</div><div class="v">{{ b.n_candidates }}</div><div class="s">ranked exits</div></div>
-              <div class="metric"><div class="k">Strongest band</div><div class="v">{{ b.top_band }}</div><div class="s">{{ b.leads|length }} self-relayed leads</div></div>
-            </div>
-            <details class="params"><summary>Analysis parameters</summary>
-              <table>
-                {% for label, value in b.assumptions.params %}<tr><td style="width:22%">{{ label }}</td><td>{{ value }}</td></tr>{% endfor %}
-              </table>
-              {% if b.assumptions.windows %}
-              <table>
-                <tr><th>Pool</th><th>Blocks read</th><th>Window (UTC)</th><th>Withdrawals / recipients</th></tr>
-                {% for w in b.assumptions.windows %}<tr><td class="num">{{ w.pool_key }}</td><td class="num">{{ w.blocks }}</td><td class="num">{{ w.dates }}</td><td class="num">{{ w.withdrawals }} / {{ w.recipients }}</td></tr>{% endfor %}
-              </table>
-              {% endif %}
-            </details>
-            <table>
-              <tr><th>Pool</th><th>Deposits</th><th>First deposit</th></tr>
-              {% for v in b.vouchers %}
-              <tr><td class="num">{{ v.pool_key }}</td><td class="num">{{ v.count }}</td><td class="num">{{ v.first }}</td></tr>
-              {% endfor %}
-            </table>
-            <h4 style="margin:1rem 0 .3rem;font-size:.9rem;">Ranked exit candidates</h4>
-            {% if b.ranked %}
-            <table>
-              {% if b.show_attr %}
-              <colgroup><col style="width:13%"><col style="width:24%"><col style="width:8%"><col style="width:11%"><col style="width:13%"><col></colgroup>
-              <tr><th>Band</th><th>Recipient</th><th>Pool</th><th>Score</th><th>Attribution</th><th>Why this address</th></tr>
-              {% else %}
-              <colgroup><col style="width:13%"><col style="width:27%"><col style="width:8%"><col style="width:11%"><col></colgroup>
-              <tr><th>Band</th><th>Recipient</th><th>Pool</th><th>Score</th><th>Why this address</th></tr>
-              {% endif %}
-              {% for c in b.ranked %}
-              <tr>
-                <td><span class="badge {{ c.band }}">{{ c.band }}</span>{% if c.early %}<div class="note">early exit</div>{% endif %}</td>
-                <td class="mono"><a href="{{ c.url }}" target="_blank" rel="noopener">{{ c.address }}</a></td>
-                <td class="num">{{ c.pool_key }}</td>
-                <td><div class="conf"><span class="pct">{{ c.score }}</span><span class="cbar" style="--w:{{ c.bar }}%"></span></div></td>
-                {% if b.show_attr %}<td class="flag">{{ c.attribution }}</td>{% endif %}
-                <td>{{ c.reason }}{% if c.early %}<div class="note">Linked exit withdrawn within 72 h of the deposit: such leads almost never appear in decoy windows (context, not scored).</div>{% endif %}
-                  <details class="ev"><summary>Evidence · disc {{ c.disc }} of {{ c.field }} recipients</summary>
-                    <ul>{% for e in c.evidence %}<li class="{{ 'ev-yes' if e.holds else 'ev-no' }}"><b>{{ '&#10003;'|safe if e.holds else '&#8211;'|safe }} {{ e.label }}</b> {{ e.detail }}</li>{% endfor %}</ul>
-                  </details></td>
-              </tr>
-              {% endfor %}
-            </table>
-            <div class="note">The <b>band</b> is the headline. <b>strong</b>: lead signals from two independent sources (an early direct link, an early multi-pool profile); <b>moderate</b>: a lead signal from one source, for example a linked address (a direct counterparty whose first withdrawal came within 72 h of the last deposit) or an early multi-pool profile match (the wallet's full note count in every pool it used, within 72 h of the last deposit in each, for wallets with at least 2 pools and 10 notes); <b>weak</b>: amount+timing or gas price only — on real depositors these fire as often in decoy windows as in real ones, so they are context and never raise the band. A direct link first withdrawn later than 72 h is shown as a <b>late direct link</b>: on real depositors it is chance-level, so it is context too (since 2.17). A withdrawal sent by the depositor's side (<b>linked sender</b>) is context as well since 2.19: it did not separate from chance in placebo tests. A <b>shared exchange deposit address</b> is context since 2.21: in the second hold-out it was not above chance at 30 days (18 target against 30 decoy leads on Ethereum, 23 against 13 on Polygon). The score only orders leads within a band; it is uncalibrated and not a probability. Open <b>Evidence</b> to see what was checked for each address.</div>
-            {% else %}<div class="note">No discriminating candidates (usually single-note vouchers).</div>{% endif %}
-
-            <h4 style="margin:1.1rem 0 .3rem;font-size:.9rem;">Cross-method matches</h4>
-            {% if b.xmatch %}
-            <div class="note" style="margin-bottom:.3rem;">Selected by 2+ <b>independent families</b> of evidence at once — amount+timing, gas price, direct counterparty. A self-relayed withdrawal does not count separately from the count match it was found on. Leads, not proof.</div>
-            <table>
-              <colgroup><col style="width:34%"><col style="width:8%"><col style="width:9%"><col></colgroup>
-              <tr><th>Recipient</th><th>Pool</th><th>Methods</th><th>Why (per method)</th></tr>
-              {% for r in b.xmatch %}
-              <tr>
-                <td class="mono flag"><a href="{{ r.url }}" target="_blank" rel="noopener">{{ r.address }}</a></td>
-                <td class="num">{{ r.pool_key }}</td><td class="num">{{ r.n_methods }}x</td>
-                <td>{% for m in r.methods %}<span class="pill">{{ m }}</span>{% endfor %}
-                    <div class="note" style="margin-top:.2rem;">{{ r.reasons|join('; ') }}</div></td>
-              </tr>
-              {% endfor %}
-            </table>
-            {% else %}<div class="note">No address was selected by more than one method; every candidate rests on a single method.</div>{% endif %}
-
-            {% if b.methods %}
-            <h4 style="margin:1.1rem 0 .3rem;font-size:.9rem;">Results by method</h4>
-            <div class="note" style="margin-bottom:.3rem;">Every method runs on every wallet. Each block lists what that method selected.</div>
-            {% for m in b.methods %}
-              <div style="font-size:.82rem;color:var(--muted);margin:.6rem 0 .2rem;">{{ m.label }} <span class="pill">{{ m.rows|length }}</span></div>
-              <table>
-                <colgroup><col style="width:40%"><col style="width:9%"><col></colgroup>
-                <tr><th>Address</th><th>Pool</th><th>Why</th></tr>
-                {% for r in m.rows[:20] %}
-                <tr>
-                  <td class="mono"><a href="{{ r.url }}" target="_blank" rel="noopener">{{ r.address }}</a></td>
-                  <td class="num">{{ r.pool_key }}</td><td>{{ r.reason }}</td>
-                </tr>
-                {% endfor %}
-              </table>
-            {% endfor %}
-            {% endif %}
-            {% if b.relayers %}
-              <div class="note" style="margin-top:.6rem;">Relayers: {{ b.relayers.unique }},
-                self-relayed withdrawals: {{ b.relayers.self_relayed }}</div>
-            {% endif %}
-            {% if b.leads %}
-              <div class="note" style="margin:.7rem 0 .3rem;"><span class="flag">Self-relayed leads</span> —
-                no relayer named in the proof, so the sender paid gas from an address they already
-                controlled. <b>unverified</b> means the broadcaster was not checked, not that it was
-                confirmed.</div>
-              <table>
-                <colgroup><col style="width:24%"><col style="width:7%"><col style="width:12%"><col style="width:17%"><col style="width:14%"><col></colgroup>
-                <tr><th>Recipient</th><th>Pool</th><th>Time</th><th>Broadcast by</th><th>Fee settings</th><th>Withdrawal tx</th></tr>
-                {% for l in b.leads[:8] %}
-                <tr>
-                  <td class="mono flag"><a href="{{ l.url }}" target="_blank" rel="noopener">{{ l.address }}</a></td>
-                  <td class="num">{{ l.pool_key }}</td><td class="num">{{ l.time }}</td>
-                  <td class="mono">
-                    {%- if l.broadcaster_status == "self" %}<span class="flag">the recipient</span>
-                    {%- elif l.broadcaster_status == "other" %}{{ l.broadcaster }}
-                    {%- else %}<span style="opacity:.6">unverified</span>{% endif -%}
-                  </td>
-                  <td class="mono">{{ l.fee }}</td>
-                  <td class="mono"><a href="{{ l.tx_url }}" target="_blank" rel="noopener">{{ l.tx }}</a></td>
-                </tr>
-                {% endfor %}
-              </table>
-            {% endif %}
-            {% if b.fingerprints %}
-              <div class="note" style="margin:.7rem 0 .3rem;"><span class="flag">Shared fee fingerprints</span> —
-                self-relayed withdrawals to different recipients sent with identical fee settings
-                (priority fee and gas-limit range). A hint at one tool or operator; many users share
-                wallet defaults, so it is context, not scored.</div>
-              <table>
-                <tr><th>Fee settings</th><th>Withdrawals</th><th>Recipients</th></tr>
-                {% for g in b.fingerprints %}
-                <tr>
-                  <td class="mono">{{ g.label }}</td><td class="num">{{ g.withdrawals }}</td>
-                  <td class="mono">{% for r in g.links %}<a href="{{ r.url }}" target="_blank" rel="noopener">{{ r.address }}</a>{% if not loop.last %}<br>{% endif %}{% endfor %}</td>
-                </tr>
-                {% endfor %}
-              </table>
-            {% endif %}
-            {% if b.deposit_addresses %}
-            <h4 style="margin:1.1rem 0 .3rem;font-size:.9rem;">Deposit addresses</h4>
-            <div class="note" style="margin-bottom:.3rem;">Addresses the depositor sent funds to that behave like a per-customer exchange deposit address (few senders, swept to a hot wallet). A recipient that sent to the same address shares it with the depositor; this is context only (since 2.21 it did not beat chance in the second hold-out) and never raises the band.</div>
-            <table>
-              <colgroup><col style="width:30%"><col style="width:16%"><col style="width:20%"><col style="width:8%"><col></colgroup>
-              <tr><th>Deposit address</th><th>Kind</th><th>Swept to</th><th>Senders</th><th>Also used by a candidate</th></tr>
-              {% for d in b.deposit_addresses %}
-              <tr>
-                <td class="mono"><a href="{{ d.url }}" target="_blank" rel="noopener">{{ d.address }}</a></td>
-                <td><span class="pill">{{ d.kind }}</span></td><td>{{ d.target }}</td><td class="num">{{ d.senders }}</td>
-                <td class="mono">{% for s in d.shared_by %}<a href="{{ s.url }}" target="_blank" rel="noopener">{{ s.address }}</a> <span class="pill">{{ s.pool_key }}</span>{% if not loop.last %}<br>{% endif %}{% else %}-{% endfor %}</td>
-              </tr>
-              {% endfor %}
-            </table>
-            {% endif %}
-            {% if b.groups or b.n_unanchored %}
-            <h4 style="margin:1.1rem 0 .3rem;font-size:.9rem;">Exit groups</h4>
-            <div class="note" style="margin-bottom:.3rem;">Recipients withdrawn together in repeated bursts, as an operator paying out pooled notes does. Tied to this depositor only through an anchor (a corroborated candidate or a known exit); context, not scored. {{ b.n_unanchored }} group(s) without an anchor are not listed.</div>
-            {% for g in b.groups %}
-              <div style="font-size:.82rem;margin:.5rem 0 .2rem;"><span class="pill">{{ g.pool_key }}</span> {{ g.members|length }} addresses · {{ g.notes }} notes · anchor <span class="mono">{{ g.anchors }}</span></div>
-              <div class="mono" style="font-size:.76rem;">{% for m in g.members %}<a href="{{ m.url }}" target="_blank" rel="noopener">{{ m.address }}</a>{% if not loop.last %}<br>{% endif %}{% endfor %}</div>
-            {% endfor %}
-            {% endif %}
-            {% if b.root_check %}
-            <h4 style="margin:1.1rem 0 .3rem;font-size:.9rem;">Excluded by Merkle root</h4>
-            <div class="note" style="margin-bottom:.3rem;">Exploratory. A withdrawal proof names the Merkle root it was built against; a root that held none of the depositor's notes in the pool cannot belong to this depositor. Only the withdrawals of ranked candidates were read: {{ b.root_check.checked }} withdrawal(s), roots found {{ b.root_check.found }}, not found {{ b.root_check.not_found }}, {{ b.root_check.calls }} transaction lookup(s). A candidate with every withdrawal in a pool excluded is removed from the ranking and listed here; a partly excluded one stays with a lower count and a context note, or, if the recount costs it its count match, is listed as dropped after recount. Not a lead, not scored.</div>
-            {% if b.root_check.incomplete %}<div class="note flag">The check is incomplete (call limit reached or a pool could not be checked{% if b.root_check.unchecked_pools %}: {{ b.root_check.unchecked_pools }}{% endif %}): some candidates were not checked.</div>{% endif %}
-            {% for c in b.root_check.excluded %}
-              <div style="font-size:.82rem;margin:.5rem 0 .2rem;"><span class="pill">{{ c.pool_key }}</span> <a class="mono" href="{{ c.url }}" target="_blank" rel="noopener">{{ c.address }}</a></div>
-              <div class="mono" style="font-size:.76rem;">{% for w in c.withdrawals %}<a href="{{ w.url }}" target="_blank" rel="noopener">{{ w.tx_hash }}</a> (root holds {{ w.n_root }} leaves){% if not loop.last %}<br>{% endif %}{% endfor %}</div>
-            {% else %}
-              <div class="note">No candidate was excluded in full.</div>
-            {% endfor %}
-            {% if b.root_check.dropped %}<div class="note" style="margin-top:.5rem;">Dropped after recount (the count match was lost):</div>{% endif %}
-            {% for c in b.root_check.dropped %}
-              <div style="font-size:.82rem;margin:.5rem 0 .2rem;"><span class="pill">{{ c.pool_key }}</span> <a class="mono" href="{{ c.url }}" target="_blank" rel="noopener">{{ c.address }}</a></div>
-              <div class="mono" style="font-size:.76rem;">{% for w in c.withdrawals %}<a href="{{ w.url }}" target="_blank" rel="noopener">{{ w.tx_hash }}</a> (root holds {{ w.n_root }} leaves){% if not loop.last %}<br>{% endif %}{% endfor %}</div>
-            {% endfor %}
-            {% endif %}
-            {% if b.placebo %}
-            <h4 style="margin:1.1rem 0 .3rem;font-size:.9rem;">Placebo check</h4>
-            <div class="note" style="margin-bottom:.3rem;">A decoy window is a search window that ends a day before the first real deposit, so it cannot contain this wallet's notes: any lead found there is chance. The same pipeline ran on a window {{ b.placebo.offset_days }} days earlier{% if b.placebo.window %} ({{ b.placebo.window }}){% endif %}. Withdrawals searched: {{ b.placebo.target_withdrawals }} real, {{ b.placebo.decoy_withdrawals }} decoy.</div>
-            <table>
-              <tr><th>Band</th><th>Real window</th><th>Decoy window</th><th>Per 1000 withdrawals (real / decoy)</th><th>Verdict</th></tr>
-              {% for r in b.placebo.rows %}
-              <tr><td><span class="badge {{ r.band }}">{{ r.band }}</span></td><td class="num">{{ r.target }}</td><td class="num">{{ r.decoy }}</td><td class="num">{{ r.target_rate }} / {{ r.decoy_rate }}</td><td>{{ r.verdict }}</td></tr>
-              {% endfor %}
-            </table>
-            <div class="note">{{ b.placebo.note }}</div>
-            {% if b.placebo.direct_link %}<div class="note flag"><b>Direct links:</b> {{ b.placebo.direct_link }}</div>{% endif %}
-            {% for c in b.placebo.caveats %}<div class="note flag">{{ c }}</div>{% endfor %}
-            {% for l in b.placebo.leads %}
-              <div style="font-size:.82rem;margin:.5rem 0 .2rem;"><span class="badge {{ l.band }}">{{ l.band }}</span> <span class="pill">{{ l.pool_key }}</span> <a class="mono" href="{{ l.url }}" target="_blank" rel="noopener">{{ l.address }}</a> · decoy lead, chance by construction · {{ l.signals|join(', ') }}</div>
-            {% endfor %}
-            {% endif %}
-            <h4 style="margin:1.1rem 0 .3rem;font-size:.9rem;">Summary</h4>
-            <div class="callout" style="white-space:pre-line">{{ b.conclusion }}</div>
-          {% endif %}
-        </div>
-      {% endfor %}
-
-    {% elif result.kind == 'multi' %}
-      <h3>Profile matches, one address received a wallet's full fingerprint</h3>
-      {% if result.profiles %}
-      <table>
-        <tr><th>Wallet</th><th>Fingerprint</th><th>Consolidator</th><th>Match</th><th>Received / needed</th></tr>
-        {% for p in result.profiles[:40] %}
-        <tr>
-          <td class="mono">{{ p.wallet }}</td><td class="num">{{ p.fingerprint }}</td>
-          <td class="mono"><a href="{{ p.url }}" target="_blank" rel="noopener">{{ p.address }}</a></td>
-          <td>{% if p.exact %}<span class="flag">exact</span>{% else %}&ge;{% endif %}</td>
-          <td class="mono">{{ p.detail }}</td>
-        </tr>
-        {% endfor %}
-      </table>
-      {% else %}<div class="note">No full-fingerprint matches.</div>{% endif %}
-
-      <h3>Cross-wallet consolidators</h3>
-      {% if result.cross %}
-      <table>
-        <tr><th>Band</th><th>Address</th><th>Wallets</th></tr>
-        {% for c in result.cross %}
-        <tr><td><span class="badge {{ c.band }}">{{ c.band }}</span>{% if c.artefact %}<div class="note">window-overlap artefact ({{ c.artefact }})</div>{% endif %}</td>
-          <td class="mono"><a href="{{ c.url }}" target="_blank" rel="noopener">{{ c.address }}</a></td><td class="mono">{{ c.wallets|join(', ') }}</td></tr>
-        {% endfor %}
-      </table>
-      <div class="note"><b>strong</b>: an independent gas-price or linked signal; <b>moderate</b>: distinct fingerprints of wallets that did not deposit together; <b>weak</b>: explained by the shared search window.</div>
-      {% else %}<div class="note">None. No single address matched two wallets' fingerprints.</div>{% endif %}
-
-      <h3>Operator clusters <span class="chip">{{ result.clusters|length }}</span></h3>
-      {% if result.clusters %}
-      <table>
-        <colgroup><col style="width:8%"><col style="width:30%"><col></colgroup>
-        <tr><th>Wallets</th><th>Linked by</th><th>Members</th></tr>
-        {% for c in result.clusters %}
-        <tr><td class="num">{{ c.wallets|length }}</td><td>{% for r in c.reasons %}<span class="pill">{{ r }}</span>{% endfor %}</td>
-          <td class="mono">{{ c.wallets|join(', ') }}</td></tr>
-        {% endfor %}
-      </table>
-      {% else %}<div class="note">No two wallets are linked by discriminating evidence.</div>{% endif %}
-
-      <h3>Shared funders <span class="chip">not labelled, not busy</span></h3>
-      {% if result.funders %}
-      <table>
-        <colgroup><col style="width:38%"><col style="width:8%"><col></colgroup>
-        <tr><th>Funder</th><th>Wallets</th><th>Funded depositors</th></tr>
-        {% for f in result.funders %}
-        <tr><td class="mono"><a href="{{ f.url }}" target="_blank" rel="noopener">{{ f.address }}</a></td>
-          <td class="num">{{ f.wallets|length }}</td><td class="mono">{{ f.wallets|join(', ') }}</td></tr>
-        {% endfor %}
-      </table>
-      {% else %}<div class="note">No immediate funder is shared by two depositors.</div>{% endif %}
-
-      <h3>Strong links <span class="chip">{{ result.n_strong }} total</span></h3>
-      <div class="note">Caveat: wallets that deposited at similar times with equal voucher sizes share
-        candidate sets by construction, so treat raw overlaps as a window artefact.</div>
-      {% if result.strong %}
-      <table>
-        <tr><th>Pool</th><th>Address</th><th>Wallets</th></tr>
-        {% for s in result.strong[:30] %}
-        <tr><td class="num">{{ s.pool_key }}</td>
-          <td class="mono"><a href="{{ s.url }}" target="_blank" rel="noopener">{{ s.address }}</a></td>
-          <td class="num">{{ s.wallets|length }}</td></tr>
-        {% endfor %}
-      </table>
-      {% endif %}
-
-    {% elif result.kind == 'characterize' %}
-      <div class="card">
-        <h3 class="mono">{{ result.address }}</h3>
-        {% if result.label %}<div class="chip flag">Attribution: {{ result.label }}</div>{% endif %}
-        <div class="chip">{{ result.classification }}</div>
-        <div class="note">{{ result.reason }}</div>
-        {% if result.disposable %}<div class="chip flag" style="margin-top:.4rem">Disposable: first activity at most a day before the first pool inflow (context, not proof)</div>{% endif %}
-        <p>Activity: {{ result.normal_txs }} normal tx · {{ result.internal_txs }} internal ·
-          {{ result.n_inflows }} pool inflow(s) across {{ result.n_pools }} pool(s){% if result.totals %} · total {{ result.totals }}{% endif %}</p>
-      </div>
-      <h3>Tornado-pool inflows</h3>
-      {% if result.inflows %}
-      <table>
-        <tr><th>When (UTC)</th><th>Amount</th><th>Pool</th></tr>
-        {% for r in result.inflows[:60] %}
-        <tr><td class="mono">{{ r.when }}</td><td class="num">{{ r.value }} {{ r.asset }}</td><td class="num">{{ r.pool }}</td></tr>
-        {% endfor %}
-      </table>
-      {% else %}<div class="note">No withdrawals from a known pool — not a Tornado exit on the pools analysed.</div>{% endif %}
-
-      <h3>Dominant next hops <span class="chip">transactions sent</span></h3>
-      {% if result.next_hops %}
-      <table>
-        <tr><th>Count</th><th>Total</th><th>Destination</th><th>Attribution</th></tr>
-        {% for h in result.next_hops %}
-        <tr><td class="num">{{ h.count }}</td><td class="num">{% if h.call %}contract call, no {{ result.currency }}{% else %}{{ h.total }} {{ result.currency }}{% endif %}</td>
-          <td class="mono"><a href="{{ h.url }}" target="_blank" rel="noopener">{{ h.address }}</a></td>
-          <td>{% if h.label %}<span class="flag">{{ h.label }}</span>{% else %}—{% endif %}</td></tr>
-        {% endfor %}
-      </table>
-      {% else %}<div class="note">No outgoing transfers found.</div>{% endif %}
-
-    {% elif result.kind == 'trace' %}
-      <div class="card">
-        <h3 class="mono">{{ result.start }}
-          <a class="btn" style="float:right;padding:.3rem .7rem;margin-left:.4rem" href="/result/{{ result.start }}.json">JSON</a>
-        </h3>
-        <div class="metrics">
-          <div class="metric"><div class="k">Followed</div><div class="v">{{ result.amount }}</div><div class="s">{{ result.asset }}</div></div>
-          <div class="metric"><div class="k">Edges</div><div class="v">{{ result.edges|length }}</div><div class="s">{{ result.edges|selectattr('kind','equalto','swap')|list|length }} swap(s), {{ result.edges|selectattr('kind','equalto','bridge')|list|length }} bridge(s)</div></div>
-          <div class="metric"><div class="k">End points</div><div class="v">{{ result.terminals|length }}</div><div class="s">where the funds stop</div></div>
-          <div class="metric"><div class="k">Expanded</div><div class="v">{{ result.nodes_expanded }}</div><div class="s">addresses read</div></div>
-        </div>
-        {% if result.arrival_note %}<div class="note">{{ result.arrival_note }}</div>{% endif %}
-        <div class="callout">FIFO attribution is a convention: funds in one account are fungible, so each edge says where the traced amount would have gone under that rule. [lower – upper] is how much of the edge the traced funds can be under any ordering convention, from the sender's own history of the asset: above 0 it is certain at least that much, 0 it is only possible. Treat every edge as a lead to corroborate.</div>
-      </div>
-      <h3>Where the traced funds stop</h3>
-      {% if result.terminals %}
-      <table>
-        <colgroup><col style="width:38%"><col style="width:16%"><col style="width:7%"><col></colgroup>
-        <tr><th>Address</th><th>Amount</th><th>Hop</th><th>Reason</th></tr>
-        {% for t in result.terminals %}
-        <tr><td class="mono"><a href="{{ t.url }}" target="_blank" rel="noopener">{{ t.address }}</a></td>
-          <td class="num">{{ t.amount }} {{ t.asset }}</td><td class="num">{{ t.hop }}</td>
-          <td>{{ t.reason }}{% if t.chain %} <span class="chip">{{ t.chain }}</span>{% endif %}{% if t.label %} <span class="flag">{{ t.label }}</span>{% endif %}</td></tr>
-        {% endfor %}
-      </table>
-      {% else %}<div class="note">The traced amount was fully attributed along the edges.</div>{% endif %}
-      <h3>Edges</h3>
-      {% if result.edges %}
-      <table>
-        <colgroup><col style="width:6%"><col style="width:24%"><col style="width:24%"><col style="width:18%"><col></colgroup>
-        <tr><th>Hop</th><th>From</th><th>To</th><th>FIFO amount [lower – upper] / sent</th><th>Transaction</th></tr>
-        {% for e in result.edges %}
-        <tr><td class="num">{{ e.hop }}{% if e.chain %} <span class="chip">{{ e.chain }}</span>{% endif %}</td>
-          <td class="mono"><a href="{{ e.from_url }}" target="_blank" rel="noopener">{{ e['from'] }}</a></td>
-          <td class="mono"><a href="{{ e.to_url }}" target="_blank" rel="noopener">{{ e.to }}</a></td>
-          <td class="num">{{ e.share }} / {{ e.value }} {{ e.asset }}{% if e.share_status %}<div class="note">{{ e.share_status }}{% if e.history_incomplete %} · history incomplete{% endif %}</div>{% endif %}{% if e.swapped_to %}<div class="note">swap → {{ e.swapped_to }}</div>{% endif %}{% if e.kind == 'bridge' %}<div class="note">bridge {{ e.bridge.protocol }} → {{ e.bridge_to }}, deposit id {{ e.bridge.deposit_id }}{% if e.bridge_fill_url %} · <a href="{{ e.bridge_fill_url }}" target="_blank" rel="noopener">fill</a>{% else %} · fill not found{% endif %}</div>{% endif %}</td>
-          <td class="mono"><a href="{{ e.tx_url }}" target="_blank" rel="noopener">{{ e.tx_hash }}</a></td></tr>
-        {% endfor %}
-      </table>
-      {% else %}<div class="note">No outgoing transfer after the start block.</div>{% endif %}
-
-    {% else %}
-      {% for t in result.traces %}
-      <div class="card">
-        <h3 class="mono">{{ t.wallet }} <span class="chip">{{ t.fingerprint }}</span></h3>
-        {% if t.clusters %}
-        <table>
-          <tr><th>Cluster point Z</th><th>Layers</th><th>Pools</th><th>Value funneled</th></tr>
-          {% for c in t.clusters %}
-          <tr>
-            <td class="mono"><a href="{{ c.url }}" target="_blank" rel="noopener">{{ c.z }}</a></td>
-            <td class="num">{{ c.layers }}</td><td class="num">{{ c.pools }}</td>
-            <td class="num">{{ c.totals }}</td>
-          </tr>
-          {% endfor %}
-        </table>
-        {% else %}<div class="note">No downstream address is fed by 2+ pool layers.</div>{% endif %}
-      </div>
-      {% endfor %}
+    <div class="downloads noprint">
+      {% if result.report_key %}<a class="btn" href="/report/{{ result.report_key }}.html">Download report (HTML)</a>{% endif %}
+      {% if result.json_key %}<a class="btn" href="/result/{{ result.json_key }}.json">Download JSON</a>{% endif %}
+      {% if result.has_csv %}<a class="btn" href="/download.csv">Download CSV</a>{% endif %}
+    </div>
+    {% if result.kind == 'demix' and result.no_labels %}
+      <form method="post" action="/labels/fetch" class="note noprint">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        No attribution set loaded for {{ result.network }}: exchange deposit addresses are shown as context only and the shared-deposit signal cannot fire. Download the public label set:
+        <button class="btn" type="submit" name="network" value="{{ result.network }}">{{ result.network }}</button>
+        <button class="btn" type="submit" name="network" value="all">all networks</button>
+        <br>Third-party data (<a href="https://github.com/prettydeath/wallet-attribution" target="_blank" rel="noopener">prettydeath/wallet-attribution</a>); each upstream source keeps its own licence.
+      </form>
     {% endif %}
   {% endif %}
 </div>
-<script>
+{% if result %}
+  {% if result.kind == 'demix' %}
+    {% for b in result.blocks %}
+    <section class="result" aria-label="Result for {{ b.wallet }}">
+      <div class="console downloads noprint">
+        <a class="btn" href="/report/{{ b.wallet }}.html">Download report (HTML)</a>
+        <a class="btn" href="/result/{{ b.wallet }}.json">Download JSON</a>
+      </div>
+      {{ b.report_body|safe }}
+    </section>
+    {% endfor %}
+  {% else %}
+    <section class="result">{{ result.report_body|safe }}</section>
+  {% endif %}
+{% endif %}
+<script nonce="{{ csp_nonce }}">{{ report_js|safe }}</script>
+<script nonce="{{ csp_nonce }}">
 (function(){
-  var sel=document.getElementById('analysis'), tf=document.getElementById('traceFields');
-  var df=document.getElementById('demixFields');
-  if(sel && tf) sel.addEventListener('change',function(){
-    tf.hidden = sel.value!=='trace'; if(df) df.hidden = sel.value!=='demix'; });
-  var root=document.documentElement, b=document.getElementById('themeToggle');
+  var d=document, radios=d.querySelectorAll('input[name="analysis"]');
+  var show={demixFields:['demix'], multiFields:['multi'], charFields:['characterize'], traceFields:['trace'],
+            windowFields:['demix','multi','cluster'], exitFields:['demix','multi']};
+  function sync(){
+    var cur=d.querySelector('input[name="analysis"]:checked'); if(!cur) return;
+    for(var id in show){ var el=d.getElementById(id); if(el) el.hidden=show[id].indexOf(cur.value)<0; }
+    var lab=d.getElementById('walletsLabel'), ta=d.getElementById('wallets');
+    if(lab) lab.textContent=cur.getAttribute('data-label');
+    if(ta){ ta.placeholder=cur.getAttribute('data-ph'); ta.className=cur.getAttribute('data-single')?'single':''; }
+  }
+  for(var i=0;i<radios.length;i++) radios[i].addEventListener('change',sync);
+  var flag=d.getElementById('asyncFlag'); if(flag && window.fetch) flag.value='1';
+  var jb=d.getElementById('jobBox');
+  if(jb && window.fetch){
+    var jid=jb.getAttribute('data-job'), jt=d.getElementById('jobText');
+    (function poll(){
+      fetch('/job/'+encodeURIComponent(jid),{credentials:'same-origin',cache:'no-store'})
+        .then(function(r){ if(r.status===404){ throw 404; } if(!r.ok){ throw r.status; } return r.json(); })
+        .then(function(s){
+          if(s.state!=='running'){ location.replace('/?job='+encodeURIComponent(jid)); return; }
+          var t=s.elapsed+' s, '+s.calls+' explorer calls ('+s.cache_hits+' from cache)';
+          if(s.waited) t+=', '+s.waited+' s waiting on the provider';
+          if(s.rpc_fallbacks) t+=', '+s.rpc_fallbacks+' log lookups via the RPC node';
+          jt.textContent=t; setTimeout(poll,1500);
+        })
+        .catch(function(e){
+          if(e===404){ jt.textContent='this job is no longer known (the server restarted?); submit again'; return; }
+          jt.textContent='status unavailable, retrying'; setTimeout(poll,4000);
+        });
+    })();
+  }
+  var root=d.documentElement, b=d.getElementById('themeToggle');
   if(b) b.addEventListener('click',function(){
-    var cur=(root.getAttribute('data-theme')==='light')?'dark':'light';
+    var dark=root.getAttribute('data-theme')==='dark' ||
+      (!root.getAttribute('data-theme') && window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches);
+    var cur=dark?'light':'dark';
     root.setAttribute('data-theme',cur);
     try{localStorage.setItem('tcd-theme',cur);}catch(e){}
   });

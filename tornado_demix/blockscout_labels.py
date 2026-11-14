@@ -10,16 +10,23 @@ Coinbase and Crypto.com among them). The service is free and keyless:
 Facts the code relies on:
 
 * at most 20 addresses per call, and the answer is keyed by the *checksummed*
-  (EIP-55) address, a lowercase lookup finds nothing. The runtime has no keccak,
-  so checksumming needs ``pycryptodome`` from the ``labels`` extra; without it a
-  clear :class:`KeccakMissing` is raised (no new runtime dependency).
+  (EIP-55) address, a lowercase lookup finds nothing. Checksumming uses
+  ``pycryptodome`` (``labels`` extra) when installed and the bundled pure-Python
+  keccak otherwise (no new runtime dependency).
 * ``/api/v2/addresses/<a>`` on Blockscout instances returns ``metadata: null`` even
   when the service has tags, so it is not used.
 
 Classification is deliberately conservative: ``exchange`` only when the tag name
-starts with a brand from :data:`EXCHANGE_BRANDS` followed by ``:`` or a space and
-does not name a token, bridge, router or contract; a generic "DEPOSIT ADDRESS" tag
-is ``deposit``; everything else is ``other`` with the tag name as entity.
+starts with a brand from :data:`EXCHANGE_BRANDS` (followed by ``:``, a space or a
+digit), carries a wallet word (``hot``, ``cold``, ``deposit``, ``wallet N``, or is a
+numbered name such as "Coinbase 16") and has no veto word (exploit, hack, phish,
+scam, drainer, coin, token, dex, aggregator, router, bridge, smart wallet, contract,
+deployer). Tags of exploiters ("Bybit Exploiter 1"), assets ("Binance Coin"), wallet
+products ("Coinbase Smart Wallet", "Bitget Wallet") and DEX contracts ("OKX DEX:
+Aggregator") carry a brand but are not an exchange's own wallet. A generic "DEPOSIT
+ADDRESS" tag is ``deposit``; everything else is ``other`` with the tag name as
+entity. A cached row written by an older, looser rule is re-checked from its tag when
+the cache is read.
 
 Lineage: Blockscout tags are often copied from Etherscan, and commercial tools copy
 Blockscout. A second label that comes from the same lineage is a copy, not
@@ -69,20 +76,26 @@ EXCHANGE_BRANDS = (
     ("HTX", "HTX"),
     ("OKX", "OKX"),
 )
-_BRAND_RE = re.compile(
-    r"^(?:" + "|".join(re.escape(b) for b, _e in EXCHANGE_BRANDS) + r")(?=[: ])", re.IGNORECASE
-)
+_BRANDS = "|".join(re.escape(b) for b, _e in EXCHANGE_BRANDS)
+_BRAND_RE = re.compile(r"^(?:" + _BRANDS + r")(?=[:\s\d])", re.IGNORECASE)
 _ENTITY_OF = {b.lower(): e for b, e in EXCHANGE_BRANDS}
-# A brand prefix does not make a token, bridge, router or contract an exchange wallet.
-_NOT_A_WALLET = re.compile(r"\b(?:token|bridge|router|contract)s?\b", re.IGNORECASE)
+# Veto words: a brand prefix does not make an exploiter, a coin or token, a DEX, router,
+# bridge, smart-wallet product, contract or deployer an exchange wallet.
+_NOT_A_WALLET = re.compile(
+    r"\b(?:exploit|hack|phish|scam|drainer)\w*"
+    r"|\b(?:coin|token|dex|aggregator|router|bridge|contract|deployer)s?\b"
+    r"|smart\s*wallet|\bcommerce\b|\bstaking\b"
+    r"|\b(?:web3|bitget|coinbase|okx|binance|trust|exodus)\s+wallet\b",
+    re.IGNORECASE,
+)
+# Wallet words: what an exchange's own address is called ("Hot Wallet", "Cold",
+# "Deposit", "Wallet 131"), or a numbered brand name ("Coinbase 16", "Okx 7").
+_WALLET_WORD = re.compile(r"\b(?:hot|cold|deposit)\b|\bwallet\s*\d+\b", re.IGNORECASE)
+_NUMBERED = re.compile(r"^(?:" + _BRANDS + r")[\s:]*\d+\s*$", re.IGNORECASE)
 
 
 class BlockscoutError(TornadoDemixError):
     """The metadata service could not be read; never to be taken as "no tags"."""
-
-
-class KeccakMissing(BlockscoutError):
-    """EIP-55 needs keccak-256 and ``pycryptodome`` is not installed."""
 
 
 _sleep = time.sleep  # replaced in tests
@@ -91,11 +104,10 @@ _sleep = time.sleep  # replaced in tests
 def _load_keccak():
     try:
         from Crypto.Hash import keccak
-    except ImportError as exc:  # pragma: no cover - exercised via monkeypatch
-        raise KeccakMissing(
-            "Blockscout labels need keccak-256 for EIP-55 checksums: "
-            "install the labels extra (pip install 'tornado-demix[labels]')"
-        ) from exc
+    except ImportError:
+        from .keccak import keccak256
+
+        return keccak256
 
     def keccak256(data: bytes) -> bytes:
         return keccak.new(digest_bits=256, data=data).digest()
@@ -178,7 +190,11 @@ def _classify(name: str, tag_type: str) -> tuple[str, str]:
     if "deposit address" in name.lower() and (tag_type or "").lower() in ("generic", ""):
         return "deposit", name
     m = _BRAND_RE.match(name)
-    if m and not _NOT_A_WALLET.search(name):
+    if (
+        m
+        and not _NOT_A_WALLET.search(name)
+        and (_WALLET_WORD.search(name) or _NUMBERED.match(name))
+    ):
         return "exchange", _ENTITY_OF[m.group(0).lower()]
     return "other", name
 
@@ -259,6 +275,8 @@ def merge_labels(base: dict[str, dict] | None, extra: dict[str, dict]) -> dict[s
         new = dict(cur)
         if not new.get("category"):
             new["category"], new["entity"] = lab["category"], lab["entity"]
+            # the category is the extra source's: the classifier must know where it came from
+            new["category_source"] = lab.get("source", SOURCE)
         agrees = _same_entity(new.get("entity", ""), lab.get("entity", ""))
         base_src = {
             "source": cur.get("source", ""),
@@ -296,9 +314,15 @@ def load_cache(chain_id: int, directory: str | None = None) -> dict[str, dict]:
         for row in csv.DictReader(fh):
             addr = (row.get("address") or "").strip().lower()
             if addr:
+                category = (row.get("category") or "").strip()
+                entity = (row.get("entity") or "").strip()
+                tag = (row.get("tag") or "").strip()
+                if category == "exchange" and tag and _classify(tag, "name")[0] != "exchange":
+                    # written by an older, looser rule (e.g. "Bybit Exploiter 1")
+                    category, entity = "other", tag
                 labels[addr] = {
-                    "category": (row.get("category") or "").strip(),
-                    "entity": (row.get("entity") or "").strip(),
+                    "category": category,
+                    "entity": entity,
                     "source": SOURCE,
                     "lineage": SOURCE,
                     "tag": (row.get("tag") or "").strip(),

@@ -7,6 +7,14 @@ the depositor's notes in that pool: the withdrawal is excluded, a fact about the
 calldata and the tree, not a probability. If ``min_leaf < n_root <= max_leaf`` only
 the later notes are excluded; that is shown as context and nothing is removed.
 
+The root is not taken on trust from the calldata. Every 32-byte word before an
+occurrence of the nullifier is a candidate (a wrapper such as Multicall may carry the
+nullifier in a call that is not the withdrawal); a candidate counts only when it is a
+root the pool still accepted at the withdrawal block: it is in the rebuilt tree's root
+history and fewer than ``ROOT_HISTORY_SIZE`` insertions (read from each pool contract;
+a pool whose size cannot be read stays unchecked, with a recorded error) came after it. Zero or several such
+candidates leave the root unknown and the withdrawal is never excluded.
+
 Only the withdrawals of ranked candidates are read (one ``tx_info`` call per
 transaction, at most :data:`ROOT_CHECK_LIMIT` per run). The result is not a lead
 and is not scored: a candidate whose every withdrawal in a pool is excluded leaves
@@ -30,12 +38,15 @@ from .constants import TOPIC_DEPOSIT
 from .errors import ApiError, ApiKeyError
 from .events import decode_deposit
 from .heuristics import ranked_candidates
-from .merkle import cached_root_index
-from .withdraw_root import withdrawal_root
+from .incomplete import lookup_failed
+from .merkle import cached_root_index, root_history_size, root_known_at
+from .withdraw_root import withdrawal_candidate_roots
 
 # tx_info calls (one per distinct withdrawal transaction) a single run may spend.
 ROOT_CHECK_LIMIT = 200
 DEFAULT_CACHE_DIR = os.path.join(".cache", "merkle")
+# No default ROOT_HISTORY_SIZE exists: a guess below the true size would reject a real older
+# root, so a pool whose size cannot be read stays unchecked and the failure is recorded.
 # Forward search for the first insertion after a block: initial span and growth.
 _SPAN_START = 2_000
 _SPAN_GROWTH = 4
@@ -118,10 +129,11 @@ def wallet_leaves(client, pool, deposits: list[dict], shifted: bool) -> list[int
 class _Memo:
     """``tx_info`` with memory and a call count, so a transaction is read once."""
 
-    def __init__(self, client):
+    def __init__(self, client, errors=None):
         self._client = client
         self._seen = {}
         self.calls = 0
+        self._errors = errors
 
     def tx_info(self, tx_hash):
         if tx_hash not in self._seen:
@@ -132,11 +144,27 @@ class _Memo:
                 raise
             except ApiError as exc:
                 _log("  [root_check] tx {} not read: {}".format(tx_hash, exc))
+                if self._errors is not None:
+                    self._errors.append(lookup_failed("root check transaction", exc, tx=tx_hash))
                 self._seen[tx_hash] = None
         return self._seen[tx_hash]
 
     def known(self, tx_hash):
         return tx_hash in self._seen
+
+
+def _accepted_root(candidates, index, blocks, block, history, stats) -> int | None:
+    """Leaf count of the one candidate root the pool accepted at ``block``, else None."""
+    valid = []
+    for root in candidates:
+        n_root = index.get(_hex(root))
+        if n_root is not None and root_known_at(n_root, blocks, block, history):
+            valid.append(n_root)
+    if len(valid) > 1:
+        stats["roots_ambiguous"] += 1
+    elif not valid and candidates:
+        stats["roots_outside_history"] += 1
+    return valid[0] if len(valid) == 1 else None
 
 
 def _own_withdrawals(res: dict, addr: str) -> list[tuple[int, dict]]:
@@ -150,24 +178,30 @@ def _own_withdrawals(res: dict, addr: str) -> list[tuple[int, dict]]:
     ]
 
 
-def check_candidates(client, data: dict, network, cache_dir, limit=None) -> dict:
+def check_candidates(client, data: dict, network, cache_dir, limit=None, errors=None) -> dict:
     """Read the roots of the candidates' withdrawals and classify them.
 
     Returns ``{"removed": {(pool_key, addr): {position}}, "excluded": [...],
-    "partial": [...], "stats": {...}}`` without touching ``data``.
+    "partial": [...], "stats": {...}}`` without touching ``data``. A failed lookup
+    (transaction, tree, ``ROOT_HISTORY_SIZE``) is appended to ``errors`` when it is a list.
     """
     limit = ROOT_CHECK_LIMIT if limit is None else limit
-    memo = _Memo(client)
+    memo = _Memo(client, errors)
     shifted = bool(data.get("params", {}).get("deposit_shift_seconds"))
     leaves_by_pool: dict[str, list[int] | None] = {}
     since_by_pool: dict[str, int | None] = {}
     index_by_pool: dict[str, dict | None] = {}
+    blocks_by_pool: dict[str, list[int]] = {}
+    history_by_pool: dict[str, int] = {}
     unchecked = set()
     stats = {
         "candidates": 0,
         "withdrawals_checked": 0,
         "roots_found": 0,
         "roots_not_found": 0,
+        "roots_ambiguous": 0,
+        "roots_outside_history": 0,
+        "history_sizes": {},
         "tx_info_calls": 0,
         "limit": limit,
         "wallet_leaves": {},
@@ -176,6 +210,27 @@ def check_candidates(client, data: dict, network, cache_dir, limit=None) -> dict
     removed: dict[tuple[str, str], set[int]] = {}
     excluded, partial = [], []
     incomplete = False
+
+    def note(what, exc, pool):
+        if errors is not None:
+            errors.append(lookup_failed(what, exc, address=pool.address))
+
+    def history_size(pool_key, pool):
+        """ROOT_HISTORY_SIZE of the pool read from its contract, or None (pool unchecked)."""
+        try:
+            size = root_history_size(client, pool, cache_dir)
+        except ApiKeyError:
+            raise
+        except ApiError as exc:
+            note("ROOT_HISTORY_SIZE", exc, pool)
+            _log(
+                "  [root_check] {} ROOT_HISTORY_SIZE not read ({}); pool skipped".format(
+                    pool_key, exc
+                )
+            )
+            return None
+        stats["history_sizes"][pool_key] = size
+        return size
 
     def pool_ready(pool_key):
         if pool_key in leaves_by_pool:
@@ -188,12 +243,22 @@ def check_candidates(client, data: dict, network, cache_dir, limit=None) -> dict
             notes = wallet_notes(client, pool, deposits, shifted)
             leaves = None if notes is None else notes[0]
             since_by_pool[pool_key] = None if notes is None else notes[1]
+            if notes is None:
+                note("wallet leaves", "a deposit's leaf was not found", pool)
             if leaves is not None:
-                index = cached_root_index(client, pool, res["window_blocks"][1], cache_dir)["roots"]
+                tree = cached_root_index(client, pool, res["window_blocks"][1], cache_dir)
+                if tree.get("blocks") is None:
+                    raise ApiError("the merkle cache holds no insertion blocks")
+                size = history_size(pool_key, pool)
+                if size is not None:
+                    index = tree["roots"]
+                    blocks_by_pool[pool_key] = tree["blocks"]
+                    history_by_pool[pool_key] = size
         except ApiKeyError:
             raise
         except ApiError as exc:
             _log("  [root_check] {} skipped: {}".format(pool_key, exc))
+            note("merkle tree", exc, pool)
         leaves_by_pool[pool_key], index_by_pool[pool_key] = leaves, index
         if leaves is None or index is None:
             unchecked.add(pool_key)
@@ -231,8 +296,14 @@ def check_candidates(client, data: dict, network, cache_dir, limit=None) -> dict
         leaves, index = leaves_by_pool[pool_key], index_by_pool[pool_key]
         for pos, w in pairs:
             stats["withdrawals_checked"] += 1
-            root = withdrawal_root(memo, w)
-            n_root = index.get(_hex(root)) if root is not None else None
+            n_root = _accepted_root(
+                withdrawal_candidate_roots(memo, w),
+                index,
+                blocks_by_pool[pool_key],
+                w["block"],
+                history_by_pool[pool_key],
+                stats,
+            )
             if n_root is None:
                 stats["roots_not_found"] += 1
                 continue
@@ -280,7 +351,9 @@ def _remove(res: dict, addr: str, positions: set[int]) -> None:
         del res["counts"][addr]
 
 
-def apply_root_check(client, data: dict, network, refresh, cache_dir=None, limit=None) -> dict:
+def apply_root_check(
+    client, data: dict, network, refresh, cache_dir=None, limit=None, errors=None
+) -> dict:
     """Run the Merkle-root check on ``data`` (a ``run_demix`` result) in place.
 
     ``refresh()`` recomputes ``candidates_by_count`` and the signals after
@@ -289,7 +362,7 @@ def apply_root_check(client, data: dict, network, refresh, cache_dir=None, limit
     ``data["heuristics"]``, ``root_excluded`` and ``root_partial``: lists of
     ``(pool_key, address, tx_hash, n_root, max_wallet_leaf)``.
     """
-    out = check_candidates(client, data, network, cache_dir or DEFAULT_CACHE_DIR, limit)
+    out = check_candidates(client, data, network, cache_dir or DEFAULT_CACHE_DIR, limit, errors)
     full = []
     for (pool_key, addr), positions in out["removed"].items():
         res = data["denoms"][pool_key]

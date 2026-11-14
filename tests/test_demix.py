@@ -793,7 +793,10 @@ def test_an_erc20_transfer_between_depositor_and_exit_is_linked():
         def token_transfers(self, addr, contract=None):
             return [token_row]
 
-    data = run_demix(TokenClient(deposits, logs), fx.WALLET, network=net)
+    # the depositor's own call to the token contract, as txlist lists it (same hash):
+    # a token row counts as a counterparty only in a transaction the depositor sent
+    call = _tx(dai, 0, 900, 9, "0xtok")
+    data = run_demix(TokenClient(deposits + [call], logs), fx.WALLET, network=net)
     row = next(r for r in ranked_candidates(data) if r["address"] == exit_)
     assert "linked" in row["signals"]
 

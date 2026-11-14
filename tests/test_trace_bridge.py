@@ -116,18 +116,20 @@ def test_trace_follows_an_across_deposit_to_the_destination_chain():
 
 
 def test_missing_fill_stops_with_the_bridge_reason():
+    # the fixture's fill deadline (2025) has passed: the deposit may have been refunded
     result = _run(lambda chain: _dest(chain, fills=False))
     (edge,) = result["edges"]
     assert edge["kind"] == "bridge" and "fill_tx" not in edge["bridge"]
     (end,) = result["terminals"]
-    assert end["reason"] == "bridge, fill not found"
+    assert end["reason"] == "deposit_expired_possible_refund"
     assert end["address"] == SPOKE
 
 
 def test_unsupported_destination_chain_is_named():
     result = _run(lambda chain: None)
     (end,) = result["terminals"]
-    assert end["reason"] == "bridge, destination chain 42161 not supported"
+    assert end["reason"] == "destination_chain_not_supported"
+    assert end["bridge"]["dest_chain_id"] == 42161
 
 
 def test_without_destinations_the_old_contract_rule_applies():
@@ -214,7 +216,9 @@ def test_destination_lookup_error_ends_only_that_branch():
 
     result = _run(lambda chain: dict(_dest(chain), client=Failing()) if chain == 42161 else None)
     (end,) = result["terminals"]
-    assert end["reason"].startswith("bridge, fill lookup failed: could not resolve")
+    assert end["reason"] == "lookup_failed"
+    assert end["bridge"]["state"] == "lookup_failed"
+    assert "could not resolve" in result["errors"][0]["error"]
     assert result["edges"][0]["kind"] == "bridge"
 
 
@@ -270,3 +274,16 @@ def test_v2_pool_is_named_as_not_decoded():
         result["terminals"][0]["reason"]
         == "bridge across, deposit event not decoded (v2 not decoded)"
     )
+
+
+def test_a_fill_stamped_before_its_deposit_is_still_followed():
+    class Skewed(Arbitrum):
+        def get_logs(self, address, topic0, start, end, topics=None):
+            logs = super().get_logs(address, topic0, start, end, topics)
+            return [dict(log, timeStamp=hex(FX["ts"] - 100)) for log in logs]
+
+    result = _run(lambda chain: dict(_dest(chain), client=Skewed()) if chain == 42161 else None)
+    bridge, after = result["edges"]
+    assert bridge["kind"] == "bridge" and after["chain_id"] == 42161
+    assert abs(after["attributed"] - 3261.266981) < 1e-6
+    assert after["lower"] <= after["attributed"] <= after["upper"]

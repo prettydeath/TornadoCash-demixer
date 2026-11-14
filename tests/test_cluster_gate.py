@@ -22,7 +22,7 @@ from tornado_demix.constants import TOPIC_WITHDRAWAL, ZERO_ADDRESS
 from tornado_demix.networks import Network
 from tornado_demix.pools import Pool
 
-WALLET = "0x019b5bb2051797e33f726d0e7a8cb9b9c2003ac2"
+WALLET = "0x1234567890abcdef1234567890abcdef12345678"
 POOL_1_ETH = "0x47ce0c6ed5b0ce3d3a51fdb1c52dc66a7c3c2936"
 
 
@@ -125,7 +125,7 @@ def test_single_note_voucher_yields_no_usable_cluster_layer(tmp_path):
     client = _single_note_voucher_client(n_recipients=30)
     scope = cluster.cache_scope(network)
 
-    fingerprint, layers = cluster._demix_layers(
+    fingerprint, layers, _errors, _cut = cluster._demix_layers(
         client, WALLET, _params(network), str(tmp_path), cluster.LAYER_CAP, scope
     )
 
@@ -142,7 +142,7 @@ def test_discriminating_voucher_still_yields_a_usable_layer(tmp_path):
     client, winner = _discriminating_voucher_client()
     scope = cluster.cache_scope(network)
 
-    fingerprint, layers = cluster._demix_layers(
+    fingerprint, layers, _errors, _cut = cluster._demix_layers(
         client, WALLET, _params(network), str(tmp_path), cluster.LAYER_CAP, scope
     )
 
@@ -187,7 +187,7 @@ def test_two_same_pool_vouchers_still_find_the_consolidation_address(tmp_path):
     client, winner = _two_vouchers_one_pool_client()
     scope = cluster.cache_scope(network)
 
-    fingerprint, layers = cluster._demix_layers(
+    fingerprint, layers, _errors, _cut = cluster._demix_layers(
         client, WALLET, _params(network), str(tmp_path), cluster.LAYER_CAP, scope
     )
 

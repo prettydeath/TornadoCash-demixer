@@ -367,3 +367,41 @@ def test_shared_funders_skip_labelled_and_busy_funders():
 
     out = shared_funders(Client(), results, labels={"0xex": {"label": "Exchange"}})
     assert out == {"0xf1": ["0xa", "0xb"]}
+
+
+def test_ties_are_ordered_by_address_whatever_the_input_order():
+    import itertools
+    import random
+
+    from tornado_demix.multi import deposit_synchronicity
+
+    addrs = [f"0x{i:040x}" for i in range(1, 7)]
+    seen = set()
+    for seed in range(12):
+        rng = random.Random(seed)
+        items = [(a, {ALICE, BOB}) for a in addrs]
+        rng.shuffle(items)
+        pools = ["1 ETH", "0.1 ETH"]
+        rng.shuffle(pools)
+        membership = {p: dict(rng.sample(items, len(items))) for p in pools}
+        seen.add(repr(_shared(membership)))
+    assert len(seen) == 1
+    assert [e[1] for e in _shared({"1 ETH": dict((a, {ALICE, BOB}) for a in addrs)})] == addrs
+
+    # equal-size, equal-span deposit batches come out in wallet order
+    base = {
+        f"0x{c}": {"deposits": [{"ts": 1000 * i}, {"ts": 1000 * i + 5}]} for i, c in enumerate("ab")
+    }
+    base.update(
+        {
+            f"0x{c}": {"deposits": [{"ts": 10**7 + 1000 * i}, {"ts": 10**7 + 1000 * i + 5}]}
+            for i, c in enumerate("dc")
+        }
+    )
+    outs = set()
+    for perm in itertools.permutations(base):
+        outs.add(repr(deposit_synchronicity({w: base[w] for w in perm}, gap_hours=1)))
+    assert len(outs) == 1
+    # the order itself is fixed: equal size and span, earliest batch first, wallets sorted
+    out = deposit_synchronicity({w: base[w] for w in reversed(list(base))}, gap_hours=1)
+    assert [g["wallets"] for g in out] == [["0xa", "0xb"], ["0xc", "0xd"]]

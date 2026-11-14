@@ -7,6 +7,8 @@ import os
 import sys
 from datetime import datetime, timezone
 
+from .heuristics import METHOD_FAMILY, ranked_candidates
+from .incomplete import is_notice
 from .networks import Network
 
 
@@ -77,6 +79,85 @@ def _sanitize_row(row):
     return [_sanitize_cell(v) for v in row]
 
 
+# Columns every candidate listing carries: the band and score of the candidate, the
+# evidence families that hold (context is no family), every signal that fired, and
+# the full hashes of the withdrawals behind it.
+CANDIDATE_COLUMNS = ["band", "score", "families", "signals", "evidence_tx_hashes"]
+
+
+def evidence_families(signals) -> list[str]:
+    """Evidence families of a signal set; context-only and note signals are no family."""
+    return sorted({METHOD_FAMILY.get(s, s) for s in signals} - {"context"})
+
+
+def ranked_index(data: dict) -> dict:
+    """``{(pool_key, address): ranked row}`` of a demix result (empty for a result that
+    carries no per-recipient detail)."""
+    if not all("detail" in res for res in data.get("denoms", {}).values()):
+        return {}
+    return {(r["pool_key"], r["address"]): r for r in ranked_candidates(data)}
+
+
+def withdrawal_hashes(data: dict, pool_key: str, address: str) -> list[str]:
+    """Full hashes of the withdrawals an address received in one pool, oldest first."""
+    recs = data.get("denoms", {}).get(pool_key, {}).get("detail", {}).get(address, [])
+    return [x["hash"] for x in sorted(recs, key=lambda x: x.get("ts", 0)) if x.get("hash")]
+
+
+def candidate_cells(data: dict, address: str, pool_keys=None, ranked=None) -> list:
+    """The :data:`CANDIDATE_COLUMNS` cells of ``address`` in ``data``.
+
+    ``pool_keys`` limits the pools (default: every pool the address appears in). The
+    band and score are those of the best ranked row; an address the ranking does not
+    list has empty band and score and still carries its withdrawal hashes.
+    """
+    ranked = ranked_index(data) if ranked is None else ranked
+    pools = (
+        list(pool_keys)
+        if pool_keys is not None
+        else [k for k, res in data.get("denoms", {}).items() if address in res.get("detail", {})]
+    )
+    rows = [ranked[(k, address)] for k in pools if (k, address) in ranked]
+    hashes = [h for k in pools for h in withdrawal_hashes(data, k, address)]
+    if not rows:
+        return ["", "", "", "", ";".join(hashes)]
+    best = max(
+        rows, key=lambda r: ({"strong": 3, "moderate": 2, "weak": 1}[r["band"]], r["confidence"])
+    )
+    signals = sorted({s for r in rows for s in r["signals"]})
+    return [
+        best["band"],
+        f"{best['confidence']:.2f}",
+        ";".join(evidence_families(signals)),
+        ";".join(signals),
+        ";".join(hashes),
+    ]
+
+
+def multi_candidate_cells(corr: dict, wallets, address: str, pool_key=None) -> list:
+    """:func:`candidate_cells` over several wallets' results: the best band and score,
+    the union of families and signals, every withdrawal hash."""
+    band_rank = {"": 0, "weak": 1, "moderate": 2, "strong": 3}
+    best = ["", "", set(), set(), []]
+    for w in wallets:
+        data = corr["results"].get(w) or {}
+        cells = candidate_cells(data, address, [pool_key] if pool_key else None)
+        if band_rank[cells[0]] > band_rank[best[0]] or (
+            cells[0] and cells[0] == best[0] and cells[1] > best[1]
+        ):
+            best[0], best[1] = cells[0], cells[1]
+        best[2] |= set(filter(None, cells[2].split(";")))
+        best[3] |= set(filter(None, cells[3].split(";")))
+        best[4] += [h for h in cells[4].split(";") if h and h not in best[4]]
+    return [
+        best[0],
+        best[1],
+        ";".join(sorted(best[2])),
+        ";".join(sorted(best[3])),
+        ";".join(best[4]),
+    ]
+
+
 def _ensure_dir(out_dir):
     os.makedirs(out_dir, exist_ok=True)
     return out_dir
@@ -89,6 +170,44 @@ def _with_network(network, header, rows):
     evidence, and the per-pool filenames collide across chains without it.
     """
     return ["network"] + header, [[network.name] + row for row in rows]
+
+
+def _lookup_errors_csv(results, out_dir: str) -> list[str]:
+    """``lookup_errors.csv`` with every failed lookup and cut-off list of ``results``
+    (run results, see tornado_demix.incomplete); no file when nothing failed."""
+    header = ["wallet", "kind", "what", "address", "tx", "error"]
+    rows = []
+    for res in results:
+        wallet = res.get("wallet", "")
+        for e in res.get("errors") or []:
+            rows.append(
+                [
+                    e.get("wallet") or wallet,
+                    e.get("kind", "lookup_failed"),
+                    e.get("what", ""),
+                    e.get("address", ""),
+                    e.get("tx", ""),
+                    e.get("error", ""),
+                ]
+            )
+        for t in res.get("truncated") or []:
+            if is_notice(t):
+                rows.append(
+                    [
+                        wallet,
+                        "notice",
+                        t.get("action", ""),
+                        t.get("address", ""),
+                        "",
+                        "read from the RPC node: no gas price on these rows",
+                    ]
+                )
+                continue
+            limit = f"cut off at {t['limit']} rows" if t.get("limit") else "cut off"
+            rows.append([wallet, "truncated", t.get("action", ""), t.get("address", ""), "", limit])
+    if not rows:
+        return []
+    return [_write(os.path.join(out_dir, "lookup_errors.csv"), header, rows)]
 
 
 def write_demix_csv(data: dict, out_dir: str, network: Network) -> list[str]:
@@ -146,6 +265,7 @@ def write_demix_csv(data: dict, out_dir: str, network: Network) -> list[str]:
     files.append(_write(os.path.join(out_dir, "deposits.csv"), header, rows))
 
     # candidates.csv (count-matched recipients across all pools)
+    ranked = ranked_index(data)
     cand_rows = []
     for pool_key, res in data["denoms"].items():
         for n in res.get("target_counts", []):
@@ -163,6 +283,7 @@ def write_demix_csv(data: dict, out_dir: str, network: Network) -> list[str]:
                         _ts(min(x["ts"] for x in records)),
                         _ts(max(x["ts"] for x in records)),
                     ]
+                    + candidate_cells(data, addr, [pool_key], ranked)
                 )
     header, rows = _with_network(
         network,
@@ -175,7 +296,8 @@ def write_demix_csv(data: dict, out_dir: str, network: Network) -> list[str]:
             "total_received",
             "first_seen_utc",
             "last_seen_utc",
-        ],
+        ]
+        + CANDIDATE_COLUMNS,
         cand_rows,
     )
     files.append(_write(os.path.join(out_dir, "candidates.csv"), header, rows))
@@ -188,7 +310,7 @@ def write_demix_csv(data: dict, out_dir: str, network: Network) -> list[str]:
             records = res["detail"][addr]
             total = round(sum(x["value"] for x in records), 6)
             timestamps = sorted(x["ts"] for x in records)
-            hashes = ";".join(x["hash"] for x in records[:4])
+            sample = ";".join(x["hash"] for x in records[:4])
             # Event mode carries exact relayer/fee data; transfer mode does not.
             n_self = sum(1 for x in records if x.get("self_relayed"))
             fees = [x.get("fee") for x in records if x.get("fee") is not None]
@@ -203,8 +325,9 @@ def write_demix_csv(data: dict, out_dir: str, network: Network) -> list[str]:
                     _ts(timestamps[-1]),
                     n_self,
                     avg_fee,
-                    hashes,
+                    sample,
                 ]
+                + candidate_cells(data, addr, [pool_key], ranked)
             )
         rows.sort(key=lambda r: (r[2] != "yes", -r[1], r[0]))
         safe = pool_key.replace(".", "_").replace(" ", "_").replace("#", "_")
@@ -220,7 +343,8 @@ def write_demix_csv(data: dict, out_dir: str, network: Network) -> list[str]:
                 "self_relayed_count",
                 "avg_relayer_fee",
                 "sample_tx_hashes",
-            ],
+            ]
+            + CANDIDATE_COLUMNS,
             rows,
         )
         files.append(
@@ -231,15 +355,25 @@ def write_demix_csv(data: dict, out_dir: str, network: Network) -> list[str]:
             )
         )
 
+    files += _lookup_errors_csv([data], out_dir)
     return files
 
 
 def write_relayer_csv(
-    relayer_stats: dict, self_relayed_leads: list[dict], out_dir: str, network: Network
+    relayer_stats: dict,
+    self_relayed_leads: list[dict],
+    out_dir: str,
+    network: Network,
+    data: dict | None = None,
 ) -> list[str]:
-    """Write relayer statistics and self-relayed leads (event mode only)."""
+    """Write relayer statistics and self-relayed leads (event mode only).
+
+    ``data`` is the demix result the leads come from; with it, each lead row carries
+    the :data:`CANDIDATE_COLUMNS` of its recipient (without it they are empty).
+    """
     _ensure_dir(out_dir)
     files = []
+    ranked = ranked_index(data) if data is not None else {}
 
     header, rows = _with_network(
         network,
@@ -273,7 +407,8 @@ def write_relayer_csv(
             "fee",
             "broadcaster_address",
             "broadcaster_status",
-        ],
+        ]
+        + CANDIDATE_COLUMNS,
         [
             [
                 lead.get("pool_key", ""),
@@ -286,6 +421,11 @@ def write_relayer_csv(
                 lead.get("broadcaster") or "",
                 lead.get("broadcaster_status", "unverified"),
             ]
+            + (
+                candidate_cells(data, lead["to"], [lead.get("pool_key")], ranked)
+                if data is not None
+                else ["", "", "", "", lead["tx_hash"]]
+            )
             for lead in self_relayed_leads
         ],
     )
@@ -342,10 +482,13 @@ def write_multi_csv(corr: dict, out_dir: str, network: Network) -> list[str]:
         rows = []
         for pool_key, addr, wallets in entries:
             detail = ";".join(f"{w}({addr_detail[(pool_key, addr)][w]}x)" for w in wallets)
-            rows.append([pool_key, addr, len(wallets), detail])
+            rows.append(
+                [pool_key, addr, len(wallets), detail]
+                + multi_candidate_cells(corr, wallets, addr, pool_key)
+            )
         header, out_rows = _with_network(
             network,
-            ["pool", "address", "num_wallets", "wallets_and_hitcounts"],
+            ["pool", "address", "num_wallets", "wallets_and_hitcounts"] + CANDIDATE_COLUMNS,
             rows,
         )
         files.append(_write(os.path.join(out_dir, f"{name}.csv"), header, out_rows))
@@ -357,7 +500,10 @@ def write_multi_csv(corr: dict, out_dir: str, network: Network) -> list[str]:
         multi = "yes" if len(fingerprint) >= 2 else "no"
         for addr, detail, exact in corr["profile_matches"].get(wallet, []):
             recv = ";".join(f"{d}:{r}/{n}" for d, (r, n) in sorted(detail.items()))
-            prof_rows.append([wallet, printable, addr, "exact" if exact else "gte", recv, multi])
+            prof_rows.append(
+                [wallet, printable, addr, "exact" if exact else "gte", recv, multi]
+                + multi_candidate_cells(corr, [wallet], addr)
+            )
     header, rows = _with_network(
         network,
         [
@@ -367,19 +513,31 @@ def write_multi_csv(corr: dict, out_dir: str, network: Network) -> list[str]:
             "match_type",
             "received_vs_needed",
             "multi_denomination",
-        ],
+        ]
+        + CANDIDATE_COLUMNS,
         prof_rows,
     )
     files.append(_write(os.path.join(out_dir, "profile_matches.csv"), header, rows))
 
     # cross_consolidators.csv
+    grades = corr.get("consolidator_grades", {})
+    cons_rows = []
+    for addr, ws in corr["cross_profile"].items():
+        cells = multi_candidate_cells(corr, ws, addr)
+        if addr in grades:  # the consolidator's own grade (window artefacts stay weak)
+            cells[0] = grades[addr]["band"]
+            cells[2] = ";".join(
+                sorted({METHOD_FAMILY.get(s, s) for s in grades[addr].get("independent", [])})
+            )
+        cons_rows.append([addr, len(ws), ";".join(ws)] + cells)
     header, rows = _with_network(
         network,
-        ["consolidator_address", "num_wallets", "wallets"],
-        [[addr, len(ws), ";".join(ws)] for addr, ws in corr["cross_profile"].items()],
+        ["consolidator_address", "num_wallets", "wallets"] + CANDIDATE_COLUMNS,
+        cons_rows,
     )
     files.append(_write(os.path.join(out_dir, "cross_consolidators.csv"), header, rows))
 
+    files += _lookup_errors_csv([corr], out_dir)
     return files
 
 
@@ -485,4 +643,5 @@ def write_cluster_csv(traces: list[dict], out_dir: str, network: Network) -> lis
         detail_rows,
     )
     files.append(_write(os.path.join(out_dir, "cluster_detail.csv"), header, rows))
+    files += _lookup_errors_csv(traces, out_dir)
     return files

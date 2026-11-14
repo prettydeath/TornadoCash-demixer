@@ -266,3 +266,79 @@ def test_an_after_lookup_that_fails_for_an_older_end_falls_back_to_the_head():
 
     assert find_fill(Odd(fx), d, TABLE) is None
     assert seen["end"] == 5
+
+
+# --- destination pools, the Optimism deposit, no-fill states -----------------------
+
+OP_SPOKE = "0x6f26bf09b1c792e3228e5467807a900a503c0281"
+
+
+def test_destination_pools_are_the_spokepools_only():
+    from tornado_demix.bridges import destination_pools
+
+    # Ethereum: the current SpokePool, not the v2 pool nor the periphery
+    assert destination_pools(TABLE, 1) == ["0x5c7bcd6e7de5423a257d81b442095a1a6ced35c5"]
+    assert destination_pools(TABLE, 10) == [OP_SPOKE]
+    assert destination_pools(TABLE, 56) == ["0x4e8e101924ede233c13e2d8622dc8aed2872d505"]
+    assert destination_pools(TABLE, 43114) == ["0xfe9d541c92e4e90437c7152a00244886de37a658"]
+    assert destination_pools(TABLE, 100) == []
+
+
+def test_optimism_deposit_and_its_fill():
+    """Ethereum -> Optimism, real logs.
+
+    Selection rule: the first FundsDeposited log of the Ethereum SpokePool
+    0x5c7bcd6e7de5423a257d81b442095a1a6ced35c5 at or after block 26,000,000 whose
+    destinationChainId topic is 10 (getLogs, ascending). Deposit tx
+    0x99761650dc3ad05aa5255f32c20c8a7714fd3e54c0a277eddcfe64cbaf4b4f74 (block 26000417,
+    sent through the LI.FI diamond 0x1231deb6f5749ef6ce6943a275a1d3e7486f4eae); fill on
+    Optimism 0x297e28107d017ce3e5e18afb191424751b642603d0a24ac5574355dc5e66471d
+    (eth_getLogs of the Optimism SpokePool, origin chain 1 and deposit id 4601060).
+    """
+    fx = _fx("across_optimism.json")
+    assert fx["tx_hash"] == "0x99761650dc3ad05aa5255f32c20c8a7714fd3e54c0a277eddcfe64cbaf4b4f74"
+    (d,) = decode_deposits(L1(fx), fx["tx_hash"], table=TABLE, ts=fx["ts"])
+    assert d["deposit_id"] == 4601060 and d["dest_chain_id"] == 10
+    assert d["depositor"] == d["recipient"] == "0xaca0313434bc1cfbe63ba42f8d423035805bd413"
+    assert d["tx_from"] == "0xaca0313434bc1cfbe63ba42f8d423035805bd413"
+    assert d["input_amount"] == 4588004 and d["output_amount"] == 4587300
+    dest = Dest(fx)
+    fill = find_fill(dest, d, TABLE)
+    assert fill["tx_hash"] == "0x297e28107d017ce3e5e18afb191424751b642603d0a24ac5574355dc5e66471d"
+    assert fill["chain_id"] == 10 and fill["recipient"] == d["recipient"]
+    assert dest.calls[0][0] == OP_SPOKE
+
+
+def test_no_fill_state_tells_an_expired_deposit_from_a_pending_one():
+    from tornado_demix.bridges import DEPOSIT_EXPIRED, FILL_NOT_FOUND, no_fill_state
+
+    d = {"ts": 1000, "fill_deadline": 1000 + 3600}
+    assert no_fill_state(d, now=1000 + 7200) == DEPOSIT_EXPIRED
+    assert no_fill_state(d, now=1000 + 1800) == FILL_NOT_FOUND
+    # a deadline past the search window: the window was cut, so nothing is said
+    assert no_fill_state(dict(d, fill_deadline=1000 + 30 * 86400), now=10**10) == FILL_NOT_FOUND
+    assert no_fill_state({"ts": None, "fill_deadline": 5}, now=10**10) == FILL_NOT_FOUND
+
+
+def test_listed_bridge_row_by_chain_and_address():
+    from tornado_demix.bridges import listed
+
+    assert listed(TABLE, 1, "0x1231DEB6F5749EF6CE6943A275A1D3E7486F4EAE")["protocol"] == "lifi"
+    assert listed(TABLE, 137, "0x1231deb6f5749ef6ce6943a275a1d3e7486f4eae") is None
+    assert listed(TABLE, None, "0x1231deb6f5749ef6ce6943a275a1d3e7486f4eae") is None
+
+
+@pytest.mark.live
+def test_live_optimism_fill_through_blockscout():
+    """Real chain: the Optimism fill of the fixture's deposit, read from Blockscout
+    (topic filters dropped, matched locally; needs network access)."""
+    from tornado_demix import config
+    from tornado_demix.etherscan import EtherscanClient
+    from tornado_demix.networks import get_network
+
+    fx = _fx("across_optimism.json")
+    key = config.load_api_key()
+    (d,) = decode_deposits(EtherscanClient(key), fx["tx_hash"], table=TABLE, ts=fx["ts"])
+    op = EtherscanClient(key, **get_network("optimism").client_kwargs())
+    fill = find_fill(op, d, TABLE)
+    assert fill and fill["tx_hash"] == fx["fills"][0]["transactionHash"]

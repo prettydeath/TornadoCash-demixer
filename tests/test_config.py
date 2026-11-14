@@ -86,7 +86,7 @@ def test_load_wallets_does_not_fall_back_to_the_example_addresses(
 ):
     """A forgotten wallets.csv must fail loudly, not analyse example wallets."""
     (fake_package_config / "wallets.csv.example").write_text(
-        "address,label\n0x019b5bb2051797e33f726d0e7a8cb9b9c2003ac2,example-1\n"
+        "address,label\n0x1234567890abcdef1234567890abcdef12345678,example-1\n"
     )
     monkeypatch.delenv(config.CONFIG_ENV, raising=False)
     monkeypatch.chdir(tmp_path)
@@ -104,7 +104,7 @@ def test_the_env_var_scopes_the_search_instead_of_prepending_to_it(
     repository's own wallets.csv - which would analyse a different subject.
     """
     (fake_package_config / "wallets.csv").write_text(
-        "address,label\n0x450cc23c0bc13d46288deb36913fdaaee49fcd99,other-case\n"
+        "address,label\n0xabcdefabcdefabcdefabcdefabcdefabcdefabcd,other-case\n"
     )
     (fake_package_config / "api.csv").write_text("service,api_key\netherscan,OTHERCASEKEY\n")
     case = tmp_path / "case-42"
@@ -126,7 +126,7 @@ def test_the_env_var_scope_also_excludes_the_cwd_config(fake_package_config, mon
     cwd_cfg = tmp_path / "config"
     cwd_cfg.mkdir()
     (cwd_cfg / "wallets.csv").write_text(
-        "address,label\n0x450cc23c0bc13d46288deb36913fdaaee49fcd99,other-case\n"
+        "address,label\n0xabcdefabcdefabcdefabcdefabcdefabcdefabcd,other-case\n"
     )
     case = tmp_path / "case-42"
     case.mkdir()
@@ -162,28 +162,28 @@ def test_load_wallets_reads_address_column(tmp_path, monkeypatch):
     path = tmp_path / "wallets.csv"
     path.write_text(
         "address,label\n"
-        "0x019B5BB2051797E33F726D0E7A8CB9B9C2003AC2,suspect-1\n"
+        "0x1234567890ABCDEF1234567890ABCDEF12345678,suspect-1\n"
         "\n"
         "#0xdeadbeef,comment\n"
         "not-an-address,junk\n"
-        "0x450cc23c0bc13d46288deb36913fdaaee49fcd99,suspect-2\n"
+        "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd,suspect-2\n"
     )
     monkeypatch.chdir(tmp_path)
     assert config.load_wallets(str(path)) == [
-        "0x019b5bb2051797e33f726d0e7a8cb9b9c2003ac2",
-        "0x450cc23c0bc13d46288deb36913fdaaee49fcd99",
+        "0x1234567890abcdef1234567890abcdef12345678",
+        "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd",
     ]
 
 
 @pytest.mark.parametrize(
     "value, ok",
     [
-        ("0x019b5bb2051797e33f726d0e7a8cb9b9c2003ac2", True),
-        ("0x019B5BB2051797E33F726D0E7A8CB9B9C2003AC2", True),
-        ("0x019b5bb2051797e33f726d0e7a8cb9b9c2003ac", False),
-        ("019b5bb2051797e33f726d0e7a8cb9b9c2003ac2aa", False),
-        ("0x019b5bb2051797e33f726d0e7a8cb9b9c2003ag2", False),
-        ("0x_19b5bb2051797e33f726d0e7a8cb9b9c2003ac2", False),
+        ("0x1234567890abcdef1234567890abcdef12345678", True),
+        ("0x1234567890ABCDEF1234567890ABCDEF12345678", True),
+        ("0x1234567890abcdef1234567890abcdef1234567", False),
+        ("1234567890abcdef1234567890abcdef12345678aa", False),
+        ("0x1234567890abcdef1234567890abcdef1234567g", False),
+        ("0x_234567890abcdef1234567890abcdef12345678", False),
         ("", False),
     ],
 )
@@ -194,7 +194,7 @@ def test_is_address_accepts_only_0x_and_40_hex_digits(value, ok):
 def test_load_wallets_skips_rows_that_are_not_hex(tmp_path):
     path = tmp_path / "wallets.csv"
     path.write_text(
-        "address\n0x019b5bb2051797e33f726d0e7a8cb9b9c2003ac2\n0x" + "z" * 40 + "\n",
+        "address\n0x1234567890abcdef1234567890abcdef12345678\n0x" + "z" * 40 + "\n",
         encoding="utf-8",
     )
-    assert config.load_wallets(str(path)) == ["0x019b5bb2051797e33f726d0e7a8cb9b9c2003ac2"]
+    assert config.load_wallets(str(path)) == ["0x1234567890abcdef1234567890abcdef12345678"]

@@ -295,4 +295,9 @@ def test_the_web_ui_shows_the_evidence_and_the_band_legend(web, monkeypatch):
     )
     assert HIT in body
     assert "6×0.1 ETH + 4×1 ETH" in body
-    assert "early multi-pool profile match" in body
+    import html as htmllib
+
+    from tornado_demix import honest
+
+    assert htmllib.unescape(honest.band_note()) in htmllib.unescape(body)
+    assert "early multi-pool profile" in body

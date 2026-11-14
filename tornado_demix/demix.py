@@ -14,7 +14,11 @@ from collections import Counter, defaultdict
 from datetime import datetime, timezone
 
 from .constants import WEI
-from .deposit_addresses import depositor_deposit_addresses, shared_deposit_hits
+from .deposit_addresses import (
+    depositor_deposit_addresses,
+    own_token_transfers,
+    shared_deposit_hits,
+)
 from .errors import ApiError, ApiKeyError, BlockLookupError
 from .etherscan import EtherscanClient
 from .events import fetch_withdrawals
@@ -25,6 +29,7 @@ from .heuristics import (
     count_is_evidence,
     ranked_candidates,
 )
+from .incomplete import attach, lookup_failed, mark, truncated_since
 from .networks import Network, load_networks
 from .pools import Pool
 from .root_exclusion import apply_root_check
@@ -59,6 +64,7 @@ def detect_deposits(
     txs: list[dict] | None = None,
     token_txs: list[dict] | None = None,
     internal_txs: list[dict] | None = None,
+    errors: list | None = None,
 ) -> list[dict]:
     """Return the wallet's Tornado deposits, native and ERC-20.
 
@@ -66,6 +72,8 @@ def detect_deposits(
     internal transfer (a Safe or other contract wallet); a token deposit matches
     exactly. Each dict: pool_key, denom, asset, ts, block, hash, to, via,
     gas_price. Pre-fetched ``txs``, ``token_txs`` and ``internal_txs`` save calls.
+    A twin-pool receipt that cannot be read leaves ``pool_ambiguous`` and, when
+    ``errors`` is a list, is appended to it.
     """
     network = network or _default_network()
     wallet = wallet.lower()
@@ -84,7 +92,7 @@ def detect_deposits(
         if token_txs is None:
             token_txs = client.token_transfers(wallet) if client is not None else []
         deposits.extend(_token_deposits(wallet, token_txs, token_pools, network.routers))
-        _resolve_twin_pools(client, deposits, token_pools)
+        _resolve_twin_pools(client, deposits, token_pools, errors)
 
     deposits.sort(key=lambda d: d["ts"])
     return deposits
@@ -186,7 +194,7 @@ def _token_deposits(wallet, token_txs, token_pools, routers=()):
     return found
 
 
-def _resolve_twin_pools(client, deposits, token_pools):
+def _resolve_twin_pools(client, deposits, token_pools, errors=None):
     """Pick the right twin for router deposits from the Deposit event's emitter.
 
     One receipt per ambiguous deposit; twins are rare (three pairs on Ethereum).
@@ -198,7 +206,14 @@ def _resolve_twin_pools(client, deposits, token_pools):
         keys = deposit.get("pool_ambiguous")
         if not keys or client is None or not hasattr(client, "deposit_emitters"):
             continue
-        emitters = client.deposit_emitters(deposit["hash"]) or set()
+        try:
+            emitters = client.deposit_emitters(deposit["hash"]) or set()
+        except ApiKeyError:
+            raise
+        except ApiError as exc:
+            if errors is not None:
+                errors.append(lookup_failed("deposit receipt (twin pool)", exc, tx=deposit["hash"]))
+            continue
         hit = [k for k in keys if by_key[k].address in emitters]
         if len(hit) == 1:
             pool = by_key[hit[0]]
@@ -221,6 +236,37 @@ def _deposit(pool, tx, to, via):
     }
 
 
+def native_counterparty_rows(wallet: str, txs: list[dict]) -> list[dict]:
+    """The native ``txlist`` rows that show a relationship, for the direct counterparties.
+
+    A failed transaction (``isError`` 1 or ``txreceipt_status`` 0) moved nothing and is
+    dropped in both directions. An incoming transaction with value 0 is dropped too:
+    anyone can send one to any address (address poisoners do it from look-alikes) and it
+    carries nothing. An incoming transaction with value, even 1 wei, is kept: it costs
+    the sender money and needs the sender's key, so it cannot name a third party. An
+    outgoing successful transaction is kept whatever its value (the depositor signed it;
+    a call to a contract is handled by the contract check)."""
+    wallet = wallet.lower()
+    out = []
+    for tx in txs:
+        if str(tx.get("isError", "0")) == "1" or str(tx.get("txreceipt_status", "1")) == "0":
+            continue
+        incoming = (tx.get("to") or "").lower() == wallet and (
+            tx.get("from") or ""
+        ).lower() != wallet
+        if incoming and _int_value(tx) <= 0:
+            continue
+        out.append(tx)
+    return out
+
+
+def _int_value(tx: dict) -> int:
+    try:
+        return int(str(tx.get("value", "0")).strip() or "0")
+    except ValueError:
+        return 0
+
+
 def wallet_counterparties(wallet: str, txs: list[dict]) -> set[str]:
     """Return the set of addresses the wallet directly transacted with.
 
@@ -237,11 +283,39 @@ def wallet_counterparties(wallet: str, txs: list[dict]) -> set[str]:
     return parties
 
 
-def withdrawal_senders(client, wallet, txs, results, network, is_contract, labels=None):
+def counterparty_links(wallet: str, txs: list[dict], addresses) -> dict[str, dict]:
+    """``{address: {"tx", "ts"}}``: the earliest transaction (of the rows that make
+    direct counterparties, see :func:`wallet_counterparties`) between the wallet and each
+    of ``addresses``. The reports cite it as the transaction behind a direct link."""
+    wallet = wallet.lower()
+    wanted = {a.lower() for a in addresses}
+    out: dict[str, dict] = {}
+    for tx in txs:
+        sides = {(tx.get("from") or "").lower(), (tx.get("to") or "").lower()}
+        if wallet not in sides or not tx.get("hash"):
+            continue
+        for addr in sides & wanted:
+            if addr == wallet:
+                continue
+            try:
+                ts = int(tx.get("timeStamp") or 0)
+            except (TypeError, ValueError):
+                ts = 0
+            if addr not in out or ts < out[addr]["ts"]:
+                out[addr] = {"tx": tx["hash"], "ts": ts}
+    return out
+
+
+def withdrawal_senders(
+    client, wallet, txs, results, network, is_contract, labels=None, errors=None
+):
     """{withdrawal tx hash: sender} for withdrawals sent by the wallet or a direct counterparty.
 
     Only non-contract, non-busy counterparties are read, at most MAX_SENDER_COUNTERPARTIES,
-    and only within the searched block ranges, so the cost stays bounded.
+    and only within the searched block ranges, so the cost stays bounded. A counterparty
+    whose busy check or history read fails is skipped, not fatal; when ``errors`` is a
+    list the failure is appended to it (:mod:`tornado_demix.incomplete`), so "no linked
+    sender" is never reported for a counterparty that was not read.
     """
     wallet = wallet.lower()
     hashes = {
@@ -292,10 +366,12 @@ def withdrawal_senders(client, wallet, txs, results, network, is_contract, label
                 too_busy = busy is not None and busy(addr, BUSY_COUNTERPARTY_TXS)
             except ApiKeyError:
                 raise
-            except ApiError:
+            except ApiError as exc:
                 # Some explorers refuse a page this large for a busy address;
                 # an unchecked counterparty is skipped, not fatal to the run.
                 _log("  [linked_sender] could not check counterparty {}, skipped".format(addr))
+                if errors is not None:
+                    errors.append(lookup_failed("linked_sender busy check", exc, address=addr))
                 continue
             if too_busy:
                 _log("  [linked_sender] skipped busy counterparty {}".format(addr))
@@ -313,10 +389,12 @@ def withdrawal_senders(client, wallet, txs, results, network, is_contract, label
                 rows = client.outgoing_txs(addr)
         except ApiKeyError:
             raise
-        except ApiError:
+        except ApiError as exc:
             if addr == wallet:
                 raise  # the depositor's own history is required
             _log("  [linked_sender] could not read counterparty {}, skipped".format(addr))
+            if errors is not None:
+                errors.append(lookup_failed("linked_sender history", exc, address=addr))
             continue
         for tx in rows:
             h = (tx.get("hash") or "").lower()
@@ -443,12 +521,13 @@ FRESH_HISTORY_HOURS = 24
 FRESH_CHECK_LIMIT = 10
 
 
-def fresh_addresses(client, data, limit=FRESH_CHECK_LIMIT):
+def fresh_addresses(client, data, limit=FRESH_CHECK_LIMIT, errors=None):
     """Check how much history the top candidates had before their first withdrawal.
 
     Returns {address: {first_activity_ts, first_withdrawal_ts, history_hours,
     fresh}}. Informational only: a fresh address is typical of laundering exits
-    but also of any new wallet, so it never enters the score or the band.
+    but also of any new wallet, so it never enters the score or the band. A failed
+    lookup leaves the address out and, when ``errors`` is a list, is appended to it.
     """
     if not hasattr(client, "first_activity"):
         return {}
@@ -466,6 +545,8 @@ def fresh_addresses(client, data, limit=FRESH_CHECK_LIMIT):
             raise
         except ApiError as exc:
             _log("  [!] first activity of {} not read: {}".format(addr, exc))
+            if errors is not None:
+                errors.append(lookup_failed("first activity", exc, address=addr))
             continue
         first = withdrawn if first is None else min(first, withdrawn)
         history = (withdrawn - first) / 3600
@@ -478,28 +559,39 @@ def fresh_addresses(client, data, limit=FRESH_CHECK_LIMIT):
     return out
 
 
-def _resolve_window_end(client, end_ts):
+def _resolve_window_end(client, end_ts, notes=None):
     """Resolve a window's end timestamp to a block, never past the chain head.
 
     For a recent deposit the window ends in the future, and block-by-time with
     closest="after" rejects a future timestamp. Such an end is clamped to the
-    current block instead of skipping the pool.
+    current block instead of skipping the pool. A past end whose lookup failed falls
+    back to the current block too (a wider window); when ``notes`` is a list that
+    fallback is recorded there (kind ``window_end_fallback``).
     """
     if end_ts > time.time():
         return client.current_block()
     try:
         return client.block_by_time(end_ts, "after")
-    except BlockLookupError:
+    except BlockLookupError as exc:
+        if notes is not None:
+            notes.append(
+                lookup_failed(
+                    "window end block (searched up to the current block instead)",
+                    exc,
+                    kind="window_end_fallback",
+                    timestamp=end_ts,
+                )
+            )
         return client.current_block()
 
 
-def _resolve_windows(client, pool, windows):
+def _resolve_windows(client, pool, windows, notes=None):
     """Attach start_block / end_block to each window, logging the range."""
     for window in windows:
         window["start_block"] = client.block_by_time(window["first_ts"], "before")
         # A lagging current-block answer must not produce an empty, inverted range.
         window["end_block"] = max(
-            _resolve_window_end(client, window["end_ts"]), window["start_block"]
+            _resolve_window_end(client, window["end_ts"], notes), window["start_block"]
         )
         _log(
             "  [{}] pool {} | blocks {}..{} ({:%Y-%m-%d} .. {:%Y-%m-%d})".format(
@@ -521,6 +613,7 @@ def analyze_denom(
     fee_lo: float,
     fee_hi: float,
     exit_window_hours: float | None = None,
+    notes=None,
 ) -> dict:
     """Export in-window withdrawals for one pool and count recipients.
 
@@ -532,7 +625,7 @@ def analyze_denom(
     high_value = pool.denom * fee_hi
 
     windows = voucher_windows(vouchers_for_pool, window_days, exit_window_hours)
-    _resolve_windows(client, pool, windows)
+    _resolve_windows(client, pool, windows, notes)
     internal = []
     for window in windows:
         internal.extend(
@@ -592,6 +685,7 @@ def analyze_denom_events(
     vouchers_for_pool: list[dict],
     window_days: int,
     exit_window_hours: float | None = None,
+    notes=None,
 ) -> dict:
     """Exact, log-based variant of :func:`analyze_denom`.
 
@@ -600,7 +694,7 @@ def analyze_denom_events(
     withdrawals, which fall outside the transfers-mode fee window.
     """
     windows = voucher_windows(vouchers_for_pool, window_days, exit_window_hours)
-    _resolve_windows(client, pool, windows)
+    _resolve_windows(client, pool, windows, notes)
     withdrawals = []
     for window in windows:
         withdrawals.extend(
@@ -748,6 +842,10 @@ def run_demix(
     :mod:`tornado_demix.root_exclusion`); off by default. ``root_cache_dir`` holds the
     per-pool root indexes (default ``.cache/merkle``; the first build of a large pool
     takes about half an hour).
+    Every result carries ``errors`` (failed lookups: a counterparty, busy, contract,
+    base-fee or first-activity check that did not answer; see
+    :mod:`tornado_demix.incomplete`), ``error_count`` and ``truncated`` (lists the
+    explorer cut off during this run). A failed lookup is never "nothing found".
     """
     network = network or _default_network()
     wallet = wallet.lower()
@@ -755,15 +853,28 @@ def run_demix(
     if exit_window_hours is not None and exit_window_hours <= 0:
         exit_window_hours = None
     _log("[*] Wallet: {} on {}".format(wallet, network.name))
+    # Failed lookups and cut-off lists of THIS run (see tornado_demix.incomplete).
+    errors: list[dict] = []
+    start_mark = mark(client)
 
     all_txs = client.outgoing_txs(wallet)  # txlist returns both directions
     internal_txs = client.internal_txs(wallet)
-    # Token transfers are read once: for token-pool deposits and so that a direct
-    # ERC-20 transfer between the depositor and a candidate earns linked too.
-    token_txs = (
-        client.token_transfers(wallet) if any(not p.is_native for p in network.pools) else []
+    # Token transfers are read once, on every network: for token-pool deposits, so that
+    # a direct ERC-20 transfer between the depositor and a candidate earns linked too,
+    # and for USDC/USDT deposit addresses of the depositor on chains without token pools.
+    # (A stub client without a token list reads none.)
+    fetch_tokens = getattr(client, "token_transfers", None)
+    token_txs = fetch_tokens(wallet) if fetch_tokens is not None else []
+    # Only token rows the depositor really took part in make a direct counterparty: a
+    # spoofed, zero-value or fake-token Transfer can name any address at any time
+    # (see deposit_addresses.own_token_transfers); a 0-value or failed native tx
+    # carries nothing either (native_counterparty_rows).
+    link_rows = (
+        native_counterparty_rows(wallet, all_txs)
+        + internal_txs
+        + own_token_transfers(wallet, all_txs, token_txs)
     )
-    counterparties = wallet_counterparties(wallet, all_txs + internal_txs + token_txs)
+    counterparties = wallet_counterparties(wallet, link_rows)
     deposits = detect_deposits(
         client,
         wallet,
@@ -771,12 +882,13 @@ def run_demix(
         txs=all_txs,
         internal_txs=internal_txs,
         token_txs=token_txs,
+        errors=errors,
     )
     if deposit_shift_seconds > 0:
         deposits = [dict(d, ts=d["ts"] - deposit_shift_seconds) for d in deposits]
     _log("[*] Tornado deposits detected: {}".format(len(deposits)))
     if not deposits:
-        return {
+        empty = {
             "wallet": wallet,
             "deposits": [],
             "vouchers": [],
@@ -793,6 +905,7 @@ def run_demix(
                 "deposit_shift_seconds": deposit_shift_seconds,
             },
         }
+        return attach(empty, errors, truncated_since(client, start_mark))
 
     vouchers = cluster_vouchers(
         deposits, gap_hours=gap_hours, max_span_hours=max_voucher_span_hours
@@ -814,11 +927,18 @@ def run_demix(
         try:
             if mode == "events":
                 results[pool_key] = analyze_denom_events(
-                    client, pool, vouchers_for_pool, window_days, exit_window_hours
+                    client, pool, vouchers_for_pool, window_days, exit_window_hours, errors
                 )
             else:
                 results[pool_key] = analyze_denom(
-                    client, pool, vouchers_for_pool, window_days, fee_lo, fee_hi, exit_window_hours
+                    client,
+                    pool,
+                    vouchers_for_pool,
+                    window_days,
+                    fee_lo,
+                    fee_hi,
+                    exit_window_hours,
+                    errors,
                 )
         except BlockLookupError as exc:
             # Skipping this pool loses one lead; searching the whole chain
@@ -869,6 +989,8 @@ def run_demix(
             is_contract,
             labels,
             exclude={p.address for p in network.pools} | set(network.routers),
+            errors=errors,
+            gas_fund_wei=network.gas_fund_wei,
         )
         _log("[*] exchange deposit addresses of the depositor: {}".format(len(deposit_rows)))
         recipients = {addr for res in results.values() for addr in res["detail"]}
@@ -884,25 +1006,33 @@ def run_demix(
                 evidence_only=False,
             ).items()
         }
+    gas_gate = make_gas_price_gate(network.rpc_url, log=_log)
     heuristics_args = {
-        "gas_gate": make_gas_price_gate(network.rpc_url, log=_log),
+        "gas_gate": gas_gate,
         "is_contract": is_contract,
         "withdrawal_senders": withdrawal_senders(
-            client, wallet, all_txs + internal_txs, results, network, is_contract, labels
+            client, wallet, all_txs + internal_txs, results, network, is_contract, labels, errors
         ),
         "shared_deposits": deposit_hits,
     }
     apply_heuristics(result, counterparties, **heuristics_args)
+    # The transaction behind each direct link the evidence cites: linked candidates
+    # and the depositor-side senders of withdrawals.
+    h = result["heuristics"]
+    cited = {a for _pk, a in h["linked_addresses"]} | {s for _p, _a, s, _t in h["linked_senders"]}
+    result["counterparty_links"] = counterparty_links(wallet, link_rows, cited)
 
     def refresh():
         score_collected(result, counterparties, heuristics_args)
 
     if root_check:
-        apply_root_check(client, result, network, refresh, root_cache_dir)
+        apply_root_check(client, result, network, refresh, root_cache_dir, errors=errors)
     result["deposit_addresses"] = deposit_rows
     result["deposit_context_hits"] = context_hits
-    result["fresh_addresses"] = fresh_addresses(client, result)
+    result["fresh_addresses"] = fresh_addresses(client, result, errors=errors)
     # Exits withdrawn in joint bursts; anchored by a corroborated candidate or a
     # known exit. Context only, like the fresh mark.
     result["exit_groups"] = exit_groups(result, ranked_candidates(result), known_exits)
-    return result
+    errors += getattr(is_contract, "errors", [])
+    errors += getattr(gas_gate, "errors", [])
+    return attach(result, errors, truncated_since(client, start_mark))

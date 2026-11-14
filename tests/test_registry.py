@@ -162,3 +162,89 @@ def test_env_var_overrides_default(tmp_path, monkeypatch):
     monkeypatch.setenv("TORNADO_DEMIX_REGISTRY", str(p))
     reg.record("a.b", THIS, {}, {}, lock_path=str(tmp_path / "no.lock"))
     assert p.exists()
+
+
+def _locked(tmp_path, path):
+    """A lock listing THIS script, next to a register at <tmp>/proj/.cache/registry/."""
+    lock = tmp_path / "proj" / "docs" / "PROTOCOL.lock"
+    lock.parent.mkdir(parents=True)
+    lock.write_text(f"{reg.sha256_file(THIS)}  s.py\n", encoding="utf-8")
+    return str(lock)
+
+
+def test_default_lock_is_found_from_the_register_not_the_cwd(tmp_path, monkeypatch):
+    lock = _locked(tmp_path, None)
+    register = tmp_path / "proj" / ".cache" / "registry" / "tests.jsonl"
+    elsewhere = tmp_path / "other"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    assert os.path.samefile(reg.lock_for(str(register)), lock)
+    rec = reg.record("a.b", THIS, {}, {}, path=str(register))
+    assert rec["status"] == "confirmatory"
+    # a register outside that layout keeps its lock beside it
+    other = tmp_path / "plain" / "t.jsonl"
+    assert reg.lock_for(str(other)) == str(tmp_path / "plain" / "PROTOCOL.lock")
+
+
+def test_unlisted_confirmatory_record_is_not_a_broken_chain(tmp_path, path, capsys):
+    lock = _locked(tmp_path, path)
+    reg.record("a.b", THIS, {}, {}, path=path, lock_path=lock)
+    assert reg.unlisted(path, lock) == []
+    empty = tmp_path / "empty.lock"
+    empty.write_text("# nothing\n", encoding="utf-8")
+    assert reg.unlisted(path, str(empty)) == [0]
+    assert reg.verify_chain(path) == []  # the chain itself is intact
+    # an exploratory record whose script was locked later is not listed either
+    _rec(path, 1)
+    assert reg.unlisted(path, lock) == []
+    # the report prints it and the exit code is unaffected
+    assert registry_report.main([path]) == 0
+    assert "not listed in the current lock" in capsys.readouterr().out
+
+
+def test_verify_against_a_witness_detects_a_truncated_tail(path):
+    for i in range(4):
+        _rec(path, i)
+    w = reg.witness(path)
+    assert reg.verify_chain(path, witness=w) == []
+    lines = _lines(path)
+    with open(path, "wb") as fh:
+        fh.write(b"\n".join(lines[:2]) + b"\n")
+    assert reg.verify_chain(path) == []  # intact from the file alone
+    assert reg.verify_chain(path, witness=w) == [3]
+    assert reg.verify_chain(path, witness={"seq": 0, "hash": "0" * 64}) == [0]
+
+
+def test_a_half_written_last_line_is_reported_and_does_not_block_appends(path, capsys):
+    _rec(path, 0)
+    _rec(path, 1)
+    with open(path, "ab") as fh:
+        fh.write(b'{"seq":2,"utc":"2026-')  # killed mid-write, no newline
+    assert reg.verify_chain(path) == []
+    assert reg.partial_tail(path) == 2
+    assert reg.witness(path)["seq"] == 1
+    nxt = _rec(path, 3)  # not blocked
+    assert nxt["seq"] == 3
+    assert reg.partial_tail(path) is None
+    assert reg.verify_chain(path) == [2]  # the damaged slot stays visible, never silent
+
+
+def test_report_prints_a_partial_tail_without_failing(path, capsys):
+    _rec(path, 0)
+    with open(path, "ab") as fh:
+        fh.write(b'{"seq":1,"ut')
+    assert registry_report.main([path]) == 0
+    assert "half-written" in capsys.readouterr().out
+
+
+def test_report_checks_the_witness_file(path, tmp_path, capsys):
+    for i in range(3):
+        _rec(path, i)
+    wfile = tmp_path / "w" / "w.json"
+    wfile.parent.mkdir()
+    assert registry_report.main([path, "--witness", str(wfile)]) == 0
+    lines = _lines(path)
+    with open(path, "wb") as fh:
+        fh.write(b"\n".join(lines[:1]) + b"\n")
+    assert registry_report.main([path, "--check-witness", str(wfile)]) == 1
+    assert "BROKEN" in capsys.readouterr().out

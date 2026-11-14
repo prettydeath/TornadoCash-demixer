@@ -16,6 +16,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 
 from .constants import ZERO_ADDRESS
+from .errors import ApiError, ApiKeyError
 from .etherscan import EtherscanClient
 
 
@@ -181,7 +182,12 @@ def verify_broadcaster(
         if not tx_hash:
             continue
         if tx_hash not in seen:
-            seen[tx_hash] = info_of(tx_hash) if info_of is not None else sender_of(tx_hash)
+            try:
+                seen[tx_hash] = info_of(tx_hash) if info_of is not None else sender_of(tx_hash)
+            except ApiKeyError:
+                raise
+            except ApiError:
+                seen[tx_hash] = None  # not read: the lead stays unverified
         got = seen[tx_hash]
         if isinstance(got, dict):
             # The same transaction object carries the fee settings: read them here
@@ -261,7 +267,8 @@ def fee_fingerprints(leads: list[dict]) -> list[dict]:
     {key, label, recipients: [...], pools: [...], withdrawals: n, shared: bool}.
     ``shared`` marks a fingerprint seen at two or more recipients, at least one of
     them a lead (items with ``context: True`` come from :func:`fingerprint_context`)
-    - a hint that one tool or operator withdrew to all of them. Context only.
+    - the same settings at several recipients. Many users share wallet defaults, so
+    this is context only (see :func:`frequency_text` for how common it is).
     """
     groups: dict[tuple, dict] = {}
     for lead in leads:
@@ -290,15 +297,82 @@ def fee_fingerprints(leads: list[dict]) -> list[dict]:
     return out
 
 
+def fee_frequency(data: dict, group: dict) -> dict:
+    """How common a fee fingerprint is among the self-relayed withdrawals of its pools.
+
+    ``{count, total, measured}``: ``total`` is every self-relayed withdrawal of the
+    group's pools in the searched windows, ``count`` those whose fee settings were
+    read and equal the fingerprint. Fee settings are read only for the leads and the
+    context withdrawals (one transaction lookup each), so ``measured`` is True only
+    when every self-relayed withdrawal of those pools was read; otherwise ``count``
+    is a floor and the frequency is not measured.
+    """
+    key = tuple(group["key"])
+    profiles = data.get("fee_profiles", {})
+    total = count = read = 0
+    for pool_key in group.get("pools", []):
+        for w in data.get("denoms", {}).get(pool_key, {}).get("withdrawals", []):
+            if not w.get("self_relayed"):
+                continue
+            total += 1
+            profile = profiles.get(w.get("tx_hash"))
+            if profile:
+                read += 1
+                if fee_key(profile) == key:
+                    count += 1
+    return {"count": count, "total": total, "read": read, "measured": total > 0 and read == total}
+
+
+def frequency_text(group: dict) -> str:
+    """One line for a fingerprint's frequency (see :func:`fee_frequency`)."""
+    freq = group.get("frequency")
+    if not freq:
+        return "frequency not measured"
+    if freq["measured"]:
+        return f"{freq['count']} of {freq['total']} self-relayed withdrawals in these pools"
+    return (
+        f"frequency not measured (fee settings read for {freq['read']} of "
+        f"{freq['total']} self-relayed withdrawals in these pools)"
+    )
+
+
 def record_fee_profiles(data: dict, leads: list[dict]) -> list[dict]:
     """Store fee profiles of verified leads in ``data`` (for the reports) and return
     the fingerprint groups.
 
     Sets ``data["fee_profiles"]`` ({tx_hash: profile}) and
-    ``data["fee_fingerprints"]`` (see :func:`fee_fingerprints`).
+    ``data["fee_fingerprints"]`` (see :func:`fee_fingerprints`; each group also
+    carries ``frequency``, see :func:`fee_frequency`).
     """
     data["fee_profiles"] = {
         lead["tx_hash"]: lead["fee_profile"] for lead in leads if lead.get("fee_profile")
     }
-    data["fee_fingerprints"] = fee_fingerprints(leads)
-    return data["fee_fingerprints"]
+    groups = fee_fingerprints(leads)
+    for group in groups:
+        group["frequency"] = fee_frequency(data, group)
+    data["fee_fingerprints"] = groups
+    return groups
+
+
+def verify_run(client: EtherscanClient, data: dict) -> tuple[list[dict], list[dict], list[dict]]:
+    """Self-relayed leads of a run with their broadcasters read, and the fee fingerprints.
+
+    Returns ``(leads, context, fingerprints)`` and stores the verified ``leads`` in
+    ``data["self_relayed_leads"]``, so the HTML report, the JSON export, the CSV and
+    the web UI all show the same checked list instead of recomputing an unchecked one.
+    """
+    leads = self_relayed_candidates(data)
+    verify_broadcaster(client, leads)
+    context = fingerprint_context(data, leads)
+    verify_broadcaster(client, context)
+    fingerprints = record_fee_profiles(data, leads + context)
+    data["self_relayed_leads"] = leads
+    return leads, context, fingerprints
+
+
+def report_leads(data: dict) -> list[dict]:
+    """The self-relayed leads a report shows: the verified list when the run made one,
+    otherwise the unverified candidates of the result."""
+    if "self_relayed_leads" in data:
+        return data["self_relayed_leads"]
+    return self_relayed_candidates(data)

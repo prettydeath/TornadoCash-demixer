@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+from bisect import bisect_left, bisect_right
 from functools import lru_cache
 
 from .constants import TOPIC_DEPOSIT
@@ -22,6 +23,7 @@ FIELD = 218882428718392752222464057452572750885483644004160343436982041865758084
 # tornado-core: uint256(keccak256("tornado")) % FIELD_SIZE (same on Ethereum and Polygon pools)
 ZERO_VALUE = 21663839004416932945382355908790599225266501822907911457504978515578255421292
 LEVELS = 20
+ROOT_HISTORY_SIZE_SELECTOR = "0xcd87a3b4"  # ROOT_HISTORY_SIZE()
 
 _CONSTANTS_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "data", "mimcsponge_constants.txt"
@@ -159,30 +161,25 @@ def root_index(
     return roots, tree.state()
 
 
-def cached_root_index(client, pool, end_block: int, cache_dir: str, chain=None) -> dict:
-    """Root index of ``pool`` up to ``end_block``, resumed from ``cache_dir``.
+def _read_cache(path: str, pool, chain) -> dict | None:
+    if not os.path.exists(path):
+        return None
+    with open(path, encoding="utf-8") as fh:
+        cache = json.load(fh)
+    if cache.get("pool") != pool.address or cache.get("chain") != chain:
+        raise ApiError("merkle cache {} belongs to another pool".format(path))
+    return cache
 
-    The cache is ``<cache_dir>/<chain>_<pool address>.json`` holding
-    ``{"pool", "chain", "end_block", "state", "roots": {hex root: n_leaves}}``; only
-    blocks after the cached ``end_block`` are fetched. Leaf indices must run
-    consecutively from the cached size, otherwise ``ApiError`` is raised (a hole is a
-    provider gap, not an empty range) and the cache is left untouched. A cache that
-    already covers ``end_block`` is returned as is.
-    """
-    chain = chain if chain is not None else getattr(client, "chain_id", 1)
-    path = os.path.join(cache_dir, "{}_{}.json".format(chain, pool.address))
-    cache = None
-    if os.path.exists(path):
-        with open(path, encoding="utf-8") as fh:
-            cache = json.load(fh)
-        if cache.get("pool") != pool.address or cache.get("chain") != chain:
-            raise ApiError("merkle cache {} belongs to another pool".format(path))
-        if cache["end_block"] >= end_block:
-            return cache
-    start_block = cache["end_block"] + 1 if cache else 0
-    logs = client.get_logs(pool.address, TOPIC_DEPOSIT, start_block, end_block)
-    rows = sorted((decode_deposit(log) for log in logs), key=lambda r: r["leaf_index"])
-    expected = cache["state"]["size"] if cache else 0
+
+def _write_cache(path: str, cache_dir: str, result: dict) -> None:
+    os.makedirs(cache_dir, exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(result, fh)
+    os.replace(tmp, path)
+
+
+def _check_leaves(pool, rows, expected, start_block, end_block, path):
     for row in rows:
         if row["leaf_index"] != expected or row["commitment"] is None:
             raise ApiError(
@@ -193,6 +190,41 @@ def cached_root_index(client, pool, end_block: int, cache_dir: str, chain=None) 
                 )
             )
         expected += 1
+
+
+def cached_root_index(client, pool, end_block: int, cache_dir: str, chain=None) -> dict:
+    """Root index of ``pool`` up to ``end_block``, resumed from ``cache_dir``.
+
+    The cache is ``<cache_dir>/<chain>_<pool address>.json`` holding
+    ``{"pool", "chain", "end_block", "state", "roots": {hex root: n_leaves},
+    "blocks": [block of leaf 0, block of leaf 1, ...]}``; only blocks after the cached
+    ``end_block`` are fetched. ``blocks`` says how many leaves the pool held at a block
+    (see :func:`leaves_at_block`); a cache written without it gets it from the deposit
+    logs once, without rebuilding the tree. Leaf indices must run consecutively from
+    the cached size, otherwise ``ApiError`` is raised (a hole is a provider gap, not an
+    empty range) and the cache is left untouched. A cache that already covers
+    ``end_block`` is returned as is.
+    """
+    chain = chain if chain is not None else getattr(client, "chain_id", 1)
+    path = os.path.join(cache_dir, "{}_{}.json".format(chain, pool.address))
+    cache = _read_cache(path, pool, chain)
+    if cache is not None and "blocks" not in cache:
+        logs = client.get_logs(pool.address, TOPIC_DEPOSIT, 0, cache["end_block"])
+        rows = sorted((decode_deposit(log) for log in logs), key=lambda r: r["leaf_index"])
+        _check_leaves(pool, rows, 0, 0, cache["end_block"], path)
+        if len(rows) != cache["state"]["size"]:
+            raise ApiError(
+                "{} deposits: {} leaves in the log list, {} in the cache {}; delete it "
+                "and run again".format(pool.key, len(rows), cache["state"]["size"], path)
+            )
+        cache["blocks"] = [r["block"] for r in rows]
+        _write_cache(path, cache_dir, cache)
+    if cache is not None and cache["end_block"] >= end_block:
+        return cache
+    start_block = cache["end_block"] + 1 if cache else 0
+    logs = client.get_logs(pool.address, TOPIC_DEPOSIT, start_block, end_block)
+    rows = sorted((decode_deposit(log) for log in logs), key=lambda r: r["leaf_index"])
+    _check_leaves(pool, rows, cache["state"]["size"] if cache else 0, start_block, end_block, path)
     new_roots, state = root_index(
         [int(r["commitment"], 16) for r in rows], cache["state"] if cache else None
     )
@@ -204,10 +236,59 @@ def cached_root_index(client, pool, end_block: int, cache_dir: str, chain=None) 
         "end_block": end_block,
         "state": state,
         "roots": roots,
+        "blocks": (list(cache["blocks"]) if cache else []) + [r["block"] for r in rows],
     }
-    os.makedirs(cache_dir, exist_ok=True)
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump(result, fh)
-    os.replace(tmp, path)
+    _write_cache(path, cache_dir, result)
     return result
+
+
+def leaves_at_block(blocks: list[int], block: int) -> tuple[int, int]:
+    """``(before, upto)``: leaves inserted in blocks ``< block`` and in blocks ``<= block``.
+
+    Deposits mined in ``block`` itself may come before or after a transaction of that
+    block, so the pool held between ``before`` and ``upto`` leaves when it ran.
+    """
+    return bisect_left(blocks, block), bisect_right(blocks, block)
+
+
+def root_known_at(n_root: int, blocks: list[int], block: int, history: int) -> bool:
+    """Whether the root of a tree with ``n_root`` leaves was still accepted at ``block``.
+
+    The pool keeps the last ``history`` roots (``ROOT_HISTORY_SIZE``): the root after
+    ``n`` insertions is accepted while the pool holds fewer than ``n + history`` leaves,
+    and not before it holds ``n``. The same-block uncertainty of :func:`leaves_at_block`
+    is resolved in favour of acceptance.
+    """
+    before, upto = leaves_at_block(blocks, block)
+    return n_root <= upto and before - n_root < history
+
+
+def root_history_size(client, pool, cache_dir: str, chain=None) -> int:
+    """``ROOT_HISTORY_SIZE()`` read from the pool contract, cached per pool.
+
+    The value is a contract constant, kept in ``<cache_dir>/<chain>_<pool>.history.json``.
+    ``ApiError`` when the client cannot make the call or the answer is not a number:
+    there is no default, the caller leaves the pool unchecked and records the failure.
+    """
+    chain = chain if chain is not None else getattr(client, "chain_id", 1)
+    path = os.path.join(cache_dir, "{}_{}.history.json".format(chain, pool.address))
+    if os.path.exists(path):
+        try:
+            with open(path, encoding="utf-8") as fh:
+                size = json.load(fh).get("root_history_size")
+            if isinstance(size, int) and size > 0:
+                return size
+        except (OSError, ValueError):
+            pass
+    caller = getattr(client, "eth_call", None)
+    if caller is None:
+        raise ApiError("this client cannot make eth_call")
+    answer = caller(pool.address, ROOT_HISTORY_SIZE_SELECTOR)
+    try:
+        size = int(answer, 16)
+    except (TypeError, ValueError):
+        raise ApiError("ROOT_HISTORY_SIZE() answered {!r}".format(answer)) from None
+    if not 0 < size <= 2**16:
+        raise ApiError("ROOT_HISTORY_SIZE() answered {}".format(size))
+    _write_cache(path, cache_dir, {"pool": pool.address, "chain": chain, "root_history_size": size})
+    return size

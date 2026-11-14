@@ -1,10 +1,11 @@
 """Placebo (target-decoy) check for one wallet.
 
 A decoy window is a search window that ends a day before the wallet's first real
-deposit, so no withdrawal in it can spend one of the wallet's notes. Every lead
-the pipeline finds there is chance by construction. Running the same pipeline on
-the real and the decoy window shows how many leads of each band a wallet of this
-size gets from chance alone.
+deposit, so no withdrawal in it can spend one of the wallet's notes. A lead the
+pipeline finds there is a decoy-window lead; the window can contain the depositor's
+own earlier activity, so it is not guaranteed to be pure chance. Running the same
+pipeline on the real and the decoy window shows how many leads of each band a
+wallet of this size gets in a window that holds none of its notes.
 
 The decoy is the real pipeline with every deposit shifted back in time (see the
 ``deposit_shift_seconds`` parameter of :func:`tornado_demix.demix.run_demix`):
@@ -58,11 +59,14 @@ def _per_1000(count: int, withdrawals: int) -> float | None:
 
 
 def _verdict(band: str, t: int, d: int, t_rate, d_rate) -> str:
-    counts = f"{t} {band} lead(s) in the real window, {d} in the decoy window"
+    noun = "candidate" if band == "weak" else "lead"
+    counts = (
+        f"{t} {band} {noun if t == 1 else noun + 's'} in the real window, {d} in the decoy window"
+    )
     if t_rate is None or d_rate is None:
         return f"{counts}: a window with no withdrawals cannot be compared"
     if not t and not d:
-        return f"No {band} leads in either window"
+        return f"No {band} {noun}s in either window"
     counts += f" ({t_rate:g} vs {d_rate:g} per 1000 withdrawals searched)"
     if t_rate > d_rate and t > d:
         return f"{counts}: the real window shows more than the decoy"
@@ -125,6 +129,11 @@ def _direct_link(direct_link: dict | None) -> dict:
     }
 
 
+def _failed_lookups(data: dict) -> int | None:
+    """Failed lookups a run recorded (tornado_demix.incomplete); None without the field."""
+    return len(data.get("errors") or []) if "errors" in data else None
+
+
 def summarize(target: dict, decoy: dict, direct_link: dict | None = None) -> dict:
     """Compare a real run with its decoy run: leads per band, leads per 1000
     withdrawals searched, and a plain-English verdict per band.
@@ -155,6 +164,13 @@ def summarize(target: dict, decoy: dict, direct_link: dict | None = None) -> dic
         caveats.append(
             "Some pools could not be searched in the decoy window (block lookup failed)."
         )
+    t_failed, d_failed = _failed_lookups(target), _failed_lookups(decoy)
+    if t_failed or d_failed:
+        caveats.append(
+            f"{d_failed or 0} {'lookup' if d_failed == 1 else 'lookups'} failed in the decoy "
+            f"run ({t_failed or 0} in the real run): a failed lookup can change that side's "
+            "counts."
+        )
 
     flags = _direct_link(direct_link)
     per_1000 = {
@@ -168,6 +184,9 @@ def summarize(target: dict, decoy: dict, direct_link: dict | None = None) -> dic
         "decoy": d_counts,
         "target_withdrawals": t_w,
         "decoy_withdrawals": d_w,
+        # None for a run written before failed lookups were recorded
+        "target_failed_lookups": t_failed,
+        "decoy_failed_lookups": d_failed,
         **per_1000,
         **flags,
         "verdicts": {
@@ -243,4 +262,18 @@ def run_placebo(
             counterparties=decoy.get("counterparty_addresses", ()),
             is_contract=check,
         )
+        failed = list(getattr(check, "errors", None) or [])
+        if failed:
+            # a counterparty whose contract status failed could be a contract: a planted
+            # link there is not known to be seen, so detectability is unknown
+            decoy = dict(decoy, errors=list(decoy.get("errors") or []) + failed)
+            decoy["error_count"] = len(decoy["errors"])
+        if getattr(check, "failed", None) or failed:
+            direct_link = {
+                "detectable": False,
+                "reason": "contract_unknown",
+                "recipient": None,
+                "pool_key": None,
+                "self_detectable": None,
+            }
     return summarize(target, decoy, direct_link)

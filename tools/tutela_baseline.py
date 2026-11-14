@@ -136,6 +136,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from review4_common import OUT, boot_ratio  # noqa: E402
 
+from tornado_demix.errors import ApiError, ApiKeyError  # noqa: E402
+
 ZERO = "0x" + "0" * 40
 DAY = 86400
 GWEI = 10**9
@@ -405,8 +407,9 @@ def load_dir(base):
     return rows
 
 
-def load_universe(path=UNIVERSE):
-    with open(path, encoding="utf-8") as fh:
+def load_universe(path=None):
+    # the default path is read at call time (a default argument would freeze it at import)
+    with open(path or UNIVERSE, encoding="utf-8") as fh:
         uni = json.load(fh)
     wds = defaultdict(list)
     for pool, addr, ts, h in uni["withdrawals"]:
@@ -651,7 +654,12 @@ def build_context(sets, args, wds_univ, dep_hashes, blocks):
                             need.add(h)
         if client is not None:
             for h in sorted(need):
-                senders[h] = client.tx_sender(h) or ""
+                try:
+                    senders[h] = client.tx_sender(h) or ""
+                except ApiKeyError:
+                    raise
+                except ApiError as exc:  # not read: left out, so a re-run retries it
+                    print(f"  [!] sender of {h} not read: {exc}", file=sys.stderr)
     except BudgetExceeded:
         budget_hit = True
     finally:

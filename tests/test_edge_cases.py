@@ -221,11 +221,14 @@ def test_a_counterparty_known_only_through_an_erc20_transfer_is_linked():
     # detail/signals row to inspect at all.
     logs = [_wlog(candidate, "ab" * 32, ZERO_ADDRESS, 0)]
 
-    client = _FakeClient([deposit], logs, token_txs=token_txs)
+    # the depositor's own call to the token contract, as txlist lists it (same hash):
+    # a token row counts as a counterparty only in a transaction the depositor sent
+    call = _tx(DAI_TOKEN, 0, 900, 9, "0xtoken1")
+    client = _FakeClient([deposit, call], logs, token_txs=token_txs)
     data = run_demix(client, WALLET, network=_token_network())
 
-    # The relationship is real and detectable - just not with the tx lists
-    # run_demix() actually hands to wallet_counterparties().
+    # The relationship is real, and run_demix() keeps it: the token row is in a
+    # transaction the depositor sent (own_token_transfers).
     assert candidate in wallet_counterparties(WALLET, token_txs)
     assert "linked" in data["denoms"]["1 ETH"]["signals"].get(candidate, [])
 

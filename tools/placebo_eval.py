@@ -12,7 +12,7 @@ For a random sample of real Ethereum depositors the real pipeline runs twice:
 Everything else is the real pipeline: the wallet's own history, counterparties,
 deposit gas prices, funders. The ratio of decoy to target leads, per band and
 per withdrawal searched, estimates the share of target leads that are chance
-(a false-discovery rate); one minus it estimates precision. Confidence
+(a false-discovery rate; it is not a precision estimate). Confidence
 intervals come from a bootstrap over depositors.
 
 A decoy lead is a false *note* link, not necessarily a false *identity* link:
@@ -197,7 +197,24 @@ def estimate(pairs, upto):
     return (d / de) / (t / te), t, d, te, de
 
 
+def failed_lookups(results):
+    """Failed lookups (``errors`` of each run) on the target and decoy side; runs written
+    before the field existed are counted apart. A failed lookup can change that side's counts."""
+
+    def n(data):
+        return len(data.get("errors") or []) if "errors" in data else None
+
+    sides = [(n(v["target"]), n(v["decoy"])) for v in results.values()]
+    return {
+        "target": sum(t or 0 for t, _d in sides),
+        "decoy": sum(d or 0 for _t, d in sides),
+        "runs_with_failures": sum(1 for t, d in sides if (t or 0) + (d or 0)),
+        "runs_without_record": sum(1 for t, d in sides if t is None and d is None),
+    }
+
+
 def report(results, boot=2000, seed=7):
+    lookups = failed_lookups(results)
     pairs = [(summarize(v["target"]), summarize(v["decoy"])) for v in results.values()]
     pairs = [p for p in pairs if p[0]["exposure"] and p[1]["exposure"]]
     out = {"depositors": len(pairs)}
@@ -226,7 +243,6 @@ def report(results, boot=2000, seed=7):
             "decoy_withdrawals": de,
             "fdr": round(fdr, 3) if fdr is not None else None,
             "fdr_95ci": ci,
-            "precision_estimate": round(max(0.0, 1 - fdr), 3) if fdr is not None else None,
         }
         record(
             "placebo.fdr.up_to_" + upto,
@@ -241,6 +257,7 @@ def report(results, boot=2000, seed=7):
     out["strong_moderate_by_family"] = {
         k: {"target": fam_t[k], "decoy": fam_d[k]} for k in sorted(set(fam_t) | set(fam_d))
     }
+    out["failed_lookups"] = lookups
     return out
 
 

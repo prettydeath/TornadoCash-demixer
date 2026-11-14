@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Post-hoc (exploratory): shared-deposit leads by the number of distinct senders of the deposit
-address. The rule allows up to MAX_DEPOSIT_SENDERS = 50; this re-counts target / decoy leads for
+address. The rule of the cached runs allowed up to 50 senders (300 since 2.22); this re-counts target / decoy leads for
 lower caps from the cached runs, without changing the rule.
 
 Usage: python tools/shared_deposit_cap.py holdout1 polygon1 holdout2 polygon2 [--caps 5 10 20 50]

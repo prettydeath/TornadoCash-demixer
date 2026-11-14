@@ -220,3 +220,48 @@ def test_render_and_load_runs(tmp_path):
     win = {**hr.analyze(pairs, 50), "hours": 72, "depositors_with_withdrawals": 1}
     md = hr.render({"depositors": 1, "boot": 50, "seed": 1, "windows": {"72h": win}})
     assert "| class moderate | 1 | 0 | 10 | 10 |" in md and "## 72h" in md
+
+
+# ---------------------------------------------------------------- failed lookups per run
+
+
+def _run(wallet, errors=None, truncated=None):
+    data = {"wallet": wallet, "vouchers": [], "denoms": {}}
+    if errors is not None:
+        data["errors"] = [{"kind": "lookup_failed", "what": "x", "error": "e"}] * errors
+        data["truncated"] = [{"action": "tokentx"}] * (truncated or 0)
+    return data
+
+
+def test_holdout_report_counts_failed_lookups_per_run(tmp_path, monkeypatch):
+    monkeypatch.setenv("TORNADO_DEMIX_REGISTRY", str(tmp_path / "tests.jsonl"))
+    runs = [
+        (_run(_addr(1), errors=2, truncated=1), _run(_addr(1), errors=0)),
+        (_run(_addr(2), errors=0), _run(_addr(2), errors=3)),
+        (_run(_addr(3)), _run(_addr(3))),  # written before runs recorded failures
+    ]
+    summary = hr.build(runs, boot=20)
+    fl = summary["failed_lookups"]
+    assert (fl["target"], fl["decoy"]) == (2, 3)
+    assert fl["runs_with_failures"] == 2 and fl["runs_without_record"] == 1
+    per = {r["wallet"]: r for r in fl["per_run"]}
+    assert per[_addr(1)]["target"] == 2 and per[_addr(1)]["target_truncated"] == 1
+    assert per[_addr(3)]["target"] is None
+    md = hr.render(summary)
+    assert "| wallet | target failed lookups | decoy failed lookups |" in md
+    assert f"| {_addr(2)} | 0 | 3 |" in md and f"| {_addr(3)} | n/a | n/a |" in md
+
+
+def test_placebo_eval_counts_failed_lookups(tmp_path, monkeypatch):
+    monkeypatch.setenv("TORNADO_DEMIX_REGISTRY", str(tmp_path / "tests.jsonl"))
+    results = {
+        _addr(1): {"target": _run(_addr(1), errors=1), "decoy": _run(_addr(1), errors=0)},
+        _addr(2): {"target": _run(_addr(2)), "decoy": _run(_addr(2))},
+    }
+    out = pe.report(results, boot=5)
+    assert out["failed_lookups"] == {
+        "target": 1,
+        "decoy": 0,
+        "runs_with_failures": 1,
+        "runs_without_record": 1,
+    }

@@ -68,6 +68,44 @@ KEYLESS_FALLBACK = {
 }
 
 
+# Gas-funder threshold per chain id, in wei of the native coin: a native transfer below
+# it that precedes a deposit address's first token sweep is taken for a gas top-up
+# (``deposit_addresses._gas_funder``; context, never scored). No price feed: a fixed
+# amount of each coin, a few times what a handful of token transfers cost there.
+# Polygon from observed exchange top-ups of 0.0155-1.6 POL; the other values are
+# estimates of the same order (exploratory, not measured).
+GAS_FUND_WEI = {
+    1: 10**16,  # Ethereum: 0.01 ETH
+    10: 10**16,  # Optimism: 0.01 ETH
+    56: 10**16,  # BSC: 0.01 BNB
+    100: 10**18,  # Gnosis: 1 xDAI
+    137: 2 * 10**18,  # Polygon: 2 POL
+    8453: 10**16,  # Base: 0.01 ETH
+    42161: 10**16,  # Arbitrum: 0.01 ETH
+    43114: 5 * 10**17,  # Avalanche: 0.5 AVAX
+}
+DEFAULT_GAS_FUND_WEI = 10**16  # a chain not in the table: 0.01 coin
+
+
+# How a report names a chain (the registry keys are lower-case identifiers).
+DISPLAY_NAMES = {
+    "ethereum": "Ethereum",
+    "bsc": "BSC",
+    "polygon": "Polygon",
+    "arbitrum": "Arbitrum",
+    "optimism": "Optimism",
+    "gnosis": "Gnosis",
+    "avalanche": "Avalanche",
+    "base": "Base",
+    "zksync": "ZKsync",
+}
+
+
+def display_name(name: str) -> str:
+    """The chain name for a reader: ``bsc`` -> ``BSC``; an unknown CSV chain as given."""
+    return DISPLAY_NAMES.get((name or "").lower(), name)
+
+
 class Network:
     """A chain plus the Tornado pool contracts deployed on it."""
 
@@ -104,6 +142,11 @@ class Network:
         self.api_style = api_style if api_base else "v2"
 
     @property
+    def display_name(self) -> str:
+        """The chain name for a reader (see :func:`display_name`)."""
+        return display_name(self.name)
+
+    @property
     def assets(self) -> list[str]:
         """Sorted unique asset tickers, native currency first."""
         seen = []
@@ -113,6 +156,11 @@ class Network:
         native = [a for a in seen if a == self.currency]
         others = sorted(a for a in seen if a != self.currency)
         return native + others
+
+    @property
+    def gas_fund_wei(self) -> int:
+        """Gas-funder threshold of this chain (see :data:`GAS_FUND_WEI`)."""
+        return GAS_FUND_WEI.get(self.chain_id, DEFAULT_GAS_FUND_WEI)
 
     def pools_for_asset(self, asset: str) -> list[Pool]:
         """Every pool taking ``asset``, ordered by denomination."""
@@ -340,9 +388,13 @@ def load_networks(csv_path: str | None = None) -> dict[str, Network]:
 
 
 def get_network(name: str | None, csv_path: str | None = None) -> Network:
-    """Look up a network by name, with a helpful error listing what exists."""
+    """Look up a network by name or chain id, with a helpful error listing what exists."""
     name = (name or "ethereum").strip().lower()
     networks = load_networks(csv_path)
+    if name.isdecimal() and name not in networks:
+        for network in networks.values():
+            if network.chain_id == int(name):
+                return network
     if name not in networks:
         raise RegistryError(
             "Unknown network '{}'. Available: {}. Add more in {} "

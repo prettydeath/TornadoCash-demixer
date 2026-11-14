@@ -14,7 +14,7 @@ from tests.fixtures import demix_result as fx
 from tests.test_report import _char_info, _multi_corr
 from tornado_demix import cli
 
-WALLET = "0x019b5bb2051797e33f726d0e7a8cb9b9c2003ac2"
+WALLET = "0x1234567890abcdef1234567890abcdef12345678"
 Z_ADDR = "0xdddd000000000000000000000000000000000009"
 
 
@@ -210,7 +210,7 @@ import pytest  # noqa: E402
 from tornado_demix.cli import _valid_address  # noqa: E402
 from tornado_demix.errors import ConfigError  # noqa: E402
 
-GOOD = "0x019b5bb2051797e33f726d0e7a8cb9b9c2003ac2"
+GOOD = "0x1234567890abcdef1234567890abcdef12345678"
 
 
 @pytest.mark.parametrize(
@@ -218,7 +218,7 @@ GOOD = "0x019b5bb2051797e33f726d0e7a8cb9b9c2003ac2"
     [
         "hello-world",
         "0xdeadbeef",  # too short
-        "019b5bb2051797e33f726d0e7a8cb9b9c2003ac2",  # no 0x
+        "1234567890abcdef1234567890abcdef12345678",  # no 0x
         "0x" + "z" * 40,  # not hex
         "0xZZZZ5bb2051797e33f726d0e7a8cb9b9c2003ac2",
         "0x" + "a" * 41,  # too long
@@ -356,7 +356,8 @@ def test_cmd_multi_prints_links_profiles_sync_and_writes_files(monkeypatch, args
 
     out = capsys.readouterr().out
     assert "Wallets analysed: 2" in out
-    assert "Strong links (count-matched candidate shared by 2+): 1" in out
+    assert "Shared count-matched candidates (window overlap, not evidence): 1" in out
+    assert "window artefact, not evidence of a link" in out
     assert "1 exact, 1 total match(es)" in out
     assert "2 wallets within" in out
     assert "[moderate] (window-overlap artefact) " + fx.BOB in out
@@ -380,7 +381,7 @@ def test_cmd_characterize_prints_the_summary_and_writes_the_report(
     cli.cmd_characterize(args(address=fx.BOB, report=report))
 
     out = capsys.readouterr().out
-    assert "Classification: AGGREGATOR" in out
+    assert "Classification: MULTI-POOL CONSOLIDATOR" in out
     assert "ExampleEx" in out
     assert "... and 1 more" in out
     assert "contract call" in out
@@ -435,6 +436,8 @@ def test_cmd_trace_prints_edges_and_terminals_and_writes_json(monkeypatch, args,
     assert "FIFO 1.0 [0.25 - 1.0]" in out and "certain at least 0.25" in out
     assert seen["start_block"] == 5 and seen["max_hops"] == 3 and seen["token"] is None
     assert '"nodes_expanded": 1' in open(path, encoding="utf-8").read()
+    # the footer every analysis prints (it was once unreachable after a return)
+    assert "Limitations:" in out and "no PROTOCOL.lock" in out
 
 
 def test_the_trace_subcommand_parses():

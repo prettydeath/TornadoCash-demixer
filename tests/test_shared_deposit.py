@@ -285,7 +285,10 @@ def test_the_html_report_lists_deposit_addresses_only_when_found():
     empty = fx.two_pool_result()
     empty["deposit_addresses"] = []
     apply_heuristics(empty, counterparties={fx.BOB})
-    assert "Deposit addresses<" not in build_html_report(empty, fx.network())
+    out = build_html_report(empty, fx.network())
+    # the section stays in its place with a zero count; the table is absent
+    assert "<th>Deposit address</th>" not in out
+    assert "No deposit address found" in out
 
 
 # --- web UI ----------------------------------------------------------------------
@@ -335,7 +338,7 @@ def test_the_result_page_shows_the_deposit_addresses(web, monkeypatch):
     body = web.post("/", data={"wallets": fx.WALLET, "analysis": "demix", "csrf": "tok"}).get_data(
         as_text=True
     )
-    assert "Deposit addresses</h4>" in body
+    assert "<h2>Deposit addresses</h2>" in body
     assert DEPOSIT in body and "binance" in body and fx.BOB in body
 
 

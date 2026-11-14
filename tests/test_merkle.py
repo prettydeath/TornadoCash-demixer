@@ -13,6 +13,7 @@ apply to both.
 
 from __future__ import annotations
 
+import os
 import time
 
 import pytest
@@ -121,7 +122,14 @@ def test_zeros_match_every_deployed_ethereum_pool():
 import json  # noqa: E402
 
 from tornado_demix.errors import ApiError  # noqa: E402
-from tornado_demix.merkle import IncrementalTree, cached_root_index, root_index  # noqa: E402
+from tornado_demix.merkle import (  # noqa: E402
+    IncrementalTree,
+    cached_root_index,
+    leaves_at_block,
+    root_history_size,
+    root_index,
+    root_known_at,
+)
 from tornado_demix.pools import Pool  # noqa: E402
 
 
@@ -282,3 +290,107 @@ def test_root_over_all_deposits_matches_get_last_root_ethereum_1_eth():
             break
     else:
         pytest.fail("root mismatch: ours {} chain {}".format(cache["state"]["root"], last))
+
+
+def test_cached_root_index_records_the_block_of_every_leaf(tmp_path):
+    client = FakeClient(_all_logs())
+    first = cached_root_index(client, POOL, 120, str(tmp_path))
+    assert first["blocks"] == [100, 110, 120]
+    second = cached_root_index(client, POOL, 200, str(tmp_path))
+    assert second["blocks"] == [100, 110, 120, 130]
+
+
+def test_cache_written_without_blocks_is_completed_from_the_logs(tmp_path):
+    client = FakeClient(_all_logs())
+    cached_root_index(client, POOL, 120, str(tmp_path))
+    path = tmp_path / "{}_{}.json".format(1, POOL.address)
+    old = json.loads(path.read_text())
+    del old["blocks"]
+    path.write_text(json.dumps(old))
+    again = cached_root_index(client, POOL, 120, str(tmp_path))
+    assert again["blocks"] == [100, 110, 120]
+    assert again["roots"] == old["roots"] and again["state"] == old["state"]
+    assert json.loads(path.read_text())["blocks"] == [100, 110, 120]
+
+
+def test_cache_without_blocks_that_disagrees_with_the_logs_raises(tmp_path):
+    client = FakeClient(_all_logs())
+    cached_root_index(client, POOL, 120, str(tmp_path))
+    path = tmp_path / "{}_{}.json".format(1, POOL.address)
+    old = json.loads(path.read_text())
+    del old["blocks"]
+    path.write_text(json.dumps(old))
+    with pytest.raises(ApiError):
+        cached_root_index(FakeClient(_all_logs()[:2]), POOL, 120, str(tmp_path))
+
+
+def test_leaves_at_block_counts_before_and_up_to_the_block():
+    blocks = [100, 110, 110, 130]
+    assert leaves_at_block(blocks, 99) == (0, 0)
+    assert leaves_at_block(blocks, 110) == (1, 3)
+    assert leaves_at_block(blocks, 120) == (3, 3)
+    assert leaves_at_block(blocks, 500) == (4, 4)
+
+
+def test_root_known_at_follows_the_history_window():
+    blocks = list(range(1, 201))  # leaf i inserted in block i + 1; 200 leaves
+    # at block 201 the pool holds 200 leaves: roots after 101..200 insertions are accepted (100)
+    assert root_known_at(200, blocks, 201, 100)
+    assert root_known_at(101, blocks, 201, 100)
+    assert not root_known_at(100, blocks, 201, 100)
+    # a history of 30 accepts only 171..200
+    assert root_known_at(171, blocks, 201, 30)
+    assert not root_known_at(170, blocks, 201, 30)
+    # a root that does not exist yet is not accepted
+    assert not root_known_at(150, blocks, 100, 100)
+
+
+def test_root_known_at_same_block_uncertainty_favours_acceptance():
+    blocks = [10, 10, 10, 10]
+    assert root_known_at(4, blocks, 10, 100)  # a later deposit of the block may be before the tx
+    assert root_known_at(0, blocks, 10, 1)  # ... or after it, with nothing inserted yet
+
+
+class _CallClient:
+    chain_id = 1
+
+    def __init__(self, answer):
+        self.answer = answer
+        self.calls = []
+
+    def eth_call(self, to, data):
+        self.calls.append((to, data))
+        if isinstance(self.answer, Exception):
+            raise self.answer
+        return self.answer
+
+
+def test_root_history_size_is_read_from_the_contract_once_and_cached(tmp_path):
+    client = _CallClient("0x" + format(30, "064x"))
+    assert root_history_size(client, POOL, str(tmp_path)) == 30
+    assert client.calls == [(POOL.address, "0xcd87a3b4")]
+    assert root_history_size(_CallClient(ApiError("down")), POOL, str(tmp_path)) == 30
+    assert (tmp_path / "{}_{}.history.json".format(1, POOL.address)).exists()
+
+
+def test_root_history_size_cache_is_written_atomically(tmp_path, monkeypatch):
+    replaced = []
+    real = os.replace
+    monkeypatch.setattr(os, "replace", lambda a, b: (replaced.append((a, b)), real(a, b))[1])
+    assert root_history_size(_CallClient("0x" + format(30, "064x")), POOL, str(tmp_path)) == 30
+    assert len(replaced) == 1 and replaced[0][0].endswith(".tmp")
+    assert sorted(p.name for p in tmp_path.iterdir()) == [
+        "{}_{}.history.json".format(1, POOL.address)
+    ]
+
+
+@pytest.mark.parametrize("answer", [ApiError("down"), "0x", "0x" + "0" * 64, None, "zz"])
+def test_root_history_size_unreadable_raises_and_caches_nothing(tmp_path, answer):
+    with pytest.raises(ApiError):
+        root_history_size(_CallClient(answer), POOL, str(tmp_path))
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_root_history_size_needs_a_client_that_can_call(tmp_path):
+    with pytest.raises(ApiError):
+        root_history_size(FakeClient([]), POOL, str(tmp_path))

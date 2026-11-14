@@ -24,6 +24,7 @@ from .constants import ZERO_ADDRESS
 from .demix import run_demix
 from .etherscan import EtherscanClient
 from .heuristics import count_is_evidence
+from .incomplete import attach
 from .multi import wallet_fingerprint
 from .networks import ETHEREUM, Network
 
@@ -74,7 +75,8 @@ def cache_scope(network: Network) -> str:
 
 
 def _demix_layers(client, wallet, params, cache_dir, layer_cap, scope):
-    """Return (fingerprint, layers) for a wallet, using an on-disk cache.
+    """Return (fingerprint, layers, errors, truncated) for a wallet, using an on-disk
+    cache. Only a run without failed lookups or cut-off lists is cached.
 
     ``layers`` maps pool key -> {candidate_address: earliest_withdrawal_ts} or
     None when the layer is unusable (no exact-count candidate, or too noisy).
@@ -92,12 +94,13 @@ def _demix_layers(client, wallet, params, cache_dir, layer_cap, scope):
         try:
             with open(cache_path, encoding="utf-8") as fh:
                 cached = json.load(fh)
-            return cached["fp"], cached["layers"]
+            return cached["fp"], cached["layers"], [], []
         except (OSError, ValueError, KeyError, TypeError):
             pass  # unreadable or foreign cache file: recompute
 
     data = run_demix(client, wallet, **params)
     fingerprint = wallet_fingerprint(data["vouchers"])
+    errors, truncated = list(data.get("errors") or []), list(data.get("truncated") or [])
 
     layers = {}
     for pool_key, res in data["denoms"].items():
@@ -114,12 +117,15 @@ def _demix_layers(client, wallet, params, cache_dir, layer_cap, scope):
             continue
         layers[pool_key] = {addr: min(x["ts"] for x in res["detail"][addr]) for addr in candidates}
 
+    if errors or truncated:
+        # an incomplete run is never cached: the next run tries the lookups again
+        return fingerprint, layers, errors, truncated
     try:
         with open(cache_path, "w", encoding="utf-8") as fh:
             json.dump({"fp": fingerprint, "layers": layers}, fh)
     except OSError:
         pass
-    return fingerprint, layers
+    return fingerprint, layers, errors, truncated
 
 
 def _forwards(client, cache, addr, after_ts, excluded, pool, min_frac):
@@ -199,7 +205,9 @@ def trace_wallet(
     params = dict(
         window_days=window_days, fee_lo=fee_lo, fee_hi=fee_hi, gap_hours=gap_hours, network=network
     )
-    fingerprint, layers = _demix_layers(client, wallet, params, cache_dir, layer_cap, scope)
+    fingerprint, layers, errors, truncated = _demix_layers(
+        client, wallet, params, cache_dir, layer_cap, scope
+    )
     usable = {pool_key: members for pool_key, members in layers.items() if members}
 
     # downstream Z -> {pool_key -> [(source_candidate, value, ts, hash, asset)]}
@@ -235,9 +243,11 @@ def trace_wallet(
     # a number that means nothing.
     clusters.sort(key=lambda c: (-c["n_layers"], -len(c["totals"]), c["z"]))
 
-    return {
+    result = {
         "wallet": wallet,
         "fingerprint": fingerprint,
         "layers": layers,
         "clusters": clusters,
     }
+    # the demix run's failed lookups and cut-off lists (tornado_demix.incomplete)
+    return attach(result, errors, truncated)

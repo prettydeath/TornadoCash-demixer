@@ -393,9 +393,11 @@ def test_the_summary_lists_facts_and_counts_one_family_for_count_and_self_relay(
     data = _data(res, voucher_count=3)
     data["heuristics"] = {"gas_price_matches": [], "linked_addresses": []}
     lines = conclusion(data).splitlines()
-    assert lines[0].startswith(f"Top candidate: {lead}")
-    assert "band weak" in lines[0]
-    assert lines[1] == "Evidence families: amount+timing (1 independent)."
+    assert lines[0].startswith(
+        f"No lead. Highest-scoring chance-level candidates (1 tied at score 0.30): {lead}"
+    )
+    assert "Top candidate" not in conclusion(data)
+    assert "independent)" not in conclusion(data)
     assert lines[-1].startswith("Limitations:")
     assert "strongest" not in conclusion(data).lower()
 

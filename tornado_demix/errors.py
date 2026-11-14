@@ -26,6 +26,15 @@ class ApiError(TornadoDemixError):
     """
 
 
+class PermanentApiError(ApiError):
+    """The provider refused the request in a way that retrying cannot fix.
+
+    Examples: the chain is not covered by the plan ("Free API access is not
+    supported for this chain"), or the address is malformed. Raised on the first
+    answer, without the backoff a transient error gets.
+    """
+
+
 class ApiKeyError(ApiError):
     """The provider rejected the API key, or no key was supplied."""
 

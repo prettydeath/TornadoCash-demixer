@@ -107,7 +107,7 @@ def test_summarize_edge_verdicts_and_caveats():
     assert out["target_per_1000"]["strong"] == 0.0 and out["decoy_per_1000"]["strong"] is None
     assert len(out["caveats"]) == 2  # long span, decoy before Tornado existed
     quiet = summarize(_side([], 10), _side([], 10))
-    assert quiet["verdicts"]["weak"] == "No weak leads in either window"
+    assert quiet["verdicts"]["weak"] == "No weak candidates in either window"
 
 
 def test_run_placebo_runs_the_decoy_with_the_target_parameters(monkeypatch):
@@ -246,7 +246,7 @@ def test_web_placebo_view_and_template(monkeypatch):
             "index.html",
             **{**webapp._base_context(), "result": {"kind": "demix", "blocks": blocks}},
         )
-        assert "Placebo check" in html and "chance by construction" in html
+        assert "Placebo check" in html and "window before the deposit" in html
         form = webapp.render_template("index.html", **webapp._base_context())
         assert 'name="placebo"' in form and "doubles explorer calls" in form
 
@@ -337,3 +337,13 @@ def test_run_placebo_without_a_network_is_not_detectable_contract_unknown(monkey
     assert out["decoy_detectable"] is False
     assert out["direct_link_reason"] == "contract_unknown"
     assert "contract status unknown" in out["direct_link_verdict"]
+
+
+def test_summarize_counts_failed_lookups_and_warns():
+    target = dict(_side([], 10), errors=[{"kind": "lookup_failed"}])
+    decoy = dict(_side([], 10), errors=[{"kind": "lookup_failed"}] * 2)
+    out = summarize(target, decoy)
+    assert (out["target_failed_lookups"], out["decoy_failed_lookups"]) == (1, 2)
+    assert any("2 lookups failed in the decoy run" in c for c in out["caveats"])
+    old = summarize(_side([], 10), _side([], 10))
+    assert old["target_failed_lookups"] is None and old["caveats"] == []
