@@ -8,8 +8,8 @@ abstract: >-
 type: software
 authors:
   - alias: prettydeath
-version: 2.21.0
-date-released: 2026-11-12
+version: 2.22.0
+date-released: 2026-11-14
 license: MIT
 doi: 10.5281/zenodo.23085804
 repository-code: "https://github.com/prettydeath/TornadoCash-demixer"
