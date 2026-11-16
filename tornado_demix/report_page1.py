@@ -177,13 +177,13 @@ PAGE1_CSS = """
    .p1 .verdict .answer{font-size:9pt;padding:2.5mm 3.5mm;line-height:1.38}
    .p1-figs>div{padding:2mm 2.5mm;font-size:7.6pt}.p1-figs b{font-size:13pt}
    .p1 h2{font-size:9.5pt;margin:2mm 0 .8mm}
-   .p1-flow svg{max-width:none;max-height:52mm}
+   .p1-flow svg{max-width:none;max-height:48mm}
    .p1-legend{font-size:7.4pt;margin:.5mm 0 1mm}
    .p1-tab th{font-size:7pt;padding:.6mm 1.2mm}.p1-tab td{font-size:7.6pt;padding:.5mm 1.2mm;line-height:1.25}
    .chip1{font-size:6.8pt;padding:0 1.2mm}
    .p1-more{font-size:7.4pt}
    .p1-checks{gap:1mm}.p1-checks li{font-size:8pt;grid-template-columns:5mm minmax(0,1fr)}
-   .p1-toc{margin-top:3mm;font-size:7.6pt;gap:2.5mm}
+   .p1-toc{margin-top:2.5mm;font-size:7.4pt;gap:2.5mm;grid-template-columns:repeat(4,minmax(0,1fr))}
    .p1-toc a{color:#444}
    .p1 table,.p1-checks li,.p1-flow,.p1 .verdict,.p1-figs,.p1-head{break-inside:avoid}}
 """
