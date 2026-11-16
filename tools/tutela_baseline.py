@@ -836,7 +836,11 @@ def main(argv=None):
 
     sets = {}
     for base in args.dir:
-        name = os.path.relpath(os.path.abspath(base), os.path.dirname(OUT)).replace("\\", "/")
+        try:
+            name = os.path.relpath(os.path.abspath(base), os.path.dirname(OUT))
+        except ValueError:  # other drive on Windows
+            name = os.path.abspath(base)
+        name = name.replace("\\", "/")
         sets[name] = load_dir(base)
     wds_univ, dep_hashes, blocks = load_universe()
     ctx, notes, gas_info = build_context(sets, args, wds_univ, dep_hashes, blocks)
