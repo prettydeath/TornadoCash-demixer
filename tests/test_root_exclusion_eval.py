@@ -40,3 +40,59 @@ def test_render_writes_a_table_per_network(tmp_path):
     assert "## polygon (x, 5 depositors" in text
     assert "| withdrawals excluded | 0 | 5 |" in text
     assert "decoy/weak 3" in text
+    assert "| of which no withdraw call decoded | - | - |" in text.replace("|   of", "| of")
+
+
+# --- the shipped validated read (decoded withdraw call + root history at the block) ---
+
+from root_exclusion_eval import validated_n_root  # noqa: E402
+
+
+def _stats():
+    return {
+        "roots_ambiguous": 0,
+        "roots_outside_history": 0,
+        "roots_undecoded": 0,
+        "roots_unverified": 0,
+    }
+
+
+def test_eval_imports_no_unvalidated_read():
+    import root_exclusion_eval
+
+    src = open(root_exclusion_eval.__file__, encoding="utf-8").read()
+    assert "root_from_input" not in src and "candidate_roots" not in src
+
+
+def test_validated_n_root_uses_the_root_history_at_the_withdrawal_block():
+    index = {"0x" + format(501, "064x"): 5, "0x" + format(999, "064x"): 40}
+    blocks = [1 + i for i in range(41)]  # one insertion per block, 41 in all
+    entry = {"root": "0x" + format(501, "064x"), "source": "decoded"}
+    stats = _stats()
+    assert validated_n_root(entry, index, blocks, 41, 100, stats) == 5
+    assert validated_n_root(entry, index, blocks, 41, 30, stats) is None
+    assert stats["roots_outside_history"] == 1
+
+
+def test_validated_n_root_unknown_without_a_decoded_root():
+    stats = _stats()
+    assert validated_n_root({"root": "", "source": "adjacency"}, {}, [1], 1, 100, stats) is None
+    assert validated_n_root({"root": "", "source": "ambiguous"}, {}, [1], 1, 100, stats) is None
+    assert validated_n_root(None, {}, [1], 1, 100, stats) is None
+    assert validated_n_root({"root": "", "source": "unverified"}, {}, [1], 1, 100, stats) is None
+    assert stats == {
+        "roots_ambiguous": 1,
+        "roots_outside_history": 0,
+        "roots_undecoded": 2,
+        "roots_unverified": 1,
+    }
+
+
+def test_failed_transaction_lookup_is_not_cached():
+    from root_exclusion_eval import _read_entry
+
+    assert _read_entry(None, "0x" + "22" * 32, "0x" + "a1" * 20, set()) is None
+    entry = _read_entry(
+        {"input": "0x", "to": "0x" + "a1" * 20}, "0x" + "22" * 32, "0x" + "a1" * 20, set()
+    )
+    assert entry == {"root": "", "source": "none"}

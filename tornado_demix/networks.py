@@ -87,6 +87,76 @@ GAS_FUND_WEI = {
 DEFAULT_GAS_FUND_WEI = 10**16  # a chain not in the table: 0.01 coin
 
 
+# Dust floor per chain id, in wei of the native coin. A direct link (``linked``) is a lead
+# only when the linking native or internal transfer moved at least this much; below the
+# floor it is context (``linked_dust``), never scored. The floor is the price of a planted
+# link, not a barrier: an outgoing transfer above it still needs only the depositor's key,
+# so whoever controls the depositor can create one to any address for about the floor plus
+# the gas of a plain transfer (e.g. about 0.001 ETH plus 21,000 gas on Ethereum). It stops
+# free 0-value and 1-wei links only. The values are roughly equal in value, about
+# 0.001 ETH each, from CoinGecko USD prices of 2026-11-14 (ETH 1,845; BNB 598; POL 0.081;
+# xDAI 1.00; AVAX 7.69), rounded; prices move and the floors do not follow them (a
+# judgement call, not measured). Listed tokens have floors of the same value
+# (``data/real_tokens.csv``: 2 USD of a stablecoin, 0.001 WETH, ...).
+DUST_FLOOR_WEI = {
+    1: 10**15,  # Ethereum: 0.001 ETH
+    10: 10**15,  # Optimism: 0.001 ETH
+    56: 3 * 10**15,  # BSC: 0.003 BNB
+    100: 2 * 10**18,  # Gnosis: 2 xDAI
+    137: 20 * 10**18,  # Polygon: 20 POL
+    8453: 10**15,  # Base: 0.001 ETH
+    42161: 10**15,  # Arbitrum: 0.001 ETH
+    43114: 25 * 10**16,  # Avalanche: 0.25 AVAX
+}
+DEFAULT_DUST_FLOOR_WEI = 10**15  # a chain not in the table: 0.001 of its coin
+
+# Real tokens per chain (``data/real_tokens.csv``: address, symbol, decimals, the dust
+# floor in whole tokens and a source URL from the issuer's docs or the verified explorer
+# token page). A token transfer makes a lead-eligible direct link only for a listed token
+# and an amount at or above its floor; any other token can be deployed by anyone and its
+# Transfer events say whatever its code says (``linked_unverified_token``, context).
+REAL_TOKENS_CSV = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "data", "real_tokens.csv"
+)
+
+
+def _load_real_tokens() -> dict[int, dict[str, dict]]:
+    out: dict[int, dict[str, dict]] = {}
+    with open(REAL_TOKENS_CSV, newline="", encoding="utf-8") as fh:
+        for row in csv.DictReader(fh):
+            decimals = int(row["decimals"])
+            # min_units is a decimal string ("0.00002"); scaled without float rounding
+            whole, _, frac = row["min_units"].strip().partition(".")
+            frac = (frac + "0" * decimals)[:decimals]
+            min_raw = int(whole or "0") * 10**decimals + int(frac or "0")
+            out.setdefault(int(row["chain_id"]), {})[row["address"].strip().lower()] = {
+                "symbol": row["symbol"].strip(),
+                "decimals": decimals,
+                "min_raw": min_raw,
+                "source_url": row["source_url"].strip(),
+            }
+    return out
+
+
+_REAL_TOKENS: dict[int, dict[str, dict]] | None = None
+
+
+def sender_floors(chain_id: int) -> dict[str, int]:
+    """See :attr:`Network.sender_floors`."""
+    floors = {token: info["min_raw"] for token, info in real_tokens(chain_id).items()}
+    floors["eth"] = DUST_FLOOR_WEI.get(int(chain_id), DEFAULT_DUST_FLOOR_WEI)
+    return floors
+
+
+def real_tokens(chain_id: int) -> dict[str, dict]:
+    """``{token address: {symbol, decimals, min_raw, source_url}}`` of the listed real
+    tokens of a chain (see :data:`REAL_TOKENS_CSV`); empty for a chain with none."""
+    global _REAL_TOKENS
+    if _REAL_TOKENS is None:
+        _REAL_TOKENS = _load_real_tokens()
+    return _REAL_TOKENS.get(int(chain_id), {})
+
+
 # How a report names a chain (the registry keys are lower-case identifiers).
 DISPLAY_NAMES = {
     "ethereum": "Ethereum",
@@ -161,6 +231,24 @@ class Network:
     def gas_fund_wei(self) -> int:
         """Gas-funder threshold of this chain (see :data:`GAS_FUND_WEI`)."""
         return GAS_FUND_WEI.get(self.chain_id, DEFAULT_GAS_FUND_WEI)
+
+    @property
+    def dust_floor_wei(self) -> int:
+        """Smallest native value of a lead-eligible direct link (see :data:`DUST_FLOOR_WEI`)."""
+        return DUST_FLOOR_WEI.get(self.chain_id, DEFAULT_DUST_FLOOR_WEI)
+
+    @property
+    def real_tokens(self) -> dict[str, dict]:
+        """Listed real tokens of this chain (:func:`real_tokens`)."""
+        return real_tokens(self.chain_id)
+
+    @property
+    def sender_floors(self) -> dict[str, int]:
+        """Smallest raw amount per asset that makes a sender of a deposit address
+        (:func:`tornado_demix.deposit_addresses.swept_senders`): ``"eth"`` (the native
+        coin, whatever its name) at :attr:`dust_floor_wei`, each listed real token at its
+        ``min_raw``. An unlisted token has no floor here."""
+        return sender_floors(self.chain_id)
 
     def pools_for_asset(self, asset: str) -> list[Pool]:
         """Every pool taking ``asset``, ordered by denomination."""

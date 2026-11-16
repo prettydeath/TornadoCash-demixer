@@ -548,3 +548,69 @@ def test_a_contract_that_called_deposit_eth_is_followed_at_its_aliased_address()
     info = result["edges"][0]["bridge"]
     assert info["state"] == bc.CREDITED and info["l2_recipient"] == dest
     assert info["fill_tx"] == "0xd2"
+
+
+class _Many(Synth):
+    """Origin chain over synthetic rows of several addresses."""
+
+    def outgoing_txs(self, addr):
+        return [r for r in self.rows if addr in (r["from"], r["to"])]
+
+
+def test_an_earlier_message_resolved_later_still_gets_the_earlier_credit():
+    # the user U deposits 1 ETH twice (messages 40 then 41). The funds reach U for the
+    # second deposit one level before the first: message 41 is resolved first, but the
+    # earliest credit belongs to message 40 (credits are claimed by message number)
+    value = 10**18
+    start, m1, m2, user = ("0x" + c * 40 for c in "abcd")
+    rows = [
+        _native(start, m1, value, "0xa1", 91, ts=L1_TS + 1),
+        _native(m1, m2, value, "0xa2", 92, ts=L1_TS + 2),
+        _native(m2, user, value, "0xa3", 95, ts=L1_TS + 5),
+        _native(user, bc.ARBITRUM_INBOX, value, "0xb1", 100, ts=L1_TS + 10),
+        _native(start, user, value, "0xa4", 105, ts=L1_TS + 15),
+        _native(user, bc.ARBITRUM_INBOX, value, "0xb2", 110, ts=L1_TS + 20),
+    ]
+    payload = user[2:] + f"{value:064x}"
+    receipts = {
+        "0xb1": _inbox_receipt(user, user, 40, bc.KIND_ETH_DEPOSIT, payload),
+        "0xb2": _inbox_receipt(user, user, 41, bc.KIND_ETH_DEPOSIT, payload),
+    }
+    alias = bc.l1_to_l2_alias(user)
+    l2_rows = [
+        _native(alias, user, value, "0xc1", 5000, ts=L1_TS + 600),
+        _native(alias, user, value, "0xc2", 5001, ts=L1_TS + 660),
+    ]
+    result = trace_funds(
+        _Many(start, rows, receipts),
+        start,
+        2.0,
+        start_block=90,
+        chain_id=1,
+        max_hops=8,
+        destinations=_dests(_l2(l2_rows)),
+        is_contract=lambda a: False,
+    )
+    fills = sorted(
+        (e["bridge"]["message_num"], e["bridge"].get("fill_tx"))
+        for e in result["edges"]
+        if e["kind"] == "bridge"
+    )
+    assert fills == [(40, "0xc1"), (41, "0xc2")]
+
+
+def test_claims_follow_message_numbers_for_native_and_token_credits():
+    from tornado_demix.trace import _held_before, _Tracer
+
+    tracer = _Tracer()
+    for claims in (tracer.claimed_credits, tracer.claimed_token_credits):
+        tracer.bridge_cache = {"k41": {"credit": {}}, "k40": {"credit": {}}}
+        tracer.claim(claims, "0xc1", 41, "k41")
+        assert _held_before(claims, 40) == set()  # 40 may take 41's credit
+        assert _held_before(claims, 42) == {"0xc1"}  # 42 may not
+        before = tracer.reclaims
+        tracer.claim(claims, "0xc1", 40, "k40")
+        assert claims["0xc1"] == (40, "k40")
+        assert "k41" not in tracer.bridge_cache  # 41 is resolved again
+        assert tracer.reclaims == before + 1
+        assert _held_before(claims, 41) == {"0xc1"}

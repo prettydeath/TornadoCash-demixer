@@ -762,8 +762,14 @@ def test_a_voucher_stops_at_the_maximum_span():
     assert len(cluster_vouchers(deposits, gap_hours=24, max_span_hours=30)) == 2
 
 
-def test_an_erc20_transfer_between_depositor_and_exit_is_linked():
+def test_an_erc20_transfer_between_depositor_and_exit_is_linked(monkeypatch):
     from tornado_demix.heuristics import ranked_candidates
+
+    # a working contract check that says "not a contract" (the fixture network has no RPC
+    # endpoint, and an unknown contract status never makes a lead)
+    monkeypatch.setattr(
+        "tornado_demix.demix.make_contract_check", lambda url: lambda address: False
+    )
 
     dai = "0x6b175474e89094c44da98b954eedeac495271d0f"
     net = Network(
@@ -782,7 +788,7 @@ def test_an_erc20_transfer_between_depositor_and_exit_is_linked():
         "hash": "0xtok",
         "from": fx.WALLET,
         "to": exit_,
-        "value": "5",
+        "value": str(5 * 10**18),  # 5 DAI: above the token's dust floor
         "contractAddress": dai,
         "tokenDecimal": "18",
         "timeStamp": "900",
@@ -928,3 +934,281 @@ def test_shipped_ethereum_twin_pools_exist():
     net = get_network("ethereum")
     pairs = Counter((p.token, p.raw_denom) for p in net.pools if not p.is_native)
     assert sum(1 for n in pairs.values() if n > 1) >= 3
+
+
+# --- native twin pools behind a router (Avalanche) ---------------------------------
+
+AVAX_ROUTERS = (
+    "0x171fb28ebffcb2737e530e1fd48cb4ef12e5031e",
+    "0x0d5550d52428e7e3175bfc9550207e4ad3859b17",
+)
+AVAX_TWINS = {
+    10: (
+        "0x330bdfade01ee9bf63c209ee33102dd334618e0a",
+        "0xe1376def383d1656f5a40b6ba31f8c035bfc26aa",
+    ),
+    100: (
+        "0x1e34a77868e19a6647b1f2f47b51ed72dede95dd",
+        "0x7ce57f6a5a135eb1a8e9640af1eff9665ade00d9",
+    ),
+}
+
+
+def test_avalanche_router_deposit_is_resolved_by_the_receipt_emitter_for_both_twins():
+    from tornado_demix.networks import get_network
+
+    net = get_network("avalanche")
+    key = {p.address: p.key for p in net.pools}
+    for amount, (first, second) in AVAX_TWINS.items():
+        for router in AVAX_ROUTERS:
+            txs = [
+                _tx(router, amount, 1000, 10, "0xa1"),
+                _tx(router, amount, 1100, 11, "0xa2"),
+            ]
+            client = _ReceiptClient({"0xa1": {second}, "0xa2": {first}})
+            deposits = detect_deposits(
+                client, fx.WALLET, network=net, txs=txs, token_txs=[], internal_txs=[]
+            )
+            assert [d["pool_key"] for d in deposits] == [key[second], key[first]]
+            assert key[first] != key[second]
+            assert all("pool_ambiguous" not in d for d in deposits)
+
+
+def test_native_router_deposit_without_a_readable_receipt_stays_ambiguous():
+    from tornado_demix.networks import get_network
+
+    net = get_network("avalanche")
+    txs = [_tx(AVAX_ROUTERS[0], 10, 1000, 10, "0xa1")]
+    deposits = detect_deposits(None, fx.WALLET, network=net, txs=txs, token_txs=[], internal_txs=[])
+    assert len(deposits) == 1
+    assert deposits[0]["pool_ambiguous"] == sorted(
+        p.key for p in net.pools if p.denom == 10 and p.is_native
+    )
+    assert len(deposits[0]["pool_ambiguous"]) == 2
+
+
+def test_native_router_deposit_with_a_failed_receipt_is_recorded():
+    from tornado_demix.errors import ApiError
+    from tornado_demix.networks import get_network
+
+    class Failing:
+        def deposit_emitters(self, tx_hash):
+            raise ApiError("no receipt")
+
+    net = get_network("avalanche")
+    errors = []
+    txs = [_tx(AVAX_ROUTERS[1], 100, 1000, 10, "0xa1")]
+    deposits = detect_deposits(
+        Failing(), fx.WALLET, network=net, txs=txs, token_txs=[], internal_txs=[], errors=errors
+    )
+    assert "pool_ambiguous" in deposits[0]
+    assert [e["kind"] for e in errors] == ["lookup_failed", "pool_ambiguous"]
+    assert errors[0]["tx"] == "0xa1"
+
+
+def test_native_router_deposit_to_a_unique_denomination_needs_no_receipt():
+    from tornado_demix.networks import get_network
+
+    net = get_network("avalanche")
+    client = _ReceiptClient({})
+    txs = [_tx(AVAX_ROUTERS[0], 500, 1000, 10, "0xa1")]
+    deposits = detect_deposits(
+        client, fx.WALLET, network=net, txs=txs, token_txs=[], internal_txs=[]
+    )
+    assert len(deposits) == 1 and "pool_ambiguous" not in deposits[0]
+    assert client.asked == []
+
+
+def test_native_deposit_straight_to_a_twin_pool_needs_no_receipt():
+    from tornado_demix.networks import get_network
+
+    net = get_network("avalanche")
+    client = _ReceiptClient({})
+    txs = [_tx(AVAX_TWINS[10][1], 10, 1000, 10, "0xa1")]
+    deposits = detect_deposits(
+        client, fx.WALLET, network=net, txs=txs, token_txs=[], internal_txs=[]
+    )
+    assert deposits[0]["pool_key"].endswith("#2") and client.asked == []
+
+
+# --- unresolved twin deposits are recorded and not searched as twins[0] -------------------
+
+
+def _avax():
+    from tornado_demix.networks import get_network
+
+    return get_network("avalanche")
+
+
+def test_every_deposit_left_ambiguous_gets_a_structured_record():
+    net = _avax()
+    twins = sorted(p.key for p in net.pools if p.denom == 10 and p.is_native)
+    both = {AVAX_TWINS[10][0], AVAX_TWINS[10][1]}
+    txs = [
+        _tx(AVAX_ROUTERS[0], 10, 1000, 10, "0xn1"),  # receipt unknown (None)
+        _tx(AVAX_ROUTERS[0], 10, 1100, 11, "0xn2"),  # no Deposit emitter
+        _tx(AVAX_ROUTERS[0], 10, 1200, 12, "0xn3"),  # both twins emitted
+    ]
+    client = _ReceiptClient({"0xn2": set(), "0xn3": both})
+    errors = []
+    deposits = detect_deposits(
+        client, fx.WALLET, network=net, txs=txs, token_txs=[], internal_txs=[], errors=errors
+    )
+    assert all("pool_ambiguous" in d for d in deposits)
+    notes = [e for e in errors if e["kind"] == "pool_ambiguous"]
+    assert [e["tx"] for e in notes] == ["0xn1", "0xn2", "0xn3"]
+    assert all(e["candidates"] == twins and e["reason"] == "pool_ambiguous" for e in notes)
+
+
+def test_without_a_client_the_ambiguity_is_still_recorded():
+    errors = []
+    detect_deposits(
+        None,
+        fx.WALLET,
+        network=_avax(),
+        txs=[_tx(AVAX_ROUTERS[1], 100, 1000, 10, "0xn1")],
+        token_txs=[],
+        internal_txs=[],
+        errors=errors,
+    )
+    assert [e["kind"] for e in errors] == ["pool_ambiguous"]
+
+
+def test_a_resolved_deposit_leaves_no_ambiguity_record():
+    errors = []
+    detect_deposits(
+        _ReceiptClient({"0xn1": {AVAX_TWINS[10][1]}}),
+        fx.WALLET,
+        network=_avax(),
+        txs=[_tx(AVAX_ROUTERS[0], 10, 1000, 10, "0xn1")],
+        token_txs=[],
+        internal_txs=[],
+        errors=errors,
+    )
+    assert errors == []
+
+
+def test_an_ambiguous_deposit_is_not_clustered_into_a_voucher():
+    net = _avax()
+    txs = [_tx(AVAX_ROUTERS[0], 10, 1000, 10, "0xn1")]
+    deposits = detect_deposits(None, fx.WALLET, network=net, txs=txs, token_txs=[], internal_txs=[])
+    assert cluster_vouchers(deposits) == []
+
+
+def test_run_demix_reports_an_ambiguous_deposit_and_does_not_search_it():
+    net = _avax()
+    txs = [_tx(AVAX_ROUTERS[0], 10, 1000, 10, "0xn1")]
+
+    class Client(_FakeClient):
+        def token_transfers(self, addr):
+            return []
+
+        def deposit_emitters(self, tx_hash):
+            return None
+
+    result = run_demix(Client(txs, []), fx.WALLET, network=net)
+    assert result["vouchers"] == [] and result["denoms"] == {}
+    assert [e["kind"] for e in result["errors"]] == ["pool_ambiguous"]
+    assert result["deposits"][0]["pool_ambiguous"]
+
+
+def test_one_receipt_call_per_transaction_hash():
+    client = _ReceiptClient({"0xn1": {AVAX_TWINS[10][1]}})
+    txs = [_tx(AVAX_ROUTERS[0], 10, 1000, 10, "0xn1")]
+    internal = [_tx(AVAX_ROUTERS[0], 10, 1000, 10, "0xn1")]
+    detect_deposits(
+        client, fx.WALLET, network=_avax(), txs=txs, token_txs=[], internal_txs=internal
+    )
+    assert client.asked == ["0xn1"]
+
+
+def test_the_first_permanent_receipt_refusal_stops_further_receipt_calls():
+    from tornado_demix.errors import PermanentApiError
+
+    class Refusing:
+        asked = 0
+
+        def deposit_emitters(self, tx_hash):
+            Refusing.asked += 1
+            raise PermanentApiError("refused")
+
+    txs = [_tx(AVAX_ROUTERS[0], 10, 1000 + i, 10 + i, f"0xn{i}") for i in range(3)]
+    errors = []
+    detect_deposits(
+        Refusing(),
+        fx.WALLET,
+        network=_avax(),
+        txs=txs,
+        token_txs=[],
+        internal_txs=[],
+        errors=errors,
+    )
+    assert Refusing.asked == 1
+    assert sum(1 for e in errors if e["kind"] == "pool_ambiguous") == 3
+    assert sum(1 for e in errors if e["kind"] == "lookup_failed") == 1
+
+
+def test_a_blocked_provider_in_twin_resolution_is_not_swallowed():
+    import pytest
+
+    from tornado_demix.errors import ProviderBlockedError
+
+    class Blocked:
+        def deposit_emitters(self, tx_hash):
+            raise ProviderBlockedError("provider_blocked: cloudflare")
+
+    with pytest.raises(ProviderBlockedError):
+        detect_deposits(
+            Blocked(),
+            fx.WALLET,
+            network=_avax(),
+            txs=[_tx(AVAX_ROUTERS[0], 10, 1000, 10, "0xn1")],
+            token_txs=[],
+            internal_txs=[],
+        )
+
+
+def test_error_records_carry_the_reason_of_the_exception_class():
+    from tornado_demix.errors import ApiError, ArchiveUnavailableError, ProviderBlockedError
+    from tornado_demix.incomplete import lookup_failed
+
+    assert lookup_failed("x", ProviderBlockedError("provider_blocked: c"))["reason"] == (
+        "provider_blocked"
+    )
+    assert lookup_failed("x", ArchiveUnavailableError("no archive"))["reason"] == (
+        "archive_unavailable"
+    )
+    assert "reason" not in lookup_failed("x", ApiError("boom"))
+
+
+def test_reasons_and_ambiguity_show_in_the_summary_lines_and_csv(tmp_path):
+    import csv
+
+    from tornado_demix import incomplete
+    from tornado_demix.errors import ProviderBlockedError
+    from tornado_demix.report_csv import _lookup_errors_csv
+
+    result = {
+        "wallet": "0xw",
+        "errors": [
+            incomplete.lookup_failed("history", ProviderBlockedError("Cloudflare page"), "0xa"),
+            incomplete.pool_ambiguous("0xt", ["10 AVAX", "10 AVAX#2"], "no Deposit emitter"),
+        ],
+        "truncated": [],
+    }
+    assert "uncertain pool" in incomplete.summary(result)
+    text = "\n".join(incomplete.lines(result))
+    assert "provider_blocked" in text and "10 AVAX#2" in text
+    (path,) = _lookup_errors_csv([result], str(tmp_path))
+    rows = list(csv.DictReader(open(path, encoding="utf-8")))
+    assert {r["reason"] for r in rows} == {"provider_blocked", "pool_ambiguous"}
+    assert "10 AVAX#2" in rows[1]["error"]
+
+
+def test_page1_data_check_warns_about_an_uncertain_pool():
+    from tornado_demix import incomplete
+    from tornado_demix.report_page1 import data_check
+
+    result = {"errors": [incomplete.pool_ambiguous("0xt", ["a", "b"], "x")], "truncated": []}
+    check = data_check(result)
+    assert "uncertain pool" in str(check)

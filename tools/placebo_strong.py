@@ -7,7 +7,9 @@ tools/placebo_windows.py) and answers two questions:
 1. Among candidates with a lead signal (a linked address or an early multi-pool
    profile match), is the chance share lower when an amount+timing or gas-price
    signal comes on top? Before version 2.16 such a candidate was ``strong``.
-2. What is the chance share of each band under the current rule?
+2. What is the chance share of each band under the rule of this version? (Direct links
+   follow the 2.23 rule only for runs cached with link records; older runs keep the
+   pre-2.23 rule, and the count is printed: tools/placebo_windows.link_rule_note.)
 
 The chance share is decoy leads per withdrawal searched over target leads per
 withdrawal searched; 95 % intervals come from a bootstrap over depositors. The
@@ -30,7 +32,7 @@ from collections import Counter
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from placebo_windows import OUT, narrow  # noqa: E402
+from placebo_windows import OUT, narrow, print_link_rule_note  # noqa: E402
 
 from tornado_demix.heuristics import LEAD_SIGNALS, ranked_candidates  # noqa: E402
 
@@ -124,3 +126,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    print_link_rule_note()

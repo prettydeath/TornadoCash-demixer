@@ -100,6 +100,7 @@ def test_a_contract_that_pays_nothing_back_ends_the_trace():
         {
             "address": ROUTER,
             "asset": "ETH",
+            "asset_address": None,
             "amount": 1.0,
             "hop": 1,
             "reason": "contract without a payment back",

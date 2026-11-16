@@ -7,13 +7,23 @@ the depositor's notes in that pool: the withdrawal is excluded, a fact about the
 calldata and the tree, not a probability. If ``min_leaf < n_root <= max_leaf`` only
 the later notes are excluded; that is shown as context and nothing is removed.
 
-The root is not taken on trust from the calldata. Every 32-byte word before an
-occurrence of the nullifier is a candidate (a wrapper such as Multicall may carry the
-nullifier in a call that is not the withdrawal); a candidate counts only when it is a
-root the pool still accepted at the withdrawal block: it is in the rebuilt tree's root
-history and fewer than ``ROOT_HISTORY_SIZE`` insertions (read from each pool contract;
-a pool whose size cannot be read stays unchecked, with a recorded error) came after it. Zero or several such
-candidates leave the root unknown and the withdrawal is never excluded.
+The root is not taken on trust from the calldata. It is the ``_root`` argument of the
+decoded ``withdraw`` call to the pool (directly, through a declared router, or inside a
+Multicall wrapper; see :mod:`tornado_demix.withdraw_root`) whose nullifier matches. A
+transaction with no such call (``roots_undecoded``, also for calldata over the decoding
+budget), with such calls only in frames that may fail silently (``roots_unverified``) or
+with several different decoded roots (``roots_ambiguous``) leaves the root unknown. A decoded root counts only when the
+pool still accepted it at the withdrawal block: it is in the rebuilt tree's root history
+and fewer than ``ROOT_HISTORY_SIZE`` insertions (read from each pool contract; a pool whose
+size cannot be read stays unchecked, with a recorded error) came after it. An unknown
+root never excludes a withdrawal.
+
+A deposit whose twin pool is uncertain (``pool_ambiguous``) is placed by its leaf: its
+transaction hash is looked up in each candidate twin's tree, and the twin that holds it
+counts it as a note. When it cannot be placed (no twin or several hold it, or a lookup
+failed), or in a decoy run, every pool it may belong to stays unchecked, with the reason
+in ``unchecked_reasons``: leaving such a note out could make the lowest leaf too high and
+exclude a withdrawal that spent it.
 
 Only the withdrawals of ranked candidates are read (one ``tx_info`` call per
 transaction, at most :data:`ROOT_CHECK_LIMIT` per run). The result is not a lead
@@ -40,7 +50,7 @@ from .events import decode_deposit
 from .heuristics import ranked_candidates
 from .incomplete import lookup_failed
 from .merkle import cached_root_index, root_history_size, root_known_at
-from .withdraw_root import withdrawal_candidate_roots
+from .withdraw_root import known_multicalls, withdrawal_read
 
 # tx_info calls (one per distinct withdrawal transaction) a single run may spend.
 ROOT_CHECK_LIMIT = 200
@@ -120,6 +130,37 @@ def wallet_notes(client, pool, deposits: list[dict], shifted: bool):
     return sorted(leaves), (lowest[1] if lowest else None)
 
 
+def place_ambiguous(client, network, deposit: dict) -> tuple[str | None, str]:
+    """``(pool_key, "")`` of the twin whose tree holds ``deposit`` (a ``pool_ambiguous``
+    deposit), found by its transaction hash in each candidate twin's ``Deposit`` events
+    at its block; ``(None, reason)`` when no twin holds it or a lookup failed."""
+    tx = (deposit.get("hash") or "").lower()
+    if not tx or deposit.get("block") is None:
+        return None, "the deposit has no transaction hash or block to look its leaf up by"
+    found, failed = [], []
+    for key in deposit.get("pool_ambiguous") or []:
+        pool = network.by_key.get(key)
+        if pool is None:
+            failed.append(key)
+            continue
+        try:
+            logs = client.get_logs(pool.address, TOPIC_DEPOSIT, deposit["block"], deposit["block"])
+        except ApiKeyError:
+            raise
+        except ApiError:
+            failed.append(key)
+            continue
+        if any((row["tx_hash"] or "").lower() == tx for row in map(decode_deposit, logs)):
+            found.append(key)
+    if len(found) == 1:
+        return found[0], ""
+    if len(found) > 1:
+        return None, "its leaf was found in several twin pools"
+    if failed:
+        return None, "its leaf could not be looked up in " + ", ".join(failed)
+    return None, "its leaf was found in no twin pool"
+
+
 def wallet_leaves(client, pool, deposits: list[dict], shifted: bool) -> list[int] | None:
     """Leaf indices of the wallet's notes in ``pool`` (see :func:`wallet_notes`)."""
     notes = wallet_notes(client, pool, deposits, shifted)
@@ -194,12 +235,17 @@ def check_candidates(client, data: dict, network, cache_dir, limit=None, errors=
     blocks_by_pool: dict[str, list[int]] = {}
     history_by_pool: dict[str, int] = {}
     unchecked = set()
+    # Why a pool with an uncertain-twin deposit was not checked: {pool_key: reason}.
+    reasons: dict[str, str] = {}
+    placed: dict[str, tuple[str | None, str]] = {}  # deposit tx -> place_ambiguous()
     stats = {
         "candidates": 0,
         "withdrawals_checked": 0,
         "roots_found": 0,
         "roots_not_found": 0,
         "roots_ambiguous": 0,
+        "roots_undecoded": 0,
+        "roots_unverified": 0,
         "roots_outside_history": 0,
         "history_sizes": {},
         "tx_info_calls": 0,
@@ -237,7 +283,38 @@ def check_candidates(client, data: dict, network, cache_dir, limit=None, errors=
             return leaves_by_pool[pool_key] is not None and index_by_pool[pool_key] is not None
         pool = network.by_key[pool_key]
         res = data["denoms"][pool_key]
-        deposits = [d for d in data.get("deposits", []) if d.get("pool_key") == pool_key]
+        deposits = [
+            d
+            for d in data.get("deposits", [])
+            if d.get("pool_key") == pool_key and not d.get("pool_ambiguous")
+        ]
+        # A deposit whose twin pool is uncertain may be a note of this pool. Leaving it
+        # out could make the lowest leaf too high and exclude a withdrawal that spent it,
+        # so a real run places it by its leaf (looked up by transaction hash in each twin)
+        # and a pool it cannot be placed for, or any such pool in a decoy run (no real
+        # leaf to place by), stays unchecked with the reason recorded.
+        for d in data.get("deposits", []):
+            if pool_key not in (d.get("pool_ambiguous") or []):
+                continue
+            if shifted:
+                why = "a deposit whose twin pool is uncertain (decoy run: not placed)"
+            else:
+                tx = (d.get("hash") or "").lower()
+                if tx not in placed:
+                    placed[tx] = place_ambiguous(client, network, d)
+                where, why = placed[tx]
+                if where == pool_key:
+                    deposits.append(d)
+                    continue
+                if where is not None:
+                    continue  # the note is in the other twin
+                why = "a deposit whose twin pool is uncertain: " + why
+            reasons[pool_key] = why
+            note("wallet leaves", why, pool)
+            _log("  [root_check] {} skipped: {}".format(pool_key, why))
+            leaves_by_pool[pool_key], index_by_pool[pool_key] = None, None
+            unchecked.add(pool_key)
+            return False
         leaves = index = None
         try:
             notes = wallet_notes(client, pool, deposits, shifted)
@@ -294,10 +371,23 @@ def check_candidates(client, data: dict, network, cache_dir, limit=None, errors=
             break
         stats["candidates"] += 1
         leaves, index = leaves_by_pool[pool_key], index_by_pool[pool_key]
+        pool_address = network.by_key[pool_key].address
         for pos, w in pairs:
             stats["withdrawals_checked"] += 1
+            read = withdrawal_read(
+                memo, w, pool_address, network.routers, known_multicalls(network.chain_id)
+            )
+            if read["root"] is None:
+                stats["roots_not_found"] += 1
+                if read["source"] == "ambiguous":
+                    stats["roots_ambiguous"] += 1
+                elif read["source"] == "unverified":
+                    stats["roots_unverified"] += 1
+                else:
+                    stats["roots_undecoded"] += 1
+                continue
             n_root = _accepted_root(
-                withdrawal_candidate_roots(memo, w),
+                [read["root"]],
                 index,
                 blocks_by_pool[pool_key],
                 w["block"],
@@ -320,6 +410,7 @@ def check_candidates(client, data: dict, network, cache_dir, limit=None, errors=
     stats["tx_info_calls"] = memo.calls
     stats["incomplete"] = incomplete
     stats["unchecked_pools"] = sorted(unchecked)
+    stats["unchecked_reasons"] = dict(sorted(reasons.items()))
     return {"removed": removed, "excluded": excluded, "partial": partial, "stats": stats}
 
 

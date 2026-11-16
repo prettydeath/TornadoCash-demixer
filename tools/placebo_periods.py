@@ -6,7 +6,9 @@ tools/placebo_windows.py) and splits the depositors by their first deposit:
 before 2022-08-08 (OFAC sanctions), 2022-08-08 to 2025-03-21 (delisting), and
 after. The users of the pools changed between these periods, so a pooled chance
 share could hide a difference. Counts leads of the linked-address family and of
-all strong and moderate candidates under the current rule. No explorer calls.
+all strong and moderate candidates under the rule of this version (direct links follow the
+2.23 rule only for runs cached with link records; the count of older runs is printed, see
+tools/placebo_windows.link_rule_note). No explorer calls.
 
 Usage
 -----
@@ -25,7 +27,7 @@ from collections import Counter
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from placebo_windows import OUT, narrow  # noqa: E402
+from placebo_windows import OUT, narrow, print_link_rule_note  # noqa: E402
 
 from tornado_demix.heuristics import METHOD_FAMILY, ranked_candidates  # noqa: E402
 
@@ -117,3 +119,4 @@ def main(argv=None):
 
 if __name__ == "__main__":
     main()
+    print_link_rule_note()

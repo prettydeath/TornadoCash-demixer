@@ -8,8 +8,8 @@ The toolkit ranks candidate withdrawal addresses for a depositor wallet and repo
 each candidate with an evidence band and the evidence behind it. A band needs a
 lead signal that stood above chance on real depositors: a linked address (a direct
 counterparty whose first withdrawal came within 72 hours of the deposit) or an
-early multi-pool profile match; two independent
-lead sources make a band `strong`. Amount+timing and gas-price matches turn up as
+early multi-pool profile match; two different lead-signal families (their independence is not
+established) make a band `strong`. Amount+timing and gas-price matches turn up as
 often by chance as for real exits, so they are shown as context and never raise
 a band. It also groups exits paid out together, groups wallets of one operator
 by shared candidates and follows withdrawn funds forward.
@@ -38,7 +38,7 @@ traces users leave around it.
   wallet's full note profile over two or more pools (10+ notes) within 72 hours of
   the last deposit in each pool.
 - Labels each listed deposit address as an exchange deposit, a service deposit, an operator-run forwarder or an ERC-4337 smart account; only the exchange kind can link two addresses, and it is context only.
-- Reports a band per candidate: `strong` (lead signals from two independent sources:
+- Reports a band per candidate: `strong` (lead signals from two different families, independence not established:
   early direct link and early multi-pool profile), `moderate` (a lead signal
   from one source), `weak` (amount+timing, gas price and/or context-only
   signals, which never raise the band — chance-level on
@@ -72,6 +72,11 @@ traces users leave around it.
   the depositor's side (`linked_sender`) is context too: it did not separate from
   chance in any placebo sample. Since 2.21 so is a shared exchange deposit
   address (see above).
+  Since 2.23 a direct link counts only when its transaction moved real value (at
+  least a per-network dust floor, or a listed real token) before the first withdrawal
+  to that address and the address is known not to be a contract; zero-value, dust,
+  unlisted-token and post-withdrawal links are context, and the evidence shows each
+  link's value, direction, block, time and position against the withdrawal.
 - Optionally excludes withdrawals by their Merkle root (`--root-check`, or the "Merkle-root
   check" box in the web UI; exploratory, off by default). A withdrawal proof names the root
   it was built against; if that root held none of the depositor's notes in the pool the
@@ -84,7 +89,7 @@ traces users leave around it.
   [EVALUATION.md](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/EVALUATION.md#merkle-root-exclusion-exploratory).
 - Optionally runs a placebo check (`--placebo`, or the web UI option): the same
   analysis on a decoy window that ends before the wallet's first deposit, so the
-  report shows how many leads chance alone produces for this wallet.
+  report shows how many leads the same rule finds in a window before the deposits (a decoy rate; that window may hold the depositor's own earlier activity, so it is not a false-discovery rate).
 - Opens the HTML report with a case overview and a flow diagram: depositor, pools,
   candidate exits coloured by band.
 - For several wallets: shared candidates, denomination-profile matches,
@@ -96,12 +101,11 @@ traces users leave around it.
   DEX-swap resolution, up to a labelled service (`trace`); each edge shows
   `FIFO amount [lower - upper]`, the share the traced funds can have under any
   ordering; every address has one ledger, so a transfer reached by several branches
-  is attributed once, and FIFO starts at the traced arrival. A deposit into an Across SpokePool (V3 and current events only) is
-  followed to the destination chain by its on-chain deposit id; an Arbitrum Inbox
-  deposit (retryable ticket or `depositEth`) is followed on Arbitrum from its L2
-  recipient once the L2 credit is found, and a ZKsync Bridgehub request shows its L2
-  recipient (ZKsync chains are not followed); `--arrival-tx`
-  fixes the transaction that brought the start amount, which narrows the bounds.
+  is attributed once, and FIFO starts at the traced arrival. Bridge deposits are decoded
+  and tied to the traced transfer; which bridges are followed to the other side and
+  which are only named is listed under Limits and in the methodology's bridge table;
+  `--arrival-tx` fixes the transaction that brought the start amount, which narrows
+  the bounds.
 - Characterises an exit candidate: activity, pool inflows, next hops, a disposable
   flag, optional address labels and the deposit-address check of each listed address
   (`characterize`).
@@ -144,7 +148,10 @@ The method, thresholds and the reasoning behind them are in
 - An Etherscan V2 API key. On the free plan it covers Ethereum, Polygon and
   Arbitrum; Optimism is served by Blockscout and Avalanche by Routescan, neither
   needing a key. Base goes through Etherscan when the key's plan serves it and
-  otherwise switches to keyless Blockscout, which throttles heavy use. BNB Smart
+  otherwise switches to keyless Blockscout, which sits behind Cloudflare and may
+  answer with a challenge page: the run then stops with a `provider_blocked` error
+  (the challenge is never bypassed). Base needs a paid Etherscan plan or an RPC
+  with archive access; the Blockscout fallback may be blocked. BNB Smart
   Chain and Gnosis need a paid Etherscan plan: the free tier does not serve them. Where a provider has no
   `proxy` module (Blockscout), the client reads the head block from Blockscout's
   `block` module and falls back to the network's JSON-RPC node.
@@ -195,8 +202,9 @@ not. Exchange labels still decide which deposit addresses are listed as swept to
 labelled exchange: with them, the placebo test gave 27 real-window against 4 decoy
 hits on 1,000 depositors (before the second hold-out); without them, deposit
 addresses found by activity alone sit at chance (16 against 12) and are shown as
-context only. To load the public label set (about 88,000 Ethereum addresses, 26,000 of
-them exchange labels):
+context only. To load the public label set (the fetch of 2026-11-14 returned 105,267 Ethereum
+addresses, 32,943 of them exchange labels, and 131,117 rows on the eight networks; the
+counts move as the upstream sources do):
 
 ```bash
 tornado-demix labels fetch                    # all 8 networks
@@ -222,8 +230,8 @@ Labels are not bundled. The tool reads one `<network>.csv` per chain
 
 A ready dataset in this format is
 [prettydeath/wallet-attribution](https://github.com/prettydeath/wallet-attribution):
-about 115,000 addresses (exchanges, OFAC-sanctioned entities, scams, mixers,
-bridges, DeFi) on 47 networks, covering all eight networks of this tool.
+addresses of exchanges, OFAC-sanctioned entities, scams, mixers, bridges and DeFi,
+covering all eight networks of this tool (`labels fetch` reports the row count per network).
 
 ```bash
 git clone https://github.com/prettydeath/wallet-attribution
@@ -307,7 +315,7 @@ to stderr; the summary to stdout.
 
 The HTML report and the web UI share one layout. The **verdict card** on top answers in one sentence and counts leads, context-only and chance-level candidates and failed lookups (plus the placebo verdict and the exploratory and limitations badges).
 Sections follow in a fixed order: **Leads** (open), then Context, Chance-level candidates, Deposit addresses, Groups and clusters, Fee fingerprints, Method and limitations, Raw data (collapsed; counts in the sticky table of contents).
-**strong**: lead signals from two independent sources (an early direct link and an early multi-pool profile); **moderate**: one lead source.
+**strong**: lead signals from two different families, their independence not established (an early direct link and an early multi-pool profile); **moderate**: one lead source.
 **weak**: no lead signal, either with a context-only signal (late direct link, withdrawal sender, shared deposit address) or on amount+timing and gas price alone, which are chance-level; the score only orders candidates within a band.
 Each candidate row opens an evidence timeline with full hashes; a trace ends with a totals line (end points + below threshold + failed lookups = start amount).
 Filters, search and copy buttons need JavaScript; without it every row is still in the page, and printing expands every section.
@@ -331,11 +339,12 @@ For `trace`, enter one exit address, the amount to follow and optionally the
 block the funds arrived in, an ERC-20 token and the number of hops (up to 8). The
 page lists where the traced funds stop and why (labelled address, hop limit, a
 contract that paid nothing back, not moved on, `lookup_failed`, `below_threshold`,
-`tornado_redeposit`) and every edge with its attributed amount, swaps included; the
-HTML report, CSV and JSON can be downloaded. When a lookup failed, every analysis
+`tornado_redeposit`, `order_unknown`) and every edge with its attributed amount, swaps
+included, plus the possible outflows of incomplete histories (not followed); the HTML
+report, CSV and JSON can be downloaded. When a lookup failed, every analysis
 shows "N lookups failed — results may be incomplete" with the list.
 
-![demix in the web UI with an evidence timeline open](https://raw.githubusercontent.com/prettydeath/TornadoCash-demixer/main/docs/img/demix-evidence.png)
+![demix HTML report with an evidence timeline open](https://raw.githubusercontent.com/prettydeath/TornadoCash-demixer/main/docs/img/demix-evidence.png)
 *A demix run on the KuCoin depositor (case 4 below): one candidate row with its expanded evidence timeline (the 11 withdrawals and the counterparty link) and the list of every check that was made. The only check that holds is the withdrawal sent by the depositor's counterparty; it is context, so the candidate stays `weak`.*
 
 The UI binds to localhost and has no authentication (forms carry a CSRF token); see
@@ -345,7 +354,7 @@ The UI binds to localhost and has no authentication (forms carry a CSRF token); 
 
 Five public cases with an external source of truth. Each can be re-run from the
 addresses shown (an Etherscan API key is enough; the Ronin labels need an
-attribution set). The screenshots are from the web UI; the CLI prints the same
+attribution set). The screenshots are from the HTML report; the CLI prints the same
 results. There is no script in the repository that regenerates the images; most show the first page of the report (verdict, four figures, the diagram of how the money moved, the address table and the checks). A new run can show slightly different counts as the chain grows and open
 search windows are clamped to the current block.
 
@@ -374,7 +383,7 @@ to Circle: USDC and the Ronin Bridge. Without labels the same hops are shown
 unlabelled.
 
 ![Ronin exploiter in characterize](https://raw.githubusercontent.com/prettydeath/TornadoCash-demixer/main/docs/img/case-ronin.png)
-*First page of the `characterize` report for the Ronin exploiter: verdict "No pool inflows", the diagram of the eight next hops with USDC and the Ronin Bridge labelled, and the table ending in the 12,595.3 ETH transfer to a second sanctioned address.*
+*First page of the `characterize` report for the Ronin exploiter: verdict "No pool inflows", the diagram of the eight next hops with USDC, the Ronin Bridge and a second exploiter address labelled, and the table ending in the 12,595.3 ETH transfer to a sanctioned address.*
 
 ### 2. Wintermute attacker
 
@@ -494,6 +503,37 @@ The method on both public cases, with the numbers behind each claim, is in
 
 ## Limitations
 
+- An exchange label on a sweep target names the exchange; it is not evidence of a sweep.
+  Since 2.23 a labelled target counts only when the address sweeps its balance there: one
+  transfer of at least 90 % (`LABELLED_SWEEP_SHARE`) of what arrived in that asset since
+  its previous outgoing transfer, within 30 days (`LABELLED_SWEEP_SECONDS`) of the latest
+  arrival, or one that passes the 38,400 s / 0.01 ETH forwarding test, which unlabelled
+  targets keep as their only test. An address
+  that only paid a labelled exchange is `paid_exchange` (context), not an exchange
+  deposit address. The 90 % and 30-day values are exploratory, not measured; one such
+  sweep is enough (no repetition is required), and the classifier's precision and recall
+  on independently labelled addresses were not measured.
+- The early multi-pool profile applies only when the full 72 h after the last deposit
+  was read (a shorter window, a cut or partly indexed pool list, or a deposit younger than
+  72 h leaves it off, with a note in the run summary).
+- A depositor can send notes and a direct transfer to an address that never agreed to
+  receive them (an unsolicited receipt). Since 2.23 a direct link needs real value above a
+  per-network floor and must come strictly before the first withdrawal; that raises the
+  cost of planting one but does not stop a depositor who sends real value before
+  withdrawing. A band says that funds reached the address, not that its owner controls it
+  or took part.
+- A router deposit into twin pools (two pools of one denomination: Ethereum, Avalanche)
+  is placed by the Deposit event in its receipt. When the receipt cannot settle it, the
+  deposit is listed with a `pool_ambiguous` record in the incomplete notice and
+  `lookup_errors.csv`, and its withdrawals are not searched (no guess between the twins).
+  While such a deposit exists the early multi-pool profile is not applied, and the
+  Merkle-root check places it by its leaf in each twin or leaves those pools unchecked.
+- Base on the free tier has no explorer data: the keyless Blockscout fallback may be
+  blocked by Cloudflare (`provider_blocked`). Free public JSON-RPC nodes keep recent
+  blocks only on Arbitrum and Optimism ("Archive requests require a personal token"):
+  the log fallback then fails loudly with "unavailable for historical blocks" instead
+  of returning an empty history; use a paid Etherscan plan or an archive endpoint in
+  `rpc_url`.
 - Leads, not proof. The weights and `MIN_COUNT_DISCRIMINATION = 0.5` are expert
   judgements; the score has not been calibrated on cases with known outcomes.
   The band does not depend on the weights at all; they only order candidates
@@ -546,15 +586,32 @@ The method on both public cases, with the numbers behind each claim, is in
   On the public KuCoin and Harmony laundering cases the count match found no exit
   (every exit collected notes of several deposits); in KuCoin the linked withdrawal
   sender found 6 of the attacker's 35 exits in one depositor's window; since 2.19 these are context, not leads. Details: [docs/EVALUATION.md](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/EVALUATION.md)
-- Only Tornado Cash pools in the registry are covered. Other mixers are not
-  followed. Of the bridges Across (V3 and current deposits) and native-ETH deposits
-  through the Arbitrum Inbox are followed across chains; ZKsync Bridgehub requests show
-  the L2 recipient and end there; other bridges and aggregators end the branch, and `cluster` follows one hop only, and `trace`
-  follows funds by FIFO attribution, a convention that does not hold when an
-  address mixes the traced funds with others.
+- Only Tornado Cash pools in the registry are covered. Other mixers are not followed.
+  Bridges followed across chains: Across (V3 and current deposits; SpokePools on
+  Ethereum, Optimism, BNB Chain, Polygon, Arbitrum, Base and Avalanche; a deposit made
+  directly, through a periphery or router, after a swap, to the MulticallHandler or from
+  an ERC-4337 smart account), native-ETH deposits through the Arbitrum Inbox and ERC-20
+  deposits through the Arbitrum token gateways (followed on Arbitrum once the L2 credit
+  is found), and Circle CCTP burns (v1 and v2) to an EVM chain of the registry (followed
+  from the mint). A Mayan same-chain payout and a CoW Protocol order (tied to the
+  owner's trade and its payout in the settlement receipt) are followed as swaps. Named,
+  not followed: ZKsync deposits (Bridgehub native and ERC-20, legacy Era
+  requestL2Transaction) show the L2 recipient; Relay, Mayan, THORChain, Maya, Layerswap,
+  NEAR Intents, Unit and Hyperliquid deposits show what the chain gives (request id,
+  memo, destination, recipient); a CCTP burn to Solana or another non-EVM domain shows
+  its recipient; other listed bridges are named only. A listed swap-and-bridge router
+  (LI.FI, Socket, Rango, Squid) that only refunds native coin ends as bridge or swap
+  unknown, and bridges that are not listed end as contracts. A hop is followed only when
+  the decoded call is tied to the traced transfer; otherwise the branch ends with a
+  named state. `cluster` follows one hop only, and `trace` follows funds by FIFO
+  attribution, a convention that does not hold when an address mixes the traced funds
+  with others.
 - BNB Smart Chain has no verified router in the registry, so routed deposits
   there are not detected.
 - `characterize` counts inflows from native pools only.
+- Transactions are read as they were mined. Fee-bump and replacement transactions, private
+  relays and MEV bundles are not covered: nothing in the data shows how a transaction was
+  routed or ordered, so a path that went through one is not recognised as such.
 - Results depend on the explorer API. Provider failures raise errors instead of
   returning empty results, and pools whose search window cannot be resolved are
   reported as not searched.
@@ -586,13 +643,14 @@ python tools/real_cases.py
 ```
 
 `requirements-lock.txt` pins every dependency with hashes (generated by
-`uv pip compile pyproject.toml --extra web --extra dev --python-version 3.9
---generate-hashes --universal`); install it with
+`uv pip compile pyproject.toml --extra web --extra dev --extra eval --python-version 3.9
+--generate-hashes --universal`; the `layout` extra needs Python 3.10 and is installed
+separately); install it with
 `pip install --require-hashes -r requirements-lock.txt` and then
 `pip install --no-deps -e .` to reproduce a result with the same libraries.
 
 CI runs the tests on Linux and Windows with Python 3.9 and 3.13 against the lock file, a test under a
-legacy Windows codepage, the linter, and a wheel install check.
+legacy Windows codepage, the layout tests in a real browser, the linter, `pip-audit` on the lock file, and a wheel install check.
 
 ## Legal and ethical use
 
@@ -601,6 +659,13 @@ is public on-chain data, but a label or a band attached to an address is an
 allegation about a person. Corroborate any lead independently before it appears
 in a report, a referral or a freeze request, and follow the terms of service of
 the data providers you use.
+
+## Citation
+
+Two DOIs belong to this repository and both are correct: `10.5281/zenodo.23085804` is the
+concept DOI (all versions, the one in `CITATION.cff` and the badge), and
+`10.5281/zenodo.24216489` is the version DOI of release 2.22.0. Cite the version DOI with the
+version number when a result depends on one release.
 
 ## License
 

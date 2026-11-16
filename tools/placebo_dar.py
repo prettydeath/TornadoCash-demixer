@@ -65,6 +65,7 @@ def deposit_addresses(client, network, wallet, labels, is_contract, cache=DAR):
         exclude=tornado,
         errors=errors,
         gas_fund_wei=network.gas_fund_wei,
+        floors=network.sender_floors,
     )
     if errors:
         # Incomplete (rate limit, provider error): not cached, the caller retries.

@@ -65,6 +65,7 @@ from tornado_demix.heuristics import (  # noqa: E402
     method_breakdown,
     ranked_candidates,
 )
+from tornado_demix.honest import json_fields  # noqa: E402
 from tornado_demix.incomplete import lines as incomplete_lines  # noqa: E402
 from tornado_demix.incomplete import notice_only  # noqa: E402
 from tornado_demix.incomplete import summary as incomplete_summary  # noqa: E402
@@ -379,6 +380,10 @@ def _network_options(form):
 _JOBS = OrderedDict()
 _JOBS_MAX = 8
 _JOBS_LOCK = threading.Lock()
+# One run at a time, synchronous or background: they share the API key's rate limit.
+# The slot is taken before analyse() starts and given back in a finally; a background
+# run gives it back when its thread ends.
+_RUN_SLOT = threading.Lock()
 
 
 def _job_start(analyse, echo):
@@ -400,25 +405,36 @@ def _job_start(analyse, echo):
 
     @copy_current_request_context
     def work():
+        state = "done"
         try:
             job["payload"], job["store"] = analyse(job)
-            job["state"] = "done"
         except Exception as exc:  # surfaced in the page, like a synchronous run
             job["error"] = "Analysis failed: {}".format(exc)
-            job["state"] = "error"
+            state = "error"
+        finally:
+            # the slot is free before the job reads as finished: no window in which
+            # a new run is refused although nothing is running
+            _RUN_SLOT.release()
         job["finished"] = time.time()
+        job["state"] = state
 
     job["thread"] = threading.Thread(target=work, daemon=True)
+    if not _RUN_SLOT.acquire(blocking=False):
+        return None  # one run at a time (sync or background)
     with _JOBS_LOCK:
-        if any(j["state"] == "running" for j in _JOBS.values()):
-            return None  # one run at a time: they share the API key's rate limit
         _JOBS[job["id"]] = job
         # evict finished jobs, oldest first; a running job is never dropped
         for old_id in [i for i, j in _JOBS.items() if j["state"] != "running"]:
             if len(_JOBS) <= _JOBS_MAX:
                 break
             del _JOBS[old_id]
-    job["thread"].start()
+    try:
+        job["thread"].start()
+    except BaseException:
+        _RUN_SLOT.release()
+        with _JOBS_LOCK:
+            _JOBS.pop(job["id"], None)
+        raise
     return job
 
 
@@ -465,6 +481,7 @@ def _job_status(job):
         "cache_hits": stats.get("cache_hits", 0),
         "waited": stats.get("waited", 0),
         "rpc_fallbacks": stats.get("rpc_fallbacks", 0),
+        "partial_indexing": stats.get("partial_indexing", 0),
         "error": job["error"],
     }
 
@@ -583,12 +600,15 @@ def _root_check_view(data, net):
         "not_found": rc["roots_not_found"],
         "outside_history": rc.get("roots_outside_history", 0),
         "ambiguous": rc.get("roots_ambiguous", 0),
+        "undecoded": rc.get("roots_undecoded", 0),
+        "unverified": rc.get("roots_unverified", 0),
         "history": ", ".join(
             "{} {}".format(k, v) for k, v in sorted((rc.get("history_sizes") or {}).items())
         ),
         "calls": rc["tx_info_calls"],
         "incomplete": rc["incomplete"],
         "unchecked_pools": ", ".join(rc["unchecked_pools"]),
+        "unchecked_reasons": dict(rc.get("unchecked_reasons") or {}),
         "excluded": [_root_row(c, net) for c in rc["excluded_candidates"]],
         "dropped": [_root_row(c, net) for c in rc.get("dropped_after_recount", [])],
     }
@@ -1076,7 +1096,9 @@ def _run_cluster(client, wallets, net, window_days, cache_dir=".cache"):
     header = ["wallet", "fingerprint", "cluster_point_z", "num_pool_layers", "value_funneled"]
     reports = {
         "cluster": report,
-        "cluster.json": json.dumps(raw_traces, indent=1, sort_keys=True, default=str),
+        "cluster.json": json.dumps(
+            {**json_fields(), "traces": raw_traces}, indent=1, sort_keys=True, default=str
+        ),
     }
     return traces, (header, rows), reports, build_cluster_report(raw_traces, net, fragment=True)
 
@@ -1163,7 +1185,9 @@ def _run_trace(client, address, net, params):
             dest = info.get("dest_chain_id")
             there = destinations.network(dest) if dest is not None else None
             view_edge["bridge_to"] = (
-                there.name if there else ("" if dest is None else f"chain {dest}")
+                there.name
+                if there
+                else (info.get("dest_chain") or "" if dest is None else f"chain {dest}")
             )
             view_edge["bridge_fill_url"] = (
                 there.tx_url(info["fill_tx"]) if there and info.get("fill_tx") else ""
@@ -1237,11 +1261,12 @@ def _run_trace(client, address, net, params):
             share_status(e),
             bridge_text(e["bridge"], chain_name) if e["kind"] == "bridge" else "",
         ]
-        for e in result["edges"]
+        # possible outflows of incomplete histories: attributed 0, kind "possible"
+        for e in result["edges"] + (result.get("possible") or [])
     ]
     reports = {
         "trace": build_trace_report(result, net, destinations),
-        address + ".json": json.dumps(result, indent=1, sort_keys=True),
+        address + ".json": json.dumps({**result, **json_fields()}, indent=1, sort_keys=True),
     }
     return view, (header, rows), reports
 
@@ -1263,7 +1288,9 @@ def _run_classify(client, address, net):
                 "label": format_label(labels.get(t)) if labels else "",
             }
             for t in (
-                [info["operator"]] if info.get("operator") else info.get("sweep_targets") or []
+                [info["operator"]]
+                if info.get("operator")
+                else info.get("sweep_targets") or info.get("paid_targets") or []
             )
         ],
         "senders": [{"address": s, "url": net.addr_url(s)} for s in info.get("senders") or []],
@@ -1284,7 +1311,7 @@ def _run_classify(client, address, net):
     ]
     reports = {
         "classify": build_classify_report(info, net, labels=labels),
-        info["address"] + ".json": json.dumps(info, indent=2, sort_keys=True),
+        info["address"] + ".json": json.dumps({**info, **json_fields()}, indent=2, sort_keys=True),
     }
     return view, (header, rows), reports
 
@@ -1344,7 +1371,9 @@ def _run_characterize(client, address, net, deposit_check=True):
     rows = [[r["when"], r["value"], r["asset"], r["pool"]] for r in inflows]
     reports = {
         "characterize": build_characterize_report(info, net),
-        info["address"] + ".json": json.dumps(info, indent=2, sort_keys=True, default=str),
+        info["address"] + ".json": json.dumps(
+            {**info, **json_fields()}, indent=2, sort_keys=True, default=str
+        ),
     }
     return view, (header, rows), reports
 
@@ -1578,13 +1607,15 @@ def index():
             return _busy(ctx)
         # 303: a reload of the status page must not submit the analysis again
         return redirect("/?job=" + job["id"], code=303)
-    if _running_job() is not None:
+    if not _RUN_SLOT.acquire(blocking=False):
         return _busy(ctx)
     try:
         payload, store = analyse()
     except Exception as exc:  # surface in the UI rather than a 500
         ctx["error"] = f"Analysis failed: {exc}"
         return render_template("index.html", **ctx)
+    finally:
+        _RUN_SLOT.release()
     session["token"] = _store_put(store)
     ctx["result"] = payload
     return render_template("index.html", **ctx)

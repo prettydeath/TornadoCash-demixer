@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""review4: strong class (C1), signal co-occurrence (C2) and the summary table (3), offline.
+"""strong_eval: strong class (C1), signal co-occurrence (C2) and the summary table (3), offline.
 
-Reads review4/compact.json (tools/review4_compute.py), review4/ens_strong.json,
-review4/universe_combos.json and the cached placebo summary jsons; writes
-review4/results.json (RESULTS.md is rendered by tools/review4_report.py).
+Reads strong_eval/compact.json (tools/strong_eval_compute.py), strong_eval/ens_strong.json,
+strong_eval/universe_combos.json and the cached placebo summary jsons; writes
+strong_eval/results.json (RESULTS.md is rendered by tools/strong_eval_report.py).
 """
 
 from __future__ import annotations
@@ -20,11 +20,11 @@ from scipy.stats import beta, chi2, fisher_exact
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from review4_common import OUT, R4, boot_ratio  # noqa: E402
+from strong_eval_common import EVAL_DIR, OUT, boot_ratio  # noqa: E402
 
-compact = json.load(open(os.path.join(R4, "compact.json"), encoding="utf-8"))
-ens = json.load(open(os.path.join(R4, "ens_strong.json"), encoding="utf-8"))
-ucomb = json.load(open(os.path.join(R4, "universe_combos.json"), encoding="utf-8"))
+compact = json.load(open(os.path.join(EVAL_DIR, "compact.json"), encoding="utf-8"))
+ens = json.load(open(os.path.join(EVAL_DIR, "ens_strong.json"), encoding="utf-8"))
+ucomb = json.load(open(os.path.join(EVAL_DIR, "universe_combos.json"), encoding="utf-8"))
 rng = random.Random(17)
 
 
@@ -290,6 +290,9 @@ results["external"] = {
     },
 }
 json.dump(
-    results, open(os.path.join(R4, "results.json"), "w", encoding="utf-8"), indent=1, default=str
+    results,
+    open(os.path.join(EVAL_DIR, "results.json"), "w", encoding="utf-8"),
+    indent=1,
+    default=str,
 )
 print("saved")

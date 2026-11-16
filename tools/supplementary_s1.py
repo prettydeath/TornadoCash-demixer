@@ -169,7 +169,7 @@ def rows():
                         v.get("decoy_withdrawals"),
                     )
                 )
-    # Early versus late direct link on P1 + P2 (re-scored, review4 compact.json; source of the 72 h cut).
+    # Early versus late direct link on P1 + P2 (re-scored, strong_eval compact.json; source of the 72 h cut).
     out.append(
         (
             "direct link by delay",

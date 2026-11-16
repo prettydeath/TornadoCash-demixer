@@ -73,7 +73,8 @@ def _rows(data, drop_linked, window_days=30):
 
     A cached run carries the signals of the version that produced it, so the
     heuristics are re-applied first (tools/placebo_windows.narrow, full window):
-    the numbers always follow the current rules.
+    the numbers follow the rules of this version (direct links: the 2.23 rule only
+    for runs cached with link records; the count of older runs is printed).
     """
     from placebo_windows import narrow
 
@@ -188,3 +189,6 @@ def main(argv=None):
 
 if __name__ == "__main__":
     main()
+    from placebo_windows import print_link_rule_note
+
+    print_link_rule_note()

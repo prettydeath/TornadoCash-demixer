@@ -35,6 +35,21 @@ class PermanentApiError(ApiError):
     """
 
 
+class ProviderBlockedError(PermanentApiError):
+    """The provider answered with a bot-protection challenge (Cloudflare) instead of data.
+
+    Never worked around: the run needs a paid plan or another endpoint.
+    """
+
+
+class ArchiveUnavailableError(PermanentApiError):
+    """A JSON-RPC node refused a historical block range (it keeps recent blocks only).
+
+    Retrying or halving the span cannot help; the run needs an archive endpoint or an
+    explorer plan that serves the chain.
+    """
+
+
 class ApiKeyError(ApiError):
     """The provider rejected the API key, or no key was supplied."""
 

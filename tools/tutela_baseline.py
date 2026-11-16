@@ -102,7 +102,7 @@ Deviations and assumptions (all apply to target and decoy alike)
 Ratio
 -----
 R = (L_decoy / N_decoy) / (L_target / N_target), leads per examined withdrawal,
-the convention of tools/review4_common.boot_ratio (R ~ 1: chance level; R << 1:
+the convention of tools/strong_eval_common.boot_ratio (R ~ 1: chance level; R << 1:
 the heuristic fires above chance in real windows). 95 % CI: percentile bootstrap
 over depositors (2000 resamples, fixed seed), and the exact conditional
 (Clopper-Pearson) interval, which is the one to read when a side has < 5 leads.
@@ -134,9 +134,10 @@ from collections import Counter, defaultdict
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from review4_common import OUT, boot_ratio  # noqa: E402
+from strong_eval_common import OUT, boot_ratio  # noqa: E402
 
 from tornado_demix.errors import ApiError, ApiKeyError  # noqa: E402
+from tornado_demix.txstatus import failed  # noqa: E402
 
 ZERO = "0x" + "0" * 40
 DAY = 86400
@@ -350,7 +351,7 @@ def run_leads(data, ctx):
 def cp_ratio_ci(t, te, d, de):
     """Exact (Clopper-Pearson) interval for R, the counts treated as Poisson:
     conditional on t + d, d ~ Binomial(t + d, p) with p / (1 - p) = R * De / Te.
-    Same formula as tools/review4_analyze.cp_ratio_ci."""
+    Same formula as tools/strong_eval_analyze.cp_ratio_ci."""
     from scipy.stats import beta
 
     n = t + d
@@ -500,7 +501,7 @@ def tile_rows(client, contract, tile, dep_hashes):
             if not h or h in seen or (full and int(r["blockNumber"]) >= top):
                 continue
             seen.add(h)
-            ok = r.get("isError", "0") == "0"
+            ok = not failed(r)
             sel = (r.get("input") or "")[:10].lower()
             dep = ok and (h in dep_hashes or sel in DEPOSIT_SELECTORS)
             rows.append([h, (r.get("from") or "").lower(), int(r.get("gasPrice") or 0), dep])

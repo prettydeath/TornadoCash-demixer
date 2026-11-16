@@ -388,7 +388,16 @@ def test_trace_totals_add_up_to_the_start_amount():
     result = _trace()
     rows = trace_totals(result)
     assert rows == [
-        {"asset": "ETH", "endpoints": 6.0, "below": 0.05, "failed": 3.95, "total": 10.0}
+        {
+            "asset": "ETH",
+            "name": "ETH",
+            "chain_id": None,
+            "asset_address": None,
+            "endpoints": 6.0,
+            "below": 0.05,
+            "failed": 3.95,
+            "total": 10.0,
+        }
     ]
     html = build_trace_report(result, fx.network())
     assert "End points 6 + below threshold 0.05 + failed lookups 3.95 = <b>10 ETH</b>" in html
@@ -396,6 +405,46 @@ def test_trace_totals_add_up_to_the_start_amount():
     assert _count(html, "stops") == "3" and _count(html, "failed") == "1"
     assert "1 end point, 1 below threshold, 1 at a failed lookup" in html
     assert 'class="vbar"' not in html  # stops of different kinds are not one proportion
+
+
+def _end(chain, asset, address, amount, reason="hop limit"):
+    return {
+        "address": "0x" + "7" * 40,
+        "chain_id": chain,
+        "asset": asset,
+        "asset_address": address,
+        "amount": amount,
+        "hop": 2,
+        "reason": reason,
+        "label": None,
+    }
+
+
+def test_native_rows_on_several_chains_are_said_to_add_up():
+    from tornado_demix.report_html import _totals_html
+
+    result = {
+        "amount": 10.0,
+        "asset": "ETH",
+        "asset_address": None,
+        "terminals": [_end(1, "ETH", None, 4.0), _end(42161, "ETH", None, 6.0)],
+    }
+    html = _totals_html(result)
+    assert "add up to <b>10 ETH</b>" in html
+    assert "do not add up" not in html and "not summed" not in html
+
+
+def test_rows_of_another_asset_are_not_summed_with_the_start_asset():
+    from tornado_demix.report_html import _totals_html
+
+    result = {
+        "amount": 10.0,
+        "asset": "ETH",
+        "asset_address": None,
+        "terminals": [_end(1, "ETH", None, 4.0), _end(1, "USDC", "0x" + "a" * 40, 9000.0)],
+    }
+    html = _totals_html(result)
+    assert "per asset and are not summed" in html and "add up to" not in html
 
 
 def test_trace_end_states_are_badges_and_hops_carry_utc_times():
@@ -429,7 +478,7 @@ def test_end_state_tones():
     assert end_state("labelled address")[0] == "ok"
 
 
-# --- fix round 1 -------------------------------------------------------------------
+# --- filter bars -------------------------------------------------------------------
 
 
 def test_each_table_has_its_own_filter_bar():
@@ -618,3 +667,35 @@ def test_characterize_pool_inflows_are_not_in_the_screen_only_section():
     html = build_characterize_report(_char_info(), fx.network())
     keys = _section_keys(html)
     assert "inflows" in keys and "raw" not in keys
+
+
+def test_cow_swap_ends_get_a_swap_badge():
+    from tornado_demix.report_html import end_state
+    from tornado_demix.report_page1 import _trace_status
+
+    for reason in (
+        "swap cow (order 0x" + "ab" * 56 + ", payout not found)",
+        "swap cow (trade not tied to this transfer)",
+    ):
+        assert end_state(reason) == ("ctx", "swap")
+        assert _trace_status(reason) == _trace_status("end")  # still counted as an end point
+    assert end_state("end") == ("ctx", "end point")
+
+
+def test_deposit_address_table_shows_failed_sends():
+    data = fx.two_pool_result()
+    dep = "0x" + "d" * 40
+    data["deposit_addresses"] = [
+        {
+            "address": dep,
+            "kind": "exchange_deposit",
+            "senders": [],
+            "evidence": True,
+            "failed_sends": 2,
+        },
+        {"address": "0x" + "c" * 40, "kind": "exchange_deposit", "senders": [], "evidence": True},
+    ]
+    apply_heuristics(data, counterparties=set(), shared_deposits={fx.BOB: [dep]})
+    html = build_html_report(data, fx.network())
+    assert html.count("2 failed transaction(s) sent, moved nothing, not counted") == 1
+    assert "failed transaction(s) sent" in html

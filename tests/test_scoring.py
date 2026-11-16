@@ -374,11 +374,14 @@ def test_a_contract_counterparty_does_not_earn_linked():
     assert data["heuristics"]["linked_contracts"] == [contract]
 
 
-def test_an_unknown_contract_status_keeps_linked():
+def test_an_unknown_contract_status_is_context_not_linked():
+    """Since 2.23 a failed contract check never makes a lead (it used to keep linked)."""
     person = "0x%040x" % 4
     data = _data(_pool_result(n_recipients=40, n_self_relayed=0))
     apply_heuristics(data, counterparties={person}, is_contract=lambda a: None)
-    assert "linked" in data["denoms"]["0.1 ETH"]["signals"][person]
+    signals = data["denoms"]["0.1 ETH"]["signals"][person]
+    assert "linked" not in signals and "linked_unknown_contract" in signals
+    assert data["heuristics"]["linked_unknown_contracts"] == [person]
 
 
 def test_the_summary_lists_facts_and_counts_one_family_for_count_and_self_relay():

@@ -208,15 +208,20 @@ def _token_network():
     )
 
 
-def test_a_counterparty_known_only_through_an_erc20_transfer_is_linked():
+def test_a_counterparty_known_only_through_an_erc20_transfer_is_linked(monkeypatch):
     """A direct ERC-20 transfer between the depositor and a candidate earns
     ``linked``, like a native transfer does.
     """
+    # a working contract check that says "not a contract" (the fixture network has no RPC
+    # endpoint, and an unknown contract status never makes a lead)
+    monkeypatch.setattr(
+        "tornado_demix.demix.make_contract_check", lambda url: lambda address: False
+    )
     candidate = "0x" + "c" * 40
     deposit = _tx(fx.POOL_1_ETH, 1.0, 1000, 10, "0xdep")
     # A direct, real transfer from the wallet to `candidate` - NOT a deposit
-    # (1 DAI != the 100 DAI pool's denomination).
-    token_txs = [_ttx(candidate, 1 * 10**18, 900, "0xtoken1", DAI_TOKEN)]
+    # (5 DAI != the 100 DAI pool's denomination, and above the 2 DAI dust floor).
+    token_txs = [_ttx(candidate, 5 * 10**18, 900, "0xtoken1", DAI_TOKEN)]
     # `candidate` also shows up as a lone, self-relayed exit so it has a
     # detail/signals row to inspect at all.
     logs = [_wlog(candidate, "ab" * 32, ZERO_ADDRESS, 0)]

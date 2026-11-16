@@ -120,7 +120,7 @@
         <input id="placebo" name="placebo" type="checkbox" value="1" {% if placebo %}checked{% endif %}>Placebo check (doubles explorer calls)</label>
       <label class="check" for="deposit_addresses" title="Look for deposit addresses (exchange, service, forwarder, smart account) the depositor sent funds to, and for withdrawal recipients that sent to the same one (context only, not a lead). Costs up to about 50 explorer calls per wallet.">
         <input id="deposit_addresses" name="deposit_addresses" type="checkbox" value="1" {% if deposit_addresses %}checked{% endif %}>Deposit addresses</label>
-      <label class="check" for="root_check" title="Exploratory. Read the Merkle root of each candidate withdrawal and drop the withdrawals whose root predates every note of the depositor in that pool; a candidate with all withdrawals excluded leaves the ranking. At most 200 transaction lookups per wallet. The first run builds a root index per pool (about 30 minutes for a large one) and caches it, so the request can take that long.">
+      <label class="check" for="root_check" title="Exploratory. Read the Merkle root of each candidate withdrawal (the root argument of its decoded withdraw call; without one the root stays unknown) and drop the withdrawals whose root predates every note of the depositor in that pool; a candidate with all withdrawals excluded leaves the ranking. At most 200 transaction lookups per wallet. The first run builds a root index per pool (about 30 minutes for a large one) and caches it, so the request can take that long.">
         <input id="root_check" name="root_check" type="checkbox" value="1" {% if root_check %}checked{% endif %}>Merkle-root check (exploratory)</label>
     </div>
     <div class="row" id="multiFields" {% if analysis!='multi' %}hidden{% endif %}>
@@ -274,6 +274,7 @@
           var t=s.elapsed+' s, '+s.calls+' explorer calls ('+s.cache_hits+' from cache)';
           if(s.waited) t+=', '+s.waited+' s waiting on the provider';
           if(s.rpc_fallbacks) t+=', '+s.rpc_fallbacks+' log lookups via the RPC node';
+          if(s.partial_indexing) t+=', '+s.partial_indexing+' lists still being indexed by the explorer (partial indexing)';
           jt.textContent=t; setTimeout(poll,1500);
         })
         .catch(function(e){

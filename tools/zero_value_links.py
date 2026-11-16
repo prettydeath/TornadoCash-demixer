@@ -1,6 +1,6 @@
 """Share of early direct links that rest only on zero-value transfers.
 
-For every early direct link (signal `linked` of the current rule over the 30-day window, as
+For every early direct link (signal `linked` of this version's rule over the 30-day window, as
 in tools/decoy_rates.py) and late direct link (`linked_late`) in the target and decoy runs of
 the given placebo dirs (depositors with both runs), re-read the depositor's normal, internal and token transfers and
 classify the link: "value" if any transfer between depositor and candidate moved a
@@ -21,7 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from ens_labels import api_keys  # noqa: E402
-from placebo_windows import OUT, narrow  # noqa: E402
+from placebo_windows import OUT, link_rule_note, narrow, print_link_rule_note  # noqa: E402
 
 from tornado_demix.etherscan import EtherscanClient  # noqa: E402
 from tornado_demix.heuristics import ranked_candidates  # noqa: E402
@@ -108,6 +108,7 @@ def main(dirs):
             for sd in ("target", "decoy")
         ]
         lines.append(f"| pooled | {sig} | {cells[0]} | {cells[1]} |")
+    lines += ["", f"Direct-link rule: {link_rule_note() or 'no run scored'}."]
     open(os.path.join(OUT, "ZERO_VALUE_LINKS.md"), "w", encoding="utf-8").write(
         "\n".join(lines) + "\n"
     )
@@ -116,3 +117,4 @@ def main(dirs):
 
 if __name__ == "__main__":
     main(sys.argv[1:])
+    print_link_rule_note()

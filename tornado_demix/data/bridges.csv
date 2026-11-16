@@ -61,3 +61,60 @@ chain_id,address,protocol,role,kind,source_url
 10,0x6f26bf09b1c792e3228e5467807a900a503c0281,across,"SpokePool (crossChainContracts(10) on 2026-11-13)",contract,https://etherscan.io/address/0xc186fa914353c44b2e33ebe05f21846f1048beda#readProxyContract
 56,0x4e8e101924ede233c13e2d8622dc8aed2872d505,across,"SpokePool (crossChainContracts(56) on 2026-11-13)",contract,https://etherscan.io/address/0xc186fa914353c44b2e33ebe05f21846f1048beda#readProxyContract
 43114,0xfe9d541c92e4e90437c7152a00244886de37a658,across,"SpokePool (crossChainContracts(43114) on 2026-11-13)",contract,https://etherscan.io/address/0xc186fa914353c44b2e33ebe05f21846f1048beda#readProxyContract
+1,0xcee284f754e854890e311e3280b767f80797180d,arbitrum,"L1CustomGateway",contract,https://docs.arbitrum.io/build-decentralized-apps/reference/contract-addresses
+1,0xd92023e9d9911199a6711321d1277285e6d4e2db,arbitrum,"L1WethGateway",contract,https://docs.arbitrum.io/build-decentralized-apps/reference/contract-addresses
+1,0x8829ad80e425c646dab305381ff105169feece56,zksync,"L1AssetRouter (second bridge of ERC-20 deposits)",contract,https://docs.zksync.io/zksync-protocol/contracts/l1-contracts/zk-chain-addresses
+1,0xbed1eb542f9a5aa6419ff3deb921a372681111f6,zksync,"L1NativeTokenVault (holds deposited ERC-20)",contract,https://docs.zksync.io/zksync-protocol/contracts/l1-contracts/zk-chain-addresses
+1,0x337685fdab40d39bd02028545a4ffa7d287cc3e2,mayan,"MayanForwarder2 (same address on every EVM chain; Unichain, Linea, HyperEVM and Monad not listed: not in the networks registry)",contract,https://docs.mayan.finance/integration/forwarder-contract
+42161,0x337685fdab40d39bd02028545a4ffa7d287cc3e2,mayan,"MayanForwarder2",contract,https://docs.mayan.finance/integration/forwarder-contract
+8453,0x337685fdab40d39bd02028545a4ffa7d287cc3e2,mayan,"MayanForwarder2",contract,https://docs.mayan.finance/integration/forwarder-contract
+10,0x337685fdab40d39bd02028545a4ffa7d287cc3e2,mayan,"MayanForwarder2",contract,https://docs.mayan.finance/integration/forwarder-contract
+137,0x337685fdab40d39bd02028545a4ffa7d287cc3e2,mayan,"MayanForwarder2",contract,https://docs.mayan.finance/integration/forwarder-contract
+56,0x337685fdab40d39bd02028545a4ffa7d287cc3e2,mayan,"MayanForwarder2",contract,https://docs.mayan.finance/integration/forwarder-contract
+43114,0x337685fdab40d39bd02028545a4ffa7d287cc3e2,mayan,"MayanForwarder2",contract,https://docs.mayan.finance/integration/forwarder-contract
+1,0x40ffe85a28dc9993541449464d7529a922142960,mayan,"SwiftSource (orders forwarded by MayanForwarder2)",contract,https://etherscan.io/address/0x40ffe85a28dc9993541449464d7529a922142960#code
+1,0xc1062b7c5dc8e4b1df9f200fe360cdc0ed6e7741,mayan,"FastMCTP",contract,https://etherscan.io/address/0xc1062b7c5dc8e4b1df9f200fe360cdc0ed6e7741#code
+1,0x875d6d37ec55c8cf220b9e5080717549d8aa8eca,mayan,"MayanCircle",contract,https://etherscan.io/address/0x875d6d37ec55c8cf220b9e5080717549d8aa8eca#code
+1,0x8a44fb98a2ad415809e6f8f57e5ca8fa2747ff3e,mayan,"MonoChainSwap (same-chain payout)",contract,https://etherscan.io/address/0x8a44fb98a2ad415809e6f8f57e5ca8fa2747ff3e#code
+1,0xe3985e6b61b814f7cdb188766562ba71b446b46d,maya,"MAYAChain_Router (inbound_addresses ETH router on 2026-11-14)",contract,https://mayanode.mayachain.info/mayachain/inbound_addresses
+42161,0x700e97ef07219440487840dc472e7120a7ff11f4,maya,"ArbRouter (inbound_addresses ARB router on 2026-11-14)",contract,https://mayanode.mayachain.info/mayachain/inbound_addresses
+1,0x2fc617e933a52713247ce25730f6695920b3befe,layerswap,"Layerswap 1 (public name tag; maker EOA)",maker_eoa,https://etherscan.io/address/0x2Fc617E933a52713247CE25730f6695920B3befe
+1,0x2cff890f0378a11913b6129b2e97417a2c302680,near-intents,"NEAR Intents (public name tag; deposit addresses sweep here)",maker_eoa,https://etherscan.io/address/0x2CfF890f0378a11913B6129B2E97417a2c302680
+1,0xbea9f7fd27f4ee20066f18def0bc586ec221055a,unit,"Unit treasury, native chain (Ethereum)",maker_eoa,https://docs.hyperunit.xyz/developers/key-addresses/mainnet
+8453,0x749b898e5b523f08e9e371d259e0409c19ae8454,unit,"Unit treasury, native chain (Base)",maker_eoa,https://docs.hyperunit.xyz/developers/key-addresses/mainnet
+43114,0x84e49ddcad2ebfe7474fa7a3d3eb1fe8bc103a16,unit,"Unit treasury, native chain (Avalanche)",maker_eoa,https://docs.hyperunit.xyz/developers/key-addresses/mainnet
+42161,0x2df1c51e09aecf9cacb7bc98cb1742757f163df7,hyperliquid,"Bridge2, legacy bridge (CCTP preferred); USDC credited to the sender on HyperCore",contract,https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/bridge2
+1,0x0a992d191deec32afe36203ad87d7d289a738f81,cctp,"MessageTransmitter",contract,https://developers.circle.com/cctp/v1/evm-smart-contracts
+1,0xc4922d64a24675e16e1586e3e3aa56c06fabe907,cctp,"TokenMinter (receives the burned USDC)",contract,https://developers.circle.com/cctp/v1/evm-smart-contracts
+1,0x81d40f21f12a8f0e3252bccb954d722d4c464b64,cctp,"MessageTransmitterV2",contract,https://developers.circle.com/cctp/evm-smart-contracts
+1,0xfd78ee919681417d192449715b2594ab58f5d002,cctp,"TokenMinterV2 (receives the burned USDC)",contract,https://developers.circle.com/cctp/evm-smart-contracts
+43114,0x6b25532e1060ce10cc3b0a99e5683b91bfde6982,cctp,"TokenMessenger",contract,https://developers.circle.com/cctp/v1/evm-smart-contracts
+43114,0x8186359af5f57fbb40c6b14a588d2a59c0c29880,cctp,"MessageTransmitter",contract,https://developers.circle.com/cctp/v1/evm-smart-contracts
+43114,0x420f5035fd5dc62a167e7e7f08b604335ae272b8,cctp,"TokenMinter (receives the burned USDC)",contract,https://developers.circle.com/cctp/v1/evm-smart-contracts
+43114,0x28b5a0e9c621a5badaa536219b3a228c8168cf5d,cctp,"TokenMessengerV2",contract,https://developers.circle.com/cctp/evm-smart-contracts
+43114,0x81d40f21f12a8f0e3252bccb954d722d4c464b64,cctp,"MessageTransmitterV2",contract,https://developers.circle.com/cctp/evm-smart-contracts
+43114,0xfd78ee919681417d192449715b2594ab58f5d002,cctp,"TokenMinterV2 (receives the burned USDC)",contract,https://developers.circle.com/cctp/evm-smart-contracts
+10,0x2b4069517957735be00cee0fadae88a26365528f,cctp,"TokenMessenger",contract,https://developers.circle.com/cctp/v1/evm-smart-contracts
+10,0x4d41f22c5a0e5c74090899e5a8fb597a8842b3e8,cctp,"MessageTransmitter",contract,https://developers.circle.com/cctp/v1/evm-smart-contracts
+10,0x33e76c5c31cb928dc6fe6487ab3b2c0769b1a1e3,cctp,"TokenMinter (receives the burned USDC)",contract,https://developers.circle.com/cctp/v1/evm-smart-contracts
+10,0x28b5a0e9c621a5badaa536219b3a228c8168cf5d,cctp,"TokenMessengerV2",contract,https://developers.circle.com/cctp/evm-smart-contracts
+10,0x81d40f21f12a8f0e3252bccb954d722d4c464b64,cctp,"MessageTransmitterV2",contract,https://developers.circle.com/cctp/evm-smart-contracts
+10,0xfd78ee919681417d192449715b2594ab58f5d002,cctp,"TokenMinterV2 (receives the burned USDC)",contract,https://developers.circle.com/cctp/evm-smart-contracts
+42161,0x19330d10d9cc8751218eaf51e8885d058642e08a,cctp,"TokenMessenger",contract,https://developers.circle.com/cctp/v1/evm-smart-contracts
+42161,0xc30362313fbba5cf9163f0bb16a0e01f01a896ca,cctp,"MessageTransmitter",contract,https://developers.circle.com/cctp/v1/evm-smart-contracts
+42161,0xe7ed1fa7f45d05c508232aa32649d89b73b8ba48,cctp,"TokenMinter (receives the burned USDC)",contract,https://developers.circle.com/cctp/v1/evm-smart-contracts
+42161,0x28b5a0e9c621a5badaa536219b3a228c8168cf5d,cctp,"TokenMessengerV2",contract,https://developers.circle.com/cctp/evm-smart-contracts
+42161,0x81d40f21f12a8f0e3252bccb954d722d4c464b64,cctp,"MessageTransmitterV2",contract,https://developers.circle.com/cctp/evm-smart-contracts
+42161,0xfd78ee919681417d192449715b2594ab58f5d002,cctp,"TokenMinterV2 (receives the burned USDC)",contract,https://developers.circle.com/cctp/evm-smart-contracts
+8453,0x1682ae6375c4e4a97e4b583bc394c861a46d8962,cctp,"TokenMessenger",contract,https://developers.circle.com/cctp/v1/evm-smart-contracts
+8453,0xad09780d193884d503182ad4588450c416d6f9d4,cctp,"MessageTransmitter",contract,https://developers.circle.com/cctp/v1/evm-smart-contracts
+8453,0xe45b133ddc64be80252b0e9c75a8e74ef280eed6,cctp,"TokenMinter (receives the burned USDC)",contract,https://developers.circle.com/cctp/v1/evm-smart-contracts
+8453,0x28b5a0e9c621a5badaa536219b3a228c8168cf5d,cctp,"TokenMessengerV2",contract,https://developers.circle.com/cctp/evm-smart-contracts
+8453,0x81d40f21f12a8f0e3252bccb954d722d4c464b64,cctp,"MessageTransmitterV2",contract,https://developers.circle.com/cctp/evm-smart-contracts
+8453,0xfd78ee919681417d192449715b2594ab58f5d002,cctp,"TokenMinterV2 (receives the burned USDC)",contract,https://developers.circle.com/cctp/evm-smart-contracts
+137,0x9daf8c91aefae50b9c0e69629d3f6ca40ca3b3fe,cctp,"TokenMessenger",contract,https://developers.circle.com/cctp/v1/evm-smart-contracts
+137,0xf3be9355363857f3e001be68856a2f96b4c39ba9,cctp,"MessageTransmitter",contract,https://developers.circle.com/cctp/v1/evm-smart-contracts
+137,0x10f7835f827d6cf035115e10c50a853d7fb2d2ec,cctp,"TokenMinter (receives the burned USDC)",contract,https://developers.circle.com/cctp/v1/evm-smart-contracts
+137,0x28b5a0e9c621a5badaa536219b3a228c8168cf5d,cctp,"TokenMessengerV2",contract,https://developers.circle.com/cctp/evm-smart-contracts
+137,0x81d40f21f12a8f0e3252bccb954d722d4c464b64,cctp,"MessageTransmitterV2",contract,https://developers.circle.com/cctp/evm-smart-contracts
+137,0xfd78ee919681417d192449715b2594ab58f5d002,cctp,"TokenMinterV2 (receives the burned USDC)",contract,https://developers.circle.com/cctp/evm-smart-contracts

@@ -105,7 +105,7 @@ def test_report_survives_a_wallet_with_no_deposits():
 
 def test_report_surfaces_unresolved_pools():
     """A pool skipped by a failed block lookup must be shown as not searched,
-    not silently absent (Finding 2)."""
+    not silently absent."""
     data = _bsc_data()
     data["unresolved"] = [{"pool_key": "1 BNB", "reason": "provider returned None"}]
     html = build_html_report(data, _bsc_network())
@@ -124,7 +124,7 @@ def _mixed_asset_eth_data():
     """An Ethereum wallet with one 1 ETH voucher and one 100000 DAI voucher.
 
     The Deposited tile must not sum 1 + 100000 across assets and label it a
-    single currency (Finding 2)."""
+    single currency."""
     return {
         "wallet": fx.WALLET,
         "params": {
@@ -409,7 +409,7 @@ def test_per_pool_filenames_are_network_scoped(tmp_path):
     assert "bsc_withdrawals_1_BNB.csv" in names
 
 
-# Mixed-asset reconvergence (Task 6): a cluster fed by a 1 ETH layer and a
+# Mixed-asset reconvergence a cluster fed by a 1 ETH layer and a
 # 1000 DAI layer at once must carry a total per asset, never a cross-asset sum.
 def _mixed_asset_traces():
     return [

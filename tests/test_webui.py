@@ -494,6 +494,29 @@ def test_trace_with_an_incomplete_history_is_never_called_certain(client, monkey
     assert csv_text.splitlines()[1].endswith(",True,possible (history incomplete),")
 
 
+def test_trace_shows_possible_outflows_in_the_page_and_the_csv(client, monkeypatch):
+    possible = {
+        **_TRACE["edges"][0],
+        "kind": "possible",
+        "attributed": 0.0,
+        "lower": 0.0,
+        "upper": 1.0,
+        "history_incomplete": True,
+        "bounds_available": True,
+        "status": "possible (history incomplete)",
+    }
+    possible.pop("swapped_to")
+    trace = {**_TRACE, "possible": [possible]}
+    monkeypatch.setattr(webapp, "trace_funds", lambda *a, **kw: trace)
+    monkeypatch.setattr(webapp, "load_attribution", lambda *a, **k: {})
+    response, body = _post(client, analysis="trace", trace_amount="2")
+    assert "Possible outflows (history incomplete)" in body
+    rows = client.get("/download.csv").get_data(as_text=True).splitlines()
+    assert any(
+        ",possible," in r and r.endswith(",True,possible (history incomplete),") for r in rows
+    )
+
+
 def test_known_exits_must_be_addresses(client):
     response, body = _post(client, analysis="demix", known_exits="not-an-address")
     assert "Known exits must be 0x addresses" in body

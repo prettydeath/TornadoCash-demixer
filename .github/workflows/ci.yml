@@ -52,6 +52,40 @@ jobs:
           PYTHONLEGACYWINDOWSSTDIO: "1"
         run: python -m pytest -q tests/test_encoding.py
 
+  layout:
+    # The page-1 and table layout checks need a real browser; every other job skips them.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      # playwright is pinned in the layout extra, so the browser revision follows pyproject.toml
+      - run: python -m pip install -e ".[dev,web,layout]"
+      - name: Cache the browser
+        id: browser
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pyproject.toml') }}
+      - name: Install Chromium
+        run: python -m playwright install --with-deps chromium
+      - name: Layout tests (a missing browser fails, it does not skip)
+        env:
+          REQUIRE_PLAYWRIGHT: "1"
+        run: |
+          python -m pytest -q -rA tests/test_report_page1.py -k "overflow or dense" --junitxml=layout.xml
+          # the selected layout tests must have run: at least one, none skipped, none failed
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+          root = ET.parse("layout.xml").getroot()
+          suite = root if root.tag == "testsuite" else root.find("testsuite")
+          n = int(suite.get("tests", 0))
+          bad = sum(int(suite.get(k, 0)) for k in ("skipped", "failures", "errors"))
+          print(f"layout tests: {n} run, {bad} skipped/failed")
+          raise SystemExit(0 if n > 0 and bad == 0 else 1)
+          PY
+
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -62,6 +96,17 @@ jobs:
       - run: python -m pip install -e ".[dev]"
       - run: python -m ruff check .
       - run: python -m ruff format --check .
+
+  audit:
+    # Known-vulnerability check of the exact pinned versions.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - run: python -m pip install pip-audit
+      - run: python -m pip_audit -r requirements-lock.txt --require-hashes --disable-pip
 
   install:
     # The registry ships inside the package; an editable install cannot show a

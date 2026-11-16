@@ -265,3 +265,102 @@ def test_placebo_eval_counts_failed_lookups(tmp_path, monkeypatch):
         "runs_with_failures": 1,
         "runs_without_record": 1,
     }
+
+
+# ---------------------------------------------------------------- cluster diagnostics
+
+
+def _m5_per():
+    """30 depositors, 1000 withdrawals on each side; all 100 target leads in one depositor."""
+    return [(100 if i == 0 else 0, 1000, 0, 1000) for i in range(30)]
+
+
+def test_concentrated_leads_are_flagged_not_reliable():
+    s = hr.ratio_stats(_m5_per(), random.Random(1), boot=200)
+    assert s["R"] == 0.0 and s["ci_type"] == "exact"
+    assert s["depositors_with_target_leads"] == 1 and s["depositors_with_decoy_leads"] == 0
+    assert s["max_target_lead_share"] == 1.0
+    assert s["bootstrap_dropped"] > 30  # resamples without the one lead depositor
+    assert s["reliable"] is False
+    assert s["warning"] == "insufficient information (leads concentrated in 1 depositor(s))"
+    assert "independent withdrawals" in s["ci_assumption"]
+
+
+def test_spread_leads_are_reliable_and_dropped_counted():
+    per = [(2, 100, 1, 100)] * 10
+    s = hr.ratio_stats(per, random.Random(1), boot=100)
+    assert s["reliable"] is True and "warning" not in s
+    assert s["depositors_with_target_leads"] == 10 and s["max_target_lead_share"] == 0.1
+    assert s["bootstrap_dropped"] == 0
+
+
+def test_one_depositor_over_half_is_flagged():
+    per = [(10, 100, 1, 100)] + [(1, 100, 1, 100)] * 5
+    s = hr.ratio_stats(per, random.Random(1), boot=50)
+    assert s["max_target_lead_share"] > 0.5 and s["reliable"] is False
+    assert s["warning"].startswith("insufficient information (leads concentrated in 1 depositor")
+
+
+def test_render_shows_warning_and_dropped_count():
+    pairs = [(_t(1000, {"moderate": 100 if i == 0 else 0}), _t(1000)) for i in range(30)]
+    win = {**hr.analyze(pairs, 100), "hours": 72, "depositors_with_withdrawals": 30}
+    md = hr.render({"depositors": 30, "boot": 100, "seed": 1, "windows": {"72h": win}})
+    assert "insufficient information (leads concentrated in 1 depositor(s))" in md
+    assert "assumes independent withdrawals" in md
+    assert "dropped" in md
+
+
+def test_placebo_eval_reports_cluster_diagnostics(tmp_path, monkeypatch):
+    monkeypatch.setenv("TORNADO_DEMIX_REGISTRY", str(tmp_path / "tests.jsonl"))
+    results = {}
+    for i in range(1, 31):
+        t = _run(_addr(i))
+        t["denoms"] = {"d": {"counts": {_addr(5000 + i): 1000}}}
+        results[_addr(i)] = {"target": t, "decoy": {**_run(_addr(i)), "denoms": t["denoms"]}}
+    monkeypatch.setattr(
+        pe,
+        "summarize",
+        lambda d: {
+            "bands": __import__("collections").Counter(
+                {"moderate": 100 if d is results[_addr(1)]["target"] else 0}
+            ),
+            "families": __import__("collections").Counter(),
+            "exposure": 1000,
+        },
+    )
+    out = pe.report(results, boot=50)
+    b = out["up_to_moderate"]
+    assert b["reliable"] is False and "insufficient information" in b["warning"]
+    assert b["bootstrap_dropped"] > 0 and b["depositors_with_target_leads"] == 1
+
+
+def test_zero_lead_side_does_not_trigger_and_keeps_label():
+    per = [(2, 100, 0, 100)] * 10
+    s = hr.ratio_stats(per, random.Random(1), boot=50)
+    assert s["depositors_with_decoy_leads"] == 0 and s["decoy"] == 0
+    assert s["reliable"] is True and "warning" not in s
+    assert s["ci_type"] == "exact" and "independent withdrawals" in s["ci_assumption"]
+    md = hr.render(
+        {
+            "depositors": 10,
+            "boot": 50,
+            "seed": 1,
+            "windows": {
+                "72h": {
+                    **hr.analyze([(_t(100, {"moderate": 2}), _t(100))] * 10, 50),
+                    "hours": 72,
+                    "depositors_with_withdrawals": 10,
+                }
+            },
+        }
+    )
+    assert "exact, assumes independent withdrawals" in md and "insufficient" not in md
+
+
+def test_warning_names_the_side_and_both_empty_is_noted():
+    s = hr.ratio_stats(_m5_per(), random.Random(1), boot=50)
+    assert s["warning_side"] == "target"
+    from cluster_diag import diagnostics
+
+    d = diagnostics([0, 0], [0, 0], 0)
+    assert d["lead_note"] == "no leads on either side" and d["reliable"] is False

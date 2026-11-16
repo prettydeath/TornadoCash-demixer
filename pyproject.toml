@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tornado-demix"
-version = "2.22.0"
+version = "2.23.0"
 description = "Tornado Cash forensics: evidence-banded exit leads, exit groups, operator clusters and multi-hop fund tracing after withdrawal on 8 EVM chains, with a placebo check on real data."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -31,7 +31,9 @@ web = ["flask>=3.0,<4"]
 dev = ["pytest>=8.0,<10", "ruff>=0.6,<0.17", "hypothesis>=6.100,<7", "pycryptodome>=3.20,<4"]
 # tools/ens_labels.py: ENS namehash and ABI coding for the labelled evaluation set
 labels = ["pycryptodome>=3.20,<4", "eth-abi>=5,<6"]
-# tools/decoy_rates.py, holdout_report.py, review4_analyze.py, tutela_baseline.py: the statistics behind docs/EVALUATION.md
+# tools/decoy_rates.py, holdout_report.py, strong_eval_analyze.py, tutela_baseline.py: the statistics behind docs/EVALUATION.md
+# tests/test_report_page1.py layout tests and tools/report_layout_check.py (CI job "layout")
+layout = ["playwright==1.62.0"]
 eval = ["numpy>=1.26,<3", "scipy>=1.11,<2", "statsmodels>=0.14,<1", "pycryptodome>=3.20,<4", "eth-abi>=5,<6"]
 
 [project.scripts]

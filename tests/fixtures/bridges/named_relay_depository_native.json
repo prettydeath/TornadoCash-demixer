@@ -1,0 +1,31 @@
+{
+ "tx_hash": "0xb11111b66fba93ac50140dcb5e749e71a073be102cebd060eedf7d8ef61467d8",
+ "origin_chain_id": 1,
+ "ts": 1793296175,
+ "tx": {
+  "hash": "0xb11111b66fba93ac50140dcb5e749e71a073be102cebd060eedf7d8ef61467d8",
+  "from": "0xddb76c04b76a4019d0a997b5359939d98fefc1d6",
+  "to": "0x4cd00e387622c35bddb9b4c962c136462338bc31",
+  "value": "0x3ff2e795f50000",
+  "input": "0x49290c1c000000000000000000000000ddb76c04b76a4019d0a997b5359939d98fefc1d6a32c98b0164d3d6d02f9a6ead3aa56e030b070b9f12cd9744f42e490bd0f7e81",
+  "blockNumber": "0x1914e61",
+  "transactionIndex": "0xcb"
+ },
+ "receipt": {
+  "status": "0x1",
+  "from": "0xddb76c04b76a4019d0a997b5359939d98fefc1d6",
+  "to": "0x4cd00e387622c35bddb9b4c962c136462338bc31",
+  "transactionIndex": "0xcb",
+  "blockNumber": "0x1914e61",
+  "logs": [
+   {
+    "address": "0x4cd00e387622c35bddb9b4c962c136462338bc31",
+    "topics": [
+     "0x8032066556caf3967d8fec4ad22a2d9e1e9576556b2903a0fcd5b1fd201e3477"
+    ],
+    "data": "0x000000000000000000000000ddb76c04b76a4019d0a997b5359939d98fefc1d6000000000000000000000000000000000000000000000000003ff2e795f50000a32c98b0164d3d6d02f9a6ead3aa56e030b070b9f12cd9744f42e490bd0f7e81",
+    "logIndex": "0x1a1"
+   }
+  ]
+ }
+}

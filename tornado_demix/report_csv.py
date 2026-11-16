@@ -5,10 +5,11 @@ from __future__ import annotations
 import csv
 import os
 import sys
+import unicodedata
 from datetime import datetime, timezone
 
 from .heuristics import METHOD_FAMILY, ranked_candidates
-from .incomplete import is_notice
+from .incomplete import is_notice, is_partial
 from .networks import Network
 
 
@@ -68,9 +69,18 @@ def _sanitize_cell(value):
 
     Defence in depth: fields come from chain data or the registry, but the
     registry ``asset`` column is free text and these files get opened by
-    double-click. A leading apostrophe is the conventional escape.
+    double-click. A leading apostrophe is the conventional escape. A cell is
+    escaped when it starts with a formula character, with a control or
+    invisible character (a BOM, a zero-width mark), or with spaces and such
+    characters followed by a formula character.
     """
-    if isinstance(value, str) and value.startswith(_FORMULA_PREFIXES):
+    if not isinstance(value, str) or not value:
+        return value
+    first = value[0]
+    if first in _FORMULA_PREFIXES or unicodedata.category(first) in ("Cc", "Cf"):
+        return "'" + value
+    rest = value.lstrip()
+    if rest != value and rest.startswith(_FORMULA_PREFIXES):
         return "'" + value
     return value
 
@@ -175,7 +185,7 @@ def _with_network(network, header, rows):
 def _lookup_errors_csv(results, out_dir: str) -> list[str]:
     """``lookup_errors.csv`` with every failed lookup and cut-off list of ``results``
     (run results, see tornado_demix.incomplete); no file when nothing failed."""
-    header = ["wallet", "kind", "what", "address", "tx", "error"]
+    header = ["wallet", "kind", "what", "address", "tx", "error", "reason"]
     rows = []
     for res in results:
         wallet = res.get("wallet", "")
@@ -188,6 +198,7 @@ def _lookup_errors_csv(results, out_dir: str) -> list[str]:
                     e.get("address", ""),
                     e.get("tx", ""),
                     e.get("error", ""),
+                    e.get("reason", ""),
                 ]
             )
         for t in res.get("truncated") or []:
@@ -200,11 +211,27 @@ def _lookup_errors_csv(results, out_dir: str) -> list[str]:
                         t.get("address", ""),
                         "",
                         "read from the RPC node: no gas price on these rows",
+                        "",
+                    ]
+                )
+                continue
+            if is_partial(t):
+                rows.append(
+                    [
+                        wallet,
+                        "partial_indexing",
+                        t.get("action", ""),
+                        t.get("address", ""),
+                        "",
+                        "still being indexed by the explorer: newest rows may be missing",
+                        t.get("reason", ""),
                     ]
                 )
                 continue
             limit = f"cut off at {t['limit']} rows" if t.get("limit") else "cut off"
-            rows.append([wallet, "truncated", t.get("action", ""), t.get("address", ""), "", limit])
+            rows.append(
+                [wallet, "truncated", t.get("action", ""), t.get("address", ""), "", limit, ""]
+            )
     if not rows:
         return []
     return [_write(os.path.join(out_dir, "lookup_errors.csv"), header, rows)]
@@ -246,11 +273,12 @@ def write_demix_csv(data: dict, out_dir: str, network: Network) -> list[str]:
             "to_address",
             "via",
             "tx_hash",
+            "pool_ambiguous",
         ],
         [
             [
                 i,
-                d["pool_key"],
+                "uncertain" if d.get("pool_ambiguous") else d["pool_key"],
                 d["denom"],
                 d["asset"],
                 _ts(d["ts"]),
@@ -258,6 +286,7 @@ def write_demix_csv(data: dict, out_dir: str, network: Network) -> list[str]:
                 d["to"],
                 d["via"],
                 d["hash"],
+                " / ".join(d.get("pool_ambiguous") or []),
             ]
             for i, d in enumerate(data["deposits"], 1)
         ],

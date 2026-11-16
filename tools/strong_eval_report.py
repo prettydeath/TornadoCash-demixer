@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render review4/results.json into review4/RESULTS.md."""
+"""Render strong_eval/results.json into strong_eval/RESULTS.md."""
 
 from __future__ import annotations
 
@@ -9,9 +9,9 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from review4_common import R4  # noqa: E402
+from strong_eval_common import EVAL_DIR  # noqa: E402
 
-r = json.load(open(os.path.join(R4, "results.json"), encoding="utf-8"))
+r = json.load(open(os.path.join(EVAL_DIR, "results.json"), encoding="utf-8"))
 L = []
 
 
@@ -41,7 +41,7 @@ def line(label, v, extra=""):
     return f"| {label} | {v['target']} / {v['decoy']}{flag} | {v['target_withdrawals']:,} / {v['decoy_withdrawals']:,} | {fmt(v.get('R'))} | {b} | {e} |{extra}"
 
 
-w("# review4: strong class, signal co-occurrence, summary of the v2.17 rule")
+w("# strong_eval: strong class, signal co-occurrence, summary of the v2.17 rule")
 w()
 w(
     "All numbers computed offline from cached data (no network). R = (L_decoy/N_decoy)/(L_target/N_target), N = withdrawals examined in that window type."
@@ -50,7 +50,7 @@ w(
     "`boot` = percentile bootstrap over depositors (2,000 resamples, as in tools/placebo_*.py); `exact` = Clopper-Pearson interval for R treating the two counts as Poisson (conditional binomial) - use it when counts are < 5, where the bootstrap is degenerate."
 )
 w(
-    "Scripts: tools/review4_compute.py -> compact.json; review4_ens.py; review4_universe.py; review4_analyze.py -> results.json; review4_report.py -> this file."
+    "Scripts: tools/strong_eval_compute.py -> compact.json; strong_eval_ens.py; strong_eval_universe.py; strong_eval_analyze.py -> results.json; strong_eval_report.py -> this file."
 )
 w()
 w("## 0. Two bases for the 302 depositors")
@@ -123,7 +123,7 @@ for h in ("72h", "720h"):
         )
 w()
 w(
-    "### C1c. ENS evaluation under v2.17 (tools/review4_ens.py; 27 cached demix runs re-scored with narrow(., 720 h))"
+    "### C1c. ENS evaluation under v2.17 (tools/strong_eval_ens.py; 27 cached demix runs re-scored with narrow(., 720 h))"
 )
 e = r["C1c"]
 w(f"- Bands over all candidates: {e['bands']} (28 strong+moderate, matching docs/EVALUATION.md).")
@@ -212,17 +212,17 @@ for h, hn in (("72h", "72 h"), ("720h", "30 d")):
         "302",
         hn,
         S[h]["early direct link (linked)"]["as_cached"],
-        "review4 compact.json (re-scored v2.17)",
+        "strong_eval compact.json (re-scored v2.17)",
     )
 srow(
     "late direct link (linked_late, context)",
     "302",
     "30 d",
     S["720h"]["late direct link (linked_late, context)"]["as_cached"],
-    "review4 compact.json",
+    "strong_eval compact.json",
 )
 for h, hn in (("72h", "72 h"), ("720h", "30 d")):
-    srow("linked_sender", "302", hn, S[h]["linked_sender"]["as_cached"], "review4 compact.json")
+    srow("linked_sender", "302", hn, S[h]["linked_sender"]["as_cached"], "strong_eval compact.json")
 ex = r["external"]
 jrow(
     "shared deposit, labelled",
@@ -244,7 +244,7 @@ for h, hn in (("72h", "72 h"), ("720h", "30 d")):
         "302",
         hn,
         S[h]["shared_deposit"]["shared_injected"],
-        "review4 compact.json (shared injected)",
+        "strong_eval compact.json (shared injected)",
     )
 jrow(
     "early profile",
@@ -272,7 +272,7 @@ srow(
     "302",
     "30 d",
     S["720h"]["early_profile"]["as_cached"],
-    "review4 compact.json",
+    "strong_eval compact.json",
 )
 for h, hn in (("72h", "72 h"), ("720h", "30 d")):
     srow(
@@ -280,52 +280,52 @@ for h, hn in (("72h", "72 h"), ("720h", "30 d")):
         "302",
         hn,
         S[h]["count match (count_match)"]["as_cached"],
-        "review4 compact.json",
+        "strong_eval compact.json",
     )
 for h, hn in (("72h", "72 h"), ("720h", "30 d")):
-    srow("gas price", "302", hn, S[h]["gas price"]["as_cached"], "review4 compact.json")
+    srow("gas price", "302", hn, S[h]["gas price"]["as_cached"], "strong_eval compact.json")
 for h, hn in (("72h", "72 h"), ("720h", "30 d")):
     srow(
         "class moderate",
         "302 as cached",
         hn,
         S[h]["class moderate"]["as_cached"],
-        "review4 compact.json",
+        "strong_eval compact.json",
     )
     srow(
         "class strong",
         "302 as cached",
         hn,
         S[h]["class strong"]["as_cached"],
-        "review4 compact.json",
+        "strong_eval compact.json",
     )
     srow(
         "strong+moderate",
         "302 as cached",
         hn,
         S[h]["strong+moderate"]["as_cached"],
-        "review4 compact.json; = post2022/combined_v217.json",
+        "strong_eval compact.json; = post2022/combined_v217.json",
     )
     srow(
         "class moderate",
         "302 shared injected",
         hn,
         S[h]["class moderate"]["shared_injected"],
-        "review4 compact.json",
+        "strong_eval compact.json",
     )
     srow(
         "class strong",
         "302 shared injected",
         hn,
         S[h]["class strong"]["shared_injected"],
-        "review4 compact.json",
+        "strong_eval compact.json",
     )
     srow(
         "strong+moderate",
         "302 shared injected",
         hn,
         S[h]["strong+moderate"]["shared_injected"],
-        "review4 compact.json",
+        "strong_eval compact.json",
     )
 for h, hn in (("72h", "72 h"), ("720h", "30 d")):
     srow(
@@ -333,7 +333,7 @@ for h, hn in (("72h", "72 h"), ("720h", "30 d")):
         "post-2022 (210)",
         hn,
         p[h]["strong+moderate"],
-        "review4 compact.json; = combined_v217.json",
+        "strong_eval compact.json; = combined_v217.json",
     )
 w()
 w("### Cross-check against the known values")
@@ -368,5 +368,5 @@ w(
 w(
     "- The 152 as-cached 'shared_deposit' count is 1 (post-2022 set only); injected labelled hits come from dar/ lookups made with the current label set, not necessarily the labels in force when the post-2022 runs were made."
 )
-open(os.path.join(R4, "RESULTS.md"), "w", encoding="utf-8").write("\n".join(L) + "\n")
+open(os.path.join(EVAL_DIR, "RESULTS.md"), "w", encoding="utf-8").write("\n".join(L) + "\n")
 print("ok", len(L))

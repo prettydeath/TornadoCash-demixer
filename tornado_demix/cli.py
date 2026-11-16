@@ -56,11 +56,15 @@ from .honest import (
     SHARED_CANDIDATES_CAVEAT,
     SHARED_CANDIDATES_TITLE,
     exploratory_banner,
+    json_fields,
     label_sets_for,
     limitations_text,
     provenance,
 )
+from .incomplete import RPC_NOTICE_TEXT
 from .incomplete import lines as incomplete_lines
+from .incomplete import notice_lines as incomplete_notice_lines
+from .incomplete import notice_only as incomplete_notice_only
 from .incomplete import summary as incomplete_summary
 from .multi import correlate, exact_k_skips, exact_k_tail_text
 from .networks import get_network
@@ -99,6 +103,7 @@ from .trace import (
     MAX_HOPS,
     arrival_text,
     bridge_text,
+    outflow_groups,
     share_status,
     share_text,
     trace_funds,
@@ -114,9 +119,20 @@ def _positive_hours(value):
         hours = float(value)
     except (TypeError, ValueError):
         raise argparse.ArgumentTypeError("must be a number of hours") from None
-    if hours <= 0:
-        raise argparse.ArgumentTypeError("must be greater than 0 hours")
+    if not hours > 0 or hours == float("inf"):
+        raise argparse.ArgumentTypeError("must be a finite number greater than 0 hours")
     return hours
+
+
+def _fraction(value):
+    """argparse type: a number from 0 to 1 (a share of the denomination)."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError("must be a number from 0 to 1") from None
+    if not 0 <= number <= 1:
+        raise argparse.ArgumentTypeError("must be a number from 0 to 1")
+    return number
 
 
 def _positive_int(value):
@@ -247,18 +263,21 @@ def _add_common(parser):
     )
     parser.add_argument(
         "--fee-lo",
-        type=float,
+        type=_fraction,
         default=0.90,
         help="lower multiplier of denomination (default 0.90 = -10%%)",
     )
     parser.add_argument(
         "--fee-hi",
-        type=float,
+        type=_fraction,
         default=0.995,
         help="upper multiplier of denomination (default 0.995)",
     )
     parser.add_argument(
-        "--gap-hours", type=float, default=24, help="max gap to cluster deposits into one voucher"
+        "--gap-hours",
+        type=_positive_hours,
+        default=24,
+        help="max gap to cluster deposits into one voucher",
     )
     parser.add_argument(
         "--network",
@@ -415,6 +434,12 @@ def _print_incomplete(result: dict) -> None:
         return
     print(f"\n[!] {text}:")
     found = incomplete_lines(result)
+    if incomplete_notice_only(result):
+        # The RPC-fallback lists below explain themselves; an early-profile note has no
+        # list, so its explanation is printed here (never a bare colon).
+        for line in incomplete_notice_lines(result):
+            if line != RPC_NOTICE_TEXT:
+                print(f"     {line}")
     for line in found[:MAX_INCOMPLETE_LINES]:
         print(f"     {line}")
     if len(found) > MAX_INCOMPLETE_LINES:
@@ -476,7 +501,9 @@ def cmd_demix(args: argparse.Namespace) -> None:
         for addr in fresh:
             print(f"     {addr}")
 
-    deposits = data.get("deposit_addresses") or []
+    found = data.get("deposit_addresses") or []
+    deposits = [d for d in found if d.get("kind") != "paid_exchange"]
+    paid = [d for d in found if d.get("kind") == "paid_exchange"]
     if deposits:
         kinds = {d.get("kind", "exchange_deposit") for d in deposits}
         noun = "exchange deposit" if kinds == {"exchange_deposit"} else "deposit"
@@ -486,7 +513,12 @@ def cmd_demix(args: argparse.Namespace) -> None:
                 where = f"swept to {d.get('exchange') or 'a hot wallet'}"
             else:
                 where = target_label(d)
-            print(f"     {d['address']}  {where}; {len(d['senders'])} sender(s) [{kind_label(d)}]")
+            failed = d.get("failed_sends") or 0
+            note = f"; {failed} failed transaction(s) sent, not counted" if failed else ""
+            print(
+                f"     {d['address']}  {where}; {len(d['senders'])} sender(s) "
+                f"[{kind_label(d)}]{note}"
+            )
         shared = {}
         for pool_key, addr, addrs in data.get("heuristics", {}).get("shared_deposits", []):
             shared.setdefault(addr, (pool_key, addrs))
@@ -494,6 +526,13 @@ def cmd_demix(args: argparse.Namespace) -> None:
             print("  candidates that sent to one of them too (context only, not a lead):")
             for addr, (pool_key, addrs) in sorted(shared.items()):
                 print(f"     [{pool_key}] {addr} via {', '.join(addrs)}")
+    if paid:
+        print(
+            f"\n[paid] {len(paid)} counterparty(ies) of the depositor paid a labelled exchange "
+            "without forwarding or sweeping the value they received (context, not a deposit address):"
+        )
+        for d in paid:
+            print(f"     {d['address']}  [{kind_label(d)}]")
 
     rc = data.get("root_check")
     if rc:
@@ -501,7 +540,9 @@ def cmd_demix(args: argparse.Namespace) -> None:
             f"\n[root] Merkle-root check: {rc['withdrawals_checked']} withdrawal(s) read, "
             f"roots found {rc['roots_found']}, not found {rc['roots_not_found']} "
             f"(outside the pool's root history {rc.get('roots_outside_history', 0)}, "
-            f"ambiguous {rc.get('roots_ambiguous', 0)}) (exploratory)"
+            f"ambiguous {rc.get('roots_ambiguous', 0)}, "
+            f"no withdraw call decoded {rc.get('roots_undecoded', 0)}, "
+            f"call may have failed {rc.get('roots_unverified', 0)}) (exploratory)"
         )
         for pool_key, size in sorted((rc.get("history_sizes") or {}).items()):
             print(f"  [{pool_key}] ROOT_HISTORY_SIZE {size}")
@@ -515,6 +556,8 @@ def cmd_demix(args: argparse.Namespace) -> None:
                 print(f"     {w['tx_hash']} (root holds {w['n_root']} leaves)")
         if rc["incomplete"]:
             print("  [!] root_check_incomplete: some candidates were not checked")
+        for pool_key, why in sorted((rc.get("unchecked_reasons") or {}).items()):
+            print(f"  [{pool_key}] not checked: {why}")
 
     anchored = [g for g in data.get("exit_groups", []) if g["anchored"]]
     if anchored:
@@ -651,6 +694,20 @@ def _print_group(group: dict) -> None:
             )
 
 
+def _print_operator_clusters(clusters: list) -> None:
+    """The operator clusters of ``multi``, the same content as the JSON and HTML."""
+    print("\nOperator clusters (wallets linked only by discriminating evidence):")
+    if not clusters:
+        print("  none: no two wallets were linked by discriminating evidence")
+        return
+    for i, cluster in enumerate(clusters, 1):
+        print(f"  Operator cluster {i} of {len(clusters)}: {len(cluster['wallets'])} wallets")
+        for wallet in cluster["wallets"]:
+            print(f"     {wallet}")
+        for a, b, reason, addr in cluster["edges"]:
+            print(f"     {a} <-> {b} via {addr} ({reason})")
+
+
 def cmd_multi(args: argparse.Namespace) -> None:
     if getattr(args, "exact_k", False) and not getattr(args, "group", False):
         raise ConfigError("--exact-k needs --group (it runs on the merged notes)")
@@ -723,6 +780,8 @@ def cmd_multi(args: argparse.Namespace) -> None:
             note = " (window-overlap artefact)" if grades.get(addr, {}).get("artefact") else ""
             print(f"  [{band}]{note} {addr} <- {', '.join(ws)}")
 
+    _print_operator_clusters(corr.get("operator_clusters") or [])
+
     if corr.get("group") is not None:
         _print_group(corr["group"])
 
@@ -774,6 +833,12 @@ def cmd_cluster(args: argparse.Namespace) -> None:
             covered = ", ".join(str(k) for k in cluster["pools_covered"])
             totals = format_totals(cluster["totals"])
             print(f"   Z {cluster['z']} | layers={cluster['n_layers']} [{covered}] | {totals}")
+
+    if getattr(args, "json", ""):
+        doc = {"tool": f"tornado-demix {_version()}", **json_fields(), "traces": traces}
+        with open(args.json, "w", encoding="utf-8") as fh:
+            json.dump(doc, fh, indent=1, sort_keys=True, default=str)
+        print(f"[*] JSON result: {args.json}", file=sys.stderr)
 
     if args.out_dir:
         files = write_cluster_csv(traces, args.out_dir, net)
@@ -852,6 +917,10 @@ def cmd_characterize(args: argparse.Namespace) -> None:
         "and the next hop before drawing a conclusion."
     )
 
+    if getattr(args, "json", ""):
+        with open(args.json, "w", encoding="utf-8") as fh:
+            json.dump({**info, **json_fields()}, fh, indent=2, sort_keys=True, default=str)
+        print(f"\n[*] JSON: {args.json}", file=sys.stderr)
     if getattr(args, "report", ""):
         write_characterize_report(info, args.report, net)
         print(f"\n[*] HTML report: {args.report}", file=sys.stderr)
@@ -874,6 +943,9 @@ def cmd_classify(args: argparse.Namespace) -> None:
     for t in info.get("sweep_targets") or []:
         tag = format_label(labels.get(t)) if labels else ""
         print(f"  swept to {t}" + (f"  [{tag}]" if tag else ""))
+    for t in info.get("paid_targets") or []:
+        tag = format_label(labels.get(t)) if labels else ""
+        print(f"  paid {t}" + (f"  [{tag}]" if tag else ""))
     senders = info.get("senders") or []
     for s in senders[:20]:
         print(f"  sender {s}")
@@ -885,7 +957,7 @@ def cmd_classify(args: argparse.Namespace) -> None:
     )
     if getattr(args, "json", ""):
         with open(args.json, "w", encoding="utf-8") as fh:
-            json.dump(info, fh, indent=2, sort_keys=True)
+            json.dump({**info, **json_fields()}, fh, indent=2, sort_keys=True)
         print(f"\n[*] JSON: {args.json}", file=sys.stderr)
     if getattr(args, "report", ""):
         write_classify_report(info, args.report, net)
@@ -935,6 +1007,9 @@ def cmd_trace(args: argparse.Namespace) -> None:
         swap = f" -> swapped to {e['swapped_to']}" if e["kind"] == "swap" else ""
         if e["kind"] == "bridge":
             swap = " -> " + bridge_text(e["bridge"], chain_name, arrow="->")
+        if e.get("paid_to"):
+            via = (e.get("bridge") or e.get("swap") or {}).get("protocol") or "contract"
+            swap += f" (paid out by {via} to {e['paid_to']})"
         chain = _chain_name(destinations, e.get("chain_id"))
         where = f" [{chain}]" if chain and e.get("chain_id") != net.chain_id else ""
         print(
@@ -955,6 +1030,24 @@ def cmd_trace(args: argparse.Namespace) -> None:
             + where
             + (f"  {tag}" if tag else "")
         )
+        # an order_unknown end point: the same-block transfers that may have taken it
+        for why, group in outflow_groups(t):
+            print(
+                f"    {why}: "
+                + "; ".join(f"{o['value']} to {o['to']} in {o['tx_hash']}" for o in group)
+            )
+    possible, more = result.get("possible") or [], result.get("possible_more")
+    if possible or more:
+        print("\nPossible outflows (history incomplete), not followed:")
+        for r in possible:
+            chain = _chain_name(destinations, r.get("chain_id"))
+            where = f" [{chain}]" if chain and r.get("chain_id") != net.chain_id else ""
+            print(
+                f"  hop {r['hop']}{where}: {r['from']} -> {r['to']}  "
+                f"[{r['lower']} - {r['upper']}] of {r['value']} {r['asset']}  {r['tx_hash']}"
+            )
+        if more:
+            print(f"  {more['count']} more (sent {more['value']:g} in total), not listed")
     print(
         "\nFIFO attribution is a convention: funds in one account are fungible, "
         "so each edge is a lead to corroborate. [lower - upper] is the share the "
@@ -964,7 +1057,7 @@ def cmd_trace(args: argparse.Namespace) -> None:
     print(END_STATES_NOTE)
     if getattr(args, "json", ""):
         with open(args.json, "w", encoding="utf-8") as fh:
-            json.dump(result, fh, indent=1, sort_keys=True)
+            json.dump({**result, **json_fields()}, fh, indent=1, sort_keys=True)
         print(f"[*] JSON trace: {args.json}", file=sys.stderr)
     if getattr(args, "report", ""):
         write_trace_report(result, args.report, net, destinations)
@@ -1233,15 +1326,19 @@ def build_parser() -> argparse.ArgumentParser:
     p_cluster.add_argument(
         "--report", default="", help="write a downloadable HTML cluster report to this path"
     )
+    p_cluster.add_argument("--json", default="", help="write the traces as JSON to this path")
     p_cluster.add_argument(
         "--cache-dir", default=".cache", help="directory for resumable forward/layer caches"
     )
     p_cluster.add_argument(
-        "--layer-cap", type=int, default=35, help="skip a pool layer with more candidates than this"
+        "--layer-cap",
+        type=_positive_int,
+        default=35,
+        help="skip a pool layer with more candidates than this",
     )
     p_cluster.add_argument(
         "--min-forward-frac",
-        type=float,
+        type=_fraction,
         default=MIN_FORWARD_FRACTION,
         help="ignore forward hops below this fraction of the denomination (default 0.01 = 1%%)",
     )
@@ -1272,6 +1369,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_char.add_argument(
         "--report", default="", help="write a downloadable HTML characterisation report here"
     )
+    p_char.add_argument("--json", default="", help="write the result as JSON to this path")
     p_char.add_argument(
         "--no-deposit-check",
         action="store_true",
@@ -1292,7 +1390,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--token", default="", help="ERC-20 contract of the amount (default: native currency)"
     )
     p_trace.add_argument(
-        "--start-block", type=int, default=0, help="block the funds arrived in (default 0)"
+        "--start-block",
+        type=_non_negative_int,
+        default=0,
+        help="block the funds arrived in (default 0)",
     )
     p_trace.add_argument(
         "--arrival-tx",
@@ -1300,7 +1401,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="transaction that brought the amount to the address (default: matched by amount)",
     )
     p_trace.add_argument(
-        "--max-hops", type=int, default=MAX_HOPS, help=f"hops to follow (default {MAX_HOPS})"
+        "--max-hops",
+        type=_positive_int,
+        default=MAX_HOPS,
+        help=f"hops to follow (default {MAX_HOPS})",
     )
     p_trace.add_argument("--json", default="", help="write the trace as JSON to this path")
     p_trace.add_argument("--report", default="", help="write an HTML trace report to this path")
@@ -1409,6 +1513,13 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     if getattr(args, "rapid", False) and getattr(args, "exit_window", None) is None:
         args.exit_window = RAPID_EXIT_WINDOW_HOURS
+    lo, hi = getattr(args, "fee_lo", None), getattr(args, "fee_hi", None)
+    if lo is not None and hi is not None and not lo < hi:
+        parser.error(
+            f"--fee-lo ({lo}; the default 0.9 unless set) must be below --fee-hi ({hi})"
+            if "--fee-lo" not in (argv if argv is not None else sys.argv)
+            else f"--fee-lo ({lo}) must be below --fee-hi ({hi})"
+        )
     args.command_line = " ".join(["tornado-demix"] + list(sys.argv[1:] if argv is None else argv))
     try:
         _prepare_outputs(args)

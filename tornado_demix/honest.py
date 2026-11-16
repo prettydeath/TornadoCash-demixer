@@ -32,6 +32,10 @@ CONTEXT_PHRASE = {
     "linked_late": f"a direct link first withdrawn more than {EARLY_EXIT_HOURS} h after the last deposit",
     "linked_sender": "a withdrawal sent by the depositor's side",
     "shared_deposit": "a shared exchange deposit address",
+    "linked_posthoc": "a direct link whose real-value transaction came after the first withdrawal",
+    "linked_dust": "a direct link by a zero-value or dust transaction",
+    "linked_unverified_token": "a direct link by a token off the list of real assets",
+    "linked_unknown_contract": "a direct link to an address whose contract check failed",
 }
 
 # Evidence read from the same withdrawals as the count match, or from fee settings:
@@ -46,6 +50,28 @@ def context_verdicts() -> str:
     return "; ".join(parts)
 
 
+# The bridge coverage of the trace, in one place: the README, docs/llms.txt and the
+# limitations below carry this text word for word (a test compares them). No markdown.
+BRIDGES_SUMMARY = (
+    "Bridges followed across chains: Across (V3 and current deposits; SpokePools on "
+    "Ethereum, Optimism, BNB Chain, Polygon, Arbitrum, Base and Avalanche; a deposit made "
+    "directly, through a periphery or router, after a swap, to the "
+    "MulticallHandler or from an ERC-4337 smart account), native-ETH deposits through the "
+    "Arbitrum Inbox and ERC-20 deposits through the Arbitrum token gateways (followed on "
+    "Arbitrum once the L2 credit is found), and Circle CCTP burns (v1 and v2) to an EVM "
+    "chain of the registry (followed from the mint). A Mayan same-chain payout and a CoW "
+    "Protocol order (tied to the owner's trade and its payout in the settlement receipt) "
+    "are followed as swaps. Named, not followed: ZKsync deposits (Bridgehub native and "
+    "ERC-20, legacy Era requestL2Transaction) show the L2 recipient; Relay, Mayan, "
+    "THORChain, Maya, Layerswap, NEAR Intents, Unit and Hyperliquid deposits show what the "
+    "chain gives (request id, memo, destination, recipient); a CCTP burn to Solana or "
+    "another non-EVM domain shows its recipient; other listed bridges are named only. "
+    "A listed swap-and-bridge router (LI.FI, Socket, Rango, Squid) that only refunds native "
+    "coin ends as bridge or swap unknown, and bridges that are not listed end as contracts. A hop "
+    "is followed only when the decoded call is tied to the traced transfer; otherwise the "
+    "branch ends with a named state."
+)
+
 # The one list of limitations. Every report prints all of it.
 LIMITATIONS = (
     "Exchange hot wallets are recognised by their labels. A proxy hot wallet (for example "
@@ -53,24 +79,60 @@ LIMITATIONS = (
     "address swept to it is not seen as an exchange deposit address.",
     "BSC is not served by the free Etherscan tier, so BSC runs need a paid key or another "
     "provider; without one, results on BSC are missing, not empty.",
-    "Bridges followed: Across (V3, SpokePools on Ethereum, Optimism, BNB Chain, Polygon, "
-    "Arbitrum, Base and Avalanche) and Arbitrum canonical native-ETH retryables and "
-    "depositEth. ZKsync Bridgehub recipients are decoded and shown but not followed; other "
-    "listed bridges are named only; bridges that are not listed end as contracts.",
+    BRIDGES_SUMMARY,
+    "Two cases are followed with a limit. An Across deposit made after a swap is followed as "
+    "the amount the fill paid (no fee bound across two tokens); a fill to the Across "
+    "MulticallHandler is followed only to the handler's payments in the fill transaction "
+    "(calls of the message that swap are not followed). A CoW Protocol settlement is a "
+    "batch of several users' orders: the payout is the order's output, not a path through "
+    "the batch.",
     'The multi-wallet profile match uses ">=" (an address that received at least as many '
     "withdrawals per pool as the wallet's fingerprint) and a fixed 6 h synchronicity gap; "
     "both are exploratory, not measured.",
+    "A direct link is a lead only when its transaction succeeded, moved real value (native "
+    "coin at or above a per-network dust floor, about 0.001 ETH worth, or a listed real "
+    "token such as USDC, USDT, DAI or WETH above its floor) and came before the first "
+    "withdrawal to that address, and the address is known not to be a contract. Zero-value, "
+    "dust, unlisted-token and post-withdrawal links, and addresses whose contract check "
+    "failed, are context. The floor prices a planted link, it does not stop one: an "
+    "outgoing link above the floor can be created by whoever controls the depositor, for "
+    "about the floor plus gas per address (about 0.001 ETH worth on every network, at "
+    "prices of 2026-11-14), so a depositor can seed early direct links to addresses that "
+    "later receive withdrawals. The token list covers the main stablecoins and wrapped "
+    "coins of each supported network (native and bridged USDC, USDT, DAI, WETH and the "
+    "like); a payment in another real token is context, and the floors are judgement "
+    "calls, not measured.",
     "A shared exchange deposit address (rule 2.21) is context, not scored. The rule was set "
     "after the second hold-out had been read (post hoc) and has not been tested on new "
     "data.",
-    "Deposit-address kinds (exchange_deposit, service_deposit, deposit_like, forwarder, "
-    "smart_account), the sender and gas-funder thresholds and the bridge decoding are "
-    "exploratory: reasonable settings that were not measured.",
-    "Address histories can be incomplete (a lookup failed or the explorer cut a list off). "
+    "Deposit-address kinds (exchange_deposit, service_deposit, deposit_like, paid_exchange, "
+    "forwarder, smart_account), the sender and gas-funder thresholds and the bridge decoding "
+    "are exploratory: reasonable settings that were not measured.",
+    "An exchange label on a sweep target names the exchange; it is not evidence of a sweep. "
+    "A labelled exchange target counts only when the address sweeps its balance there: one "
+    "transfer of at least 90 % of what arrived in that asset since its previous outgoing "
+    "transfer, within 30 days of the latest arrival, or one that passes the 38,400 s / "
+    "0.01 ETH forwarding test (unlabelled targets keep only that test). An address that only paid a labelled exchange is "
+    "paid_exchange (context), not an exchange deposit address. The 90 % and 30-day values "
+    "are exploratory, not measured; one such sweep is enough, repetition is not required, "
+    "and the classifier's precision and recall on independently labelled addresses were "
+    "not measured.",
+    "Address histories can be incomplete (a lookup failed, the explorer cut a list off or "
+    "answered while part of the range was still being indexed: partial indexing). "
     "When one is, the report carries a notice at the top; a missing row is then not an "
     "absent transaction.",
     "Fee fingerprints are context: many users share wallet defaults, so identical fee "
     "settings do not show one operator.",
+    "Transactions are read as they were mined. Fee-bump and replacement transactions, "
+    "private relays and MEV bundles are not covered: nothing in the data shows how a "
+    "transaction was routed or ordered, so a path that went through one is not "
+    "recognised as such.",
+    "A depositor can send notes and a direct transfer to an address that never agreed to "
+    "receive them (an unsolicited receipt). Since 2.23 a direct link needs real value above a "
+    "per-network floor and must come strictly before the first withdrawal; that raises the "
+    "cost of planting one but does not stop a depositor who sends real value before "
+    "withdrawing. A band says that funds reached the address, not that its owner controls it "
+    "or took part.",
     "Leads, not proof. The score is uncalibrated and only orders candidates within a band.",
 )
 
@@ -110,6 +172,17 @@ def limitations() -> list[str]:
     return list(LIMITATIONS)
 
 
+def json_fields(path: str | None = None) -> dict:
+    """The honesty fields every JSON export carries: the limitations and whether the
+    run is exploratory (no PROTOCOL.lock), with the banner text."""
+    banner = exploratory_banner(path)
+    return {
+        "limitations": limitations(),
+        "exploratory": bool(banner),
+        "exploratory_banner": banner,
+    }
+
+
 def limitations_text(prefix: str = "  - ") -> str:
     """The limitations as a console block (CLI footer)."""
     return "\n".join(["Limitations:"] + [f"{prefix}{line}" for line in LIMITATIONS])
@@ -123,7 +196,8 @@ def how_to_read() -> list[str]:
         "This report lists probabilistic leads, not proof.",
         f"Lead signals, the only ones that set the band: {leads}. A direct link is a lead "
         f"only when its first withdrawal came within {EARLY_EXIT_HOURS} h of the last "
-        "deposit. The band rises to strong only when two independent lead sources agree.",
+        "deposit. The band rises to strong only when two different lead-signal families agree; "
+        "their independence is not established.",
         f"Context only (shown, never scored, never a lead): {context}; also "
         + ", ".join(OTHER_CONTEXT)
         + f". Per signal: {context_verdicts()}.",
@@ -139,8 +213,8 @@ def band_note() -> str:
     leads = " and ".join(sorted(LEAD_SOURCE.values()))
     context = "; ".join(CONTEXT_PHRASE[s] for s in sorted(CONTEXT_SIGNALS))
     return (
-        f"The band is the headline. strong: lead signals from two independent sources "
-        f"({leads}); moderate: a lead signal from one source; weak: no lead signal, only "
+        f"The band is the headline. strong: lead signals from two different lead-signal families "
+        f"({leads}; their independence is not established); moderate: a lead signal from one source; weak: no lead signal, only "
         f"{', '.join(OTHER_CONTEXT)} and context-only signals ({context}); per signal: "
         f"{context_verdicts()}. The score only orders leads within a band; it is "
         "uncalibrated and not a probability. Open Evidence to see what was checked for "

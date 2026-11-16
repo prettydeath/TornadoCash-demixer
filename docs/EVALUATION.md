@@ -21,7 +21,7 @@ in real ones; above chance stood the linked-address family (a direct counterpart
 a withdrawal sent by the depositor's side, a deposit address swept to a labelled
 exchange) and, measured later, an early multi-pool profile match. A band needs one
 of these (since version 2.13 for the linked family, since 2.15 for the profile).
-Since version 2.16 `strong` needs lead signals from two independent sources
+Since version 2.16 `strong` needs lead signals from two different families (their independence is not established)
 (direct link, shared deposit address, early profile; since 2.21 only the early direct link and the early profile); one source is `moderate`,
 and amount+timing and gas price are context that never raises the band. Before
 2.16, a lead signal plus any other family was `strong`, so a direct link plus a
@@ -214,7 +214,7 @@ match stays `weak`.
 - **A band now means a linked address.** `moderate` is reached only by
   exits that transacted with the depositor (20 % of generated exits), so P ≥mod is 1.00
   and R ≥mod about 0.18-0.19. The generated field has no shared deposit address and
-  no early profile, so `strong` (two lead sources) never arises in it; the tables
+  no early profile, so `strong` (two lead-signal families) never arises in it; the tables
   are byte-identical under the 2.16 rule. In the negative controls, where no exit is findable, no
   unrelated address reaches `moderate` or `strong` (before version 2.13: `moderate` in
   about 80 % and `strong` in 11 % of trials, through self-relay and chance gas-price
@@ -232,7 +232,9 @@ match stays `weak`.
 
 ## Placebo test on real depositors
 
-`tools/placebo_eval.py` draws random Ethereum depositors from the ENS universe
+`tools/placebo_eval.py` (its JSON keys `fdr` / `fdr_95ci` and register keys
+`placebo.fdr.*` keep their historic names for registered records; they hold the
+decoy-to-target rate ratio, not a false-discovery rate) draws random Ethereum depositors from the ENS universe
 (deposits spanning at most 60 days, windows complete before August 2026; seed 1)
 and runs the real pipeline twice per depositor: on the usual windows after its
 deposits (target), and on the same deposits shifted back so that every window
@@ -535,7 +537,7 @@ the decoy window of the wallet under investigation, beside the real one.
 
 Since 2.19 the "linked sender (lead)" row below is context only (see [Rule 2.19](#rule-219)). Since 2.21 so is the "shared deposit" row (see [Rule 2.21](#rule-221-shared-deposit-address-is-context)).
 
-`tools/review4_*.py` re-score the cached runs offline under the 2.17 rule. R is
+`tools/strong_eval_*.py` re-score the cached runs offline under the 2.17 rule. R is
 decoy leads per withdrawal searched over target leads per withdrawal searched;
 below 1 it estimates the chance share of target leads, near or above 1 the signal
 is chance level. Intervals: bootstrap over depositors, or exact (*) when a side
@@ -602,7 +604,7 @@ pools was fixed after collection and six runs redone; only count-match totals mo
 Version 2.19 makes `linked_sender` (a withdrawal sent by the depositor or one of its
 direct counterparties) context only: it is shown as evidence, has no weight, never
 raises the band and is not an independent family, like `linked_late` since 2.17.
-Lead sources are now the early direct link, the labelled shared deposit and the
+Lead-signal families are now the early direct link, the labelled shared deposit and the
 early multi-pool profile.
 
 Reason: in no placebo sample did `linked_sender` separate from chance. On the 302
@@ -634,7 +636,7 @@ senders (the rule accepts up to 50), so they were shared, not per customer.
 
 Version 2.21 therefore treats `shared_deposit` as `linked_sender` has been treated since
 2.19: it is shown as evidence, has no weight, never raises the band and is not an independent
-family. Lead sources are now the early direct link and the early multi-pool profile; `strong`
+family. Lead-signal families are now the early direct link and the early multi-pool profile; `strong`
 needs both. This is a post-hoc change: HOLDOUT2_RESULTS.md (frozen) states that, as
 registered, the rule is not revised on these data, and the change was decided afterwards,
 having seen the hold-out numbers. It is exploratory and has not been tested on new data. The
@@ -765,7 +767,9 @@ Both strata are a post-hoc split of data already seen; not pre-registered, not a
 
 `demix --root-check` excludes a candidate's withdrawal when the Merkle root it proves against
 held none of the depositor's notes in the pool (rule in [METHODOLOGY.md](METHODOLOGY.md) 4c).
-It is not a lead and not scored. Feasibility came first (`tools/root_ceiling.py`, root history
+It is not a lead and not scored. (Numbers in this section were measured before 2.23 with the
+old root read and one history size per chain; see Errata (2.23), re-run planned.)
+Feasibility came first (`tools/root_ceiling.py`, root history
 100 on Ethereum and 30 on Polygon pools): at most 11.01 % of the Ethereum and 10.94 % of the
 Polygon withdrawals in the hold-out windows could be excluded at all (upper bound, all
 withdrawals of the pool in the window, newest note only).
@@ -900,35 +904,76 @@ id as indexed topics of the fill, and its destination chains are in the networks
 The extended table did not change which protocol is the top joinable one. Live check on one
 real pair (Ethereum deposit 3888199, Arbitrum fill) in `tests/test_bridges.py -m live`.
 
-**2026-11-13 note (exploratory): measured bridge shares on recent exits (see also
-[Errata (2.22)](#errata-222)).** The basis
-above (cached hold-out exits, a private cache) no longer explains the order in which
-bridges are decoded. A random sample of 198 distinct recipients of Tornado ETH-pool
-withdrawals in Ethereum blocks 26,100,000 to 26,300,000 (seed 20261112) was classified by
-the first two outgoing transactions of each recipient over two hops, against the bridge
-table and the explorers' contract names; intervals are 95 % Wilson intervals over the
-198 exits.
+### Bridge coverage of Tornado ETH-pool exits (exploratory)
 
-| where the exit went within two hops | share of 198 exits | 95 % CI |
-|---|---:|---|
-| any bridge or cross-chain service | 69.2 % | 62.4–75.2 % |
-| Arbitrum canonical bridge, retryable through the Inbox | 38.4 % | 31.9–45.3 % |
-| Layerswap | 8.6 % | |
-| NEAR Intents | 7.1 % | |
-| Relay, Mayan, Maya, THORChain | 2.5–3.0 % each | |
-| LI.FI, Unit (Hyperliquid) | 1.5 % each | |
-| Across SpokePool, direct | 0 of 198 | 0–1.9 % |
-| re-deposit into Tornado | 8.6 % | |
-| tagged exchange (lower bound) | 3–6 % | |
+How much of what leaves a Tornado ETH pool does the trace follow across a bridge, and how
+much does it only name? `tools/bridge_coverage.py` draws a seeded random sample of distinct
+recipients of ETH-pool withdrawals in a block range, runs the tool's own `trace_funds` over
+the withdrawn amount for two hops (the code of the `trace` command, bridges followed across
+chains where the trace follows them) and gives every recipient one class from the edges and
+end states of that trace. This replaces an earlier ad hoc note on 198 recipients (69.2 % any
+bridge, 38.4 % Arbitrum) that no script of the repository reproduced. A dry classification of
+the first transactions would be cheaper but cannot tell a followed deposit from a named one,
+since a bridge call that is not tied to the traced transfer is not followed; hence the full
+trace.
 
-Not seen (at most 1.9 %): Stargate, Socket/Bungee, Orbiter, Synapse, Hyperlane, LayerZero
-OFT, deBridge, Polygon PoS, the OP and Base canonical bridges, ZKsync. In 20 of 20 checked
-Arbitrum retryables the L2 recipient in the calldata differed from the sender. The
-Arbitrum share looks like one automated pattern, so the exits are not independent and
-the interval understates the uncertainty; the sample covers one 200,000-block window.
-This is why 2.22 decodes Arbitrum Inbox retryables and follows them on Arbitrum, and
-shows ZKsync Bridgehub recipients. The share of exits the decoder actually follows to an
-L2 credit has not been measured.
+Pilot: n = 60 distinct recipients, seed 20261114, Ethereum blocks 26,100,000 to 26,300,000,
+run on 2026-11-14 with the 2.23 code on the Etherscan free tier (`--pause 0.4`), 105,267
+Ethereum labels fetched the same day (`tornado-demix labels fetch`). Intervals are 95 %
+Wilson intervals over the 60 recipients; recipients of one window are not independent, so
+they understate the uncertainty.
+
+| class (one per recipient) | recipients | share | 95 % CI |
+|---|---:|---:|---|
+| bridge followed to the other side | 20 | 33.3 % | 22.7-45.9 % |
+| bridge or aggregator named, not followed | 21 | 35.0 % | 24.2-47.6 % |
+| swap resolved (DEX, CoW Protocol) | 0 | 0.0 % | 0.0-6.0 % |
+| ended at an exchange-labelled address | 0 | 0.0 % | 0.0-6.0 % |
+| ended at another labelled address | 6 | 10.0 % | 4.7-20.1 % |
+| sent into Tornado again | 1 | 1.7 % | 0.3-8.9 % |
+| unknown contract (pays nothing back, in no table) | 3 | 5.0 % | 1.7-13.7 % |
+| a lookup failed, nothing recognised | 0 | 0.0 % | 0.0-6.0 % |
+| plain address, funds held, or hop limit | 9 | 15.0 % | 8.1-26.1 % |
+
+Any bridge hop within two hops: 41 of 60 (68.3 %, 55.8-78.7 %). Per protocol (a recipient
+counts once per protocol, so rows overlap):
+
+| protocol | followed | named, not followed | share of recipients | 95 % CI |
+|---|---:|---:|---:|---|
+| Arbitrum | 19 | 0 | 31.7 % | 21.3-44.2 % |
+| Layerswap | 0 | 7 | 11.7 % | 5.8-22.2 % |
+| NEAR Intents | 0 | 6 | 10.0 % | 4.7-20.1 % |
+| Relay | 0 | 4 | 6.7 % | 2.6-15.9 % |
+| Mayan | 0 | 2 | 3.3 % | 0.9-11.4 % |
+| Across | 1 | 0 | 1.7 % | 0.3-8.9 % |
+| LI.FI | 0 | 1 | 1.7 % | 0.3-8.9 % |
+| Optimism | 0 | 1 | 1.7 % | 0.3-8.9 % |
+| THORChain | 0 | 1 | 1.7 % | 0.3-8.9 % |
+
+Reading: in this window about a third of the recipients went on over a bridge the trace
+follows (almost all of them Arbitrum retryables), and about as many over one it only names
+(Layerswap, NEAR Intents, Relay, Mayan); the interval of each is wide. The six recipients
+that ended at another labelled address ended at addresses with a defi label (four: Uniswap routers and a wrapped-ether
+contract) and with a bridge label (two: a wallet's bridge router): the trace stops at a labelled address before it reads a swap or a
+bridge, so these are recognised by their label only, not decoded. No recipient ended at an
+exchange label, which at n = 60 says only that the share is below about 6 %. The sample is
+one window, the labels are leads and not attribution, and a bridge the code does not
+recognise falls under unknown contract or plain address, so the shares of bridges are lower
+bounds. A hop is followed here only when the decoded call is tied to the traced transfer,
+so "followed" is a statement about the decoder, not about how many funds reached the other
+chain.
+
+Without `--n` the tool draws 150 recipients (the default since the pilot; the pilot passed
+`--n 60`). Full run: 300 recipients over a wider window, same seed.
+
+```
+python tools/bridge_coverage.py --n 300 --seed 20261114 --pause 0.4     --start-block 26000000 --end-block 26300000
+```
+
+The run is resumable (answers are kept in `.cache/bridge_coverage/per_recipient.json` and
+the explorer responses in `.cache/bridge_coverage/http`), prints the tables above and writes
+`RESULTS.md` and `summary.json` there. `--pause` keeps the free tier within its rate limit; a
+run of 300 recipients makes about five times the calls of the pilot.
 
 ## Two public laundering cases
 
@@ -1068,9 +1113,9 @@ measured with the older code.
 | Shared-deposit counts and sender numbers (rule 2.21 section: 18 / 30 and 23 / 13 at 30 days, 14 / 2 and 23 / 0 at 72 hours; 31, 35 and 18 senders) | Classifier defects fixed in 2.22: EIP-7702 sponsor sweeps dropped as poisoning, 50-sender cap (300 since 2.22 with a sweep-share condition), per-network gas-funder threshold, tag classes of Blockscout | Unknown; re-run planned. The note in HOLDOUT2_RESULTS.md that the rule accepts up to 50 senders describes the rule of that run |
 | Polygon address that sweeps to an unnamed target (Deposit-address kinds, 2.21) | Classifier | Changed: it is `deposit_like` since 2.22, not `exchange_deposit` |
 | Any figure that treated a failed lookup as "nothing found" (deposit-address, busy, contract and first-activity checks, trace ends) | Before 2.22 a failed lookup looked like an empty answer; runs now carry a list of failed lookups and say that results may be incomplete | Unknown for cached runs (they carry no list); re-run planned |
-| Merkle-root exclusion numbers (5,165 of 5,165 roots found, exclusions in real and decoy windows) | `tools/root_exclusion_eval.py` takes the calldata root with the unvalidated unique-candidate read (`withdraw_root.root_from_input`: the root when exactly one candidate precedes the nullifier), not the read of `demix --root-check`, which keeps only a candidate that the pool still accepted at the withdrawal block (history size read from the contract) and leaves zero or several as unknown | The published numbers come from the unvalidated read; the validated read can classify some withdrawals as unknown instead. Unknown how many; the tool was not changed |
+| Merkle-root exclusion numbers (5,165 of 5,165 roots found, exclusions in real and decoy windows) | `tools/root_exclusion_eval.py` takes the calldata root with the unvalidated unique-candidate read (`withdraw_root.root_from_input`: the root when exactly one candidate precedes the nullifier), not the read of `demix --root-check`, which keeps only a candidate that the pool still accepted at the withdrawal block (history size read from the contract) and leaves zero or several as unknown | The published numbers come from the unvalidated read; the validated read can classify some withdrawals as unknown instead. Unknown how many; the tool was not changed in 2.22 (changed in 2.23, see Errata (2.23)) |
 | Root ceiling (11.01 % Ethereum, 10.94 % Polygon of withdrawals) | Assumed one history size per chain (100 and 30); 8 of 28 Ethereum pools keep 30 | Unknown; not recomputed |
-| Bridge-exit table (22 of 157 exits, Polygon PoS the largest) | Measured on cached hold-out exits before Arbitrum retryables and ZKsync recipients were decoded; the order of bridges differs in the later sample of 198 exits (Bridge exits section, 2026-11-13 note) | Superseded by the later sample (exploratory) for the order of bridges; both are small samples |
+| Bridge-exit table (22 of 157 exits, Polygon PoS the largest) | Measured on cached hold-out exits before Arbitrum retryables and ZKsync recipients were decoded; the order of bridges differs on recent exits (see [Bridge coverage](#bridge-coverage-of-tornado-eth-pool-exits-exploratory)) | Superseded for the order of bridges by the 2.23 pilot (exploratory); both are small samples |
 | "Chance by construction" for decoy leads (placebo test, reports) | Wording: a decoy window can contain the depositor's own earlier activity | Wording corrected; numbers unchanged |
 | "One minus R estimates precision" (`tools/placebo_eval.py`, field `precision_estimate`) | Wording: R is a ratio of decoy to target leads, not a precision | Removed; no published number used it |
 | Rule 2.21 (shared deposit address is context) | Post-hoc: decided after the second hold-out, whose frozen text says the rule is not revised on these data | Wording corrected in the Rule 2.21 section; the change is untested on new data |
@@ -1089,6 +1134,94 @@ Corrections to individual statements:
 - Deposit-address kinds (2.21): the Polygon address that sweeps to an unnamed target is
   `deposit_like`, not `exchange_deposit`.
 
+## Errata (2.23)
+
+Dated 2026-11-14. Defects found in the code of 2.22 and their effect on numbers published
+earlier, in one table (frozen files are not edited; their corrections are here). The cached runs
+were not re-run for this section; "re-run planned" means that the affected runs are repeated with
+the 2.23 code and the new numbers are published beside the old ones, and until then the old
+numbers stand as measured with the older code.
+
+| Published number | Affected by | Status |
+|---|---|---|
+| `linked` counts and every lead count built on them (this document: placebo test, direct links early versus late, power check, ENS-labelled set; hold-outs 1 and 2) | Before 2.23 a direct link did not have to move real value or come before the withdrawal: a zero-value or 1-wei transaction, one sent after the withdrawal, a token row of an unlisted token inside the depositor's own transaction, or a counterparty whose contract check failed could make `linked`. Since 2.23 such links are context (`linked_dust`, `linked_posthoc`, `linked_unverified_token`, `linked_unknown_contract`) | Unknown (magnitude not measured); re-run planned. Cached runs carry no link records, so tools that re-score them without a fresh run still apply the old rule; those tools print how many runs they scored with the pre-2.23 rule |
+| Merkle-root exclusion numbers (5,165 of 5,165 roots found; exclusions in real and decoy windows; Merkle-root exclusion section) | Before 2.23 the root was not taken from the decoded `withdraw` call: `tools/root_exclusion_eval.py` used the 32-byte word before the nullifier when only one such word existed, without checking that the pool still accepted it at the withdrawal block, and `demix --root-check` checked every such word against the root history. A wrapper can place an older root right before the nullifier in a call that is not the withdrawal (a Multicall no-op, or a contract that builds the real call itself), and that older root could exclude a withdrawal it did not prove. Since 2.23 the root is the `_root` argument of the decoded `withdraw` call to the pool (directly, through a declared router or inside a Multicall wrapper); without one, or when the call sits in a batch frame that lets it fail silently (including any wrapper not at a known Multicall address), the root is unknown and nothing is excluded. The evaluation tool now uses this read, accepts a root only when the pool still accepted it at the withdrawal block, with each pool's `ROOT_HISTORY_SIZE` read from its contract, and keeps its decoded roots in a separate cache (`roots_v2_<network>.json`) | The published numbers were measured with the old assumptions; how many withdrawals the decoded and validated read classifies differently is unknown. Re-run planned; not re-run for this section |
+| Root ceiling (11.01 % Ethereum, 10.94 % Polygon of withdrawals) | `tools/root_ceiling.py` took one history size per run (`--history 100` for Ethereum, `30` for Polygon). Since 2.23 it reads `ROOT_HISTORY_SIZE` from each pool contract (cached in `.cache/merkle`), leaves out a pool whose size cannot be read and reports the size per pool | The published figures used the old assumption. The four Ethereum ETH pools of the published run list 100 in their verified source, so the Ethereum figure may not move; re-run planned to confirm it with the per-pool read; not re-run for this section |
+| Test register records written before 2.23 | A record carried the SHA-256 of its script only, so a change in library code was not visible in it, and a full rewrite of the chain from its first line verified clean. Since 2.23 every record carries the SHA-256 of each loaded `tornado_demix` module, a confirmatory status needs those modules in the lock too, and `verify_chain` / `registry_report.py --check-witness` check one or more external witnesses | No status changes: no lock existed, every record was and is exploratory. Older records have no `modules` field. A full rewrite stays undetectable without a witness published outside the repository (see Test register) |
+| Power check (planted withdrawal) | The planted withdrawal carried a hash that was not hexadecimal (`PLANT_HASH`) | Now a valid 64-hex-digit constant. No published number depended on the hash |
+| Counts that include deposits through a router on a network with twin pools (Avalanche 10 and 100 AVAX through the routers `0x171f…` and `0x0d55…`; the early multi-pool profile; Merkle-root exclusion notes) | Before 2.23 a router deposit was assigned to the first pool of its denomination, so it could land on the wrong twin. Since 2.23 the pool is the contract that emitted the `Deposit` event in the receipt, on every network; a deposit that cannot be resolved is recorded as `pool_ambiguous`, is not searched and is left out of the profile, the early multi-pool profile is not applied while any deposit is `pool_ambiguous`, the root check places such a deposit by its leaf in each twin's tree or leaves the pools it may belong to unchecked, and the report names it instead of saying that there are no deposits | Unknown (magnitude not measured); re-run planned. |
+| Runs that needed the JSON-RPC log fallback on Polygon, Arbitrum or Optimism | Before 2.23 the providers' own range and archive errors were not recognised, so such a run stopped with an API error after its retries. Since 2.23 the range is halved or the run says that the fallback is unavailable for historical blocks, and a Cloudflare challenge is reported as `provider_blocked` (never bypassed) | No published number is known to depend on the fallback on these networks: an affected run failed, it did not return other numbers. Not checked for every cached run |
+| Bridge-exit table and every count of where traced funds ended (22 of 157 exits; the ad hoc sample of 198 exits of 2026-11-13, shares 69.2 % any bridge and 38.4 % Arbitrum, which was not run by a script of the repository and is replaced by the pilot of the Bridge coverage section) | Before 2.23 token gateways, Circle CCTP, CoW Protocol orders and the named bridges (Relay, Mayan, THORChain, Maya, Layerswap, NEAR Intents, Unit, Hyperliquid) were not decoded, so such a hop ended as an unlabelled contract. Since 2.23 a hop is followed only when the decoded call is tied to the traced transfer and each deposit is consumed once; otherwise the branch ends with a named state and the recipient is shown | The published tables use the older decoding; the order and the shares of end states can change. The pilot of the Bridge coverage section is the first measurement with the 2.23 decoding (60 recipients); a full run is documented there. Both samples are small and exploratory |
+| Page 1 of the report: third figure | Wording: the figure was read as attribution although it is the total received by the candidate addresses from all sources | Wording and layout changed (the depositor's deposited total is shown beside it); no published number depended on it |
+| Wording that calls the two lead sources of `strong` "independent" in the frozen PREREG_HOLDOUT.md and PREREG_HOLDOUT2.md | Independence of the two lead families was assumed, not established (see the lead-source discussion in this document) | Read as "two different lead-signal families; their independence is not established". The rules and the registered numbers are unchanged; the frozen files are not edited |
+| Deposit-address kinds and the sweep counts (`exchange_deposit`, `shared_deposit`; ENS-labelled set, hold-outs) | Before 2.23 the deposit-address classifier counted failed transactions (`isError`, `txreceipt_status`) as moved value, so a failed attempt to send to a labelled exchange could make an address an exchange sweep. Since 2.23 failed transactions are kept apart (`failed_sends`) and not counted | Unknown (magnitude not measured); re-run planned. A shared deposit address does not raise the demix band, so band counts are not known to move |
+| `early_profile` lead counts (early multi-pool profile section; hold-outs; placebo test) | Before 2.23 the profile counted only the withdrawals already loaded, so a short exit window, a cut-off or partial list, a hole in the data or a deposit younger than 72 hours at read time could produce a profile (and a `moderate` lead) that the full 72-hour history does not give. Since 2.23 the profile is not applied unless the data cover [first deposit, last deposit + 72 h] | Unknown (magnitude not measured); re-run planned. Published figures used windows of 72 hours or more on complete lists as far as recorded; not checked run by run |
+| Exchange deposit-address counts (ENS-labelled set; hold-out shared-deposit rows) | Before 2.23 a label alone made a target an exchange sweep: an address that paid a labelled exchange once was `exchange_deposit`. Since 2.23 a labelled target needs forwarding of the received value or a balance sweep (at least 90 % within 30 days); otherwise the context kind is `paid_exchange` ("the user paid an exchange", not "the exchange runs the address") | Unknown (magnitude not measured); re-run planned |
+| Lists that end in a Blockscout `status=2` (partial indexing) | Before 2.23 the client accepted the available rows without recording that the list was incomplete, so a run could look complete. Since 2.23 such a lookup is recorded as incomplete (`partial_indexing`) in CLI, JSON, HTML and CSV, and the result is not cached or called certain | Unknown (magnitude not measured; the lag can be an ordinary indexer state); re-run planned. Cached runs carry no such record |
+| Trace results where an outflow and an inflow share one transaction (bridge-exit and end-state counts; trace tables) | Before 2.23 all inflows of a transaction were placed before all outflows, and `transactionIndex` stood in for the order of internal events, so an outflow could spend value that arrived later in the same transaction. Since 2.23 the order inside one transaction comes from `traceId` (internal), `logIndex` (ERC-20) or the Blockscout index; an outflow spends a same-transaction inflow only when it is known to follow it, otherwise the state is `order_unknown` ("order inside one transaction unknown") and a multi-inflow arrival is `ambiguous_in_tx` | Unknown (magnitude not measured); re-run planned. Not known to affect a published number except through such transactions |
+| Wording "the register proves pre-registration", "chance alone" for decoy leads, "indistinguishable from chance" and the claim that the two lead families are independent, in tools, docs and the web UI | Wording only: the hash chain is relative to an external witness, a decoy window can hold the depositor's own earlier activity, no equivalence test is run, and independence of the two lead-signal families is not established. A web UI run slot limit also held for background runs only; since 2.23 synchronous and background runs share one slot. The report also names the limitation that an unsolicited receipt can create a lead | Wording corrected, one run slot; no published number depended on it |
+| Exact and bootstrap intervals of the hold-out ratio R (`tools/holdout_report.py`, `tools/placebo_eval.py`; hold-outs 1 and 2, polygon, placebo test) | The exact interval assumes independent withdrawals and the bootstrap drops resamples with undefined R without saying how many. When the leads of a side come from a few depositors both are over-confident: in a synthetic case of 30 depositors with 100 target leads in one of them and no decoy leads, the exact interval was [0, 0.038] and the bootstrap [0, 0] after discarding every resample without that depositor. Since 2.23 the tools print the depositors carrying leads per side, the largest single depositor's share, the number of dropped replicates and the label "assumes independent withdrawals", and print "insufficient information (leads concentrated in N depositor(s))" instead of a reliable interval when a side has leads from fewer than 3 depositors or one depositor holds more than 50 % | The intervals of the published runs were not recomputed (per-depositor lead counts are in the private caches); which of them are concentrated is unknown (magnitude not measured); re-run planned |
+
+Three defects were found and fixed during the 2.23 work itself, before its release; no released
+version had them, so no published number depends on them: a merged member wallet of a group view
+that is a contract could become a direct link (`linked`; in 2.22 and again now it does not, and a
+member whose contract check failed is `linked_unknown_contract`, context); the root check could
+exclude a withdrawal because a deposit with an undecided twin pool was left out of the pool's notes
+(2.22 left that pool unchecked; now the deposit is placed by its leaf or the pool stays unchecked);
+and the early multi-pool profile could fire on the notes that remained after such a deposit was left
+out (2.22 counted every deposit, in the first twin; now the profile is not applied while a pool is
+undecided).
+
+Corrections to individual statements:
+
+- README: the label set that `labels fetch` returns is 105,267 Ethereum addresses, 32,943 of them
+  exchange labels (131,117 rows on the eight networks, fetched 2026-11-14); "about 88,000 / 26,000" was out of date.
+  "About 115,000 addresses on 47 networks" for the whole wallet-attribution dataset was not re-checked and is no longer stated.
+- Checks table below: the `pytest` count was the 2.22 figure; it is the count of the 2.23 tree, and the
+  `pip-audit` row carries its date. The lock pinned `certifi` 2026.7.22, which is affected by PYSEC-2026-4320;
+  it pins 2026.10.23 since 2.23 and CI runs `pip-audit` on the lock.
+- SECURITY.md: results of the web UI are keyed to the session cookie, another session does not read them;
+  the risk of an exposed port is spent API quota and denial of service. The text said "read the last run's results".
+- Deposit-address senders (defect present in 2.22): the text said that a dust spoof or a gas
+  top-up does not make a sender, but an incoming transfer of any non-zero amount counted when the
+  address later swept that asset, so swept dust could add senders (and push an address over the
+  300-sender cap). Since 2.23 a sender's transfer must reach the dust floor of its asset (the
+  floors of the direct-link rule). `shared_deposit` is context with no weight, so no band or lead
+  count changes; the published `shared_deposit` counts of the hold-outs were measured with the
+  2.22 rule and were not re-run.
+- Withdrawal senders (defect present in 2.22): the sender lookup read the wallet's zero-value
+  and failed incoming rows too, so spam rows could fill its 25 slots; since 2.23 they are
+  ignored. `linked_sender` is context, no band changes.
+- CSV export: cells that start with a control character or a byte-order mark, or with spaces before a
+  formula character, are now escaped as well (`=`, `+`, `-`, `@`, tab and carriage return were before).
+- Trace, arrival index (defect present in 2.22): the start address's arrival was located once,
+  before the first replay. When a history read at a later level gave one of the start address's
+  unindexed rows its transaction index (or moved a block's timestamp), the start history was
+  re-sorted but the replay still credited the traced amount at the old position; if that
+  position held an outgoing transfer the credit was never applied and the whole traced amount
+  disappeared (no edges and no end points, so the end amounts no longer added up to the start
+  amount). Rare: 49 of 12,000 random test graphs built to trigger re-sorts; no published
+  number is known to come from such a run, since an affected trace shows no result at all. Since
+  2.23 the arrival is located again before every replay.
+- Trace, Across: before 2.23 a contract depositing into Across in its own name, within 10 % below the
+  traced transfer of the same token, was taken whenever the traced address sent the transaction, even
+  when the contract also received another user's funds in it. Since 2.23 the traced address must have
+  called that contract directly and no other inflow of the token may reach it in the call; otherwise
+  the branch ends as "deposit not tied". At a listed aggregator, a native payment back within the value
+  the sender attached to the transaction was read as a swap output; since 2.23 it is a refund, and
+  without a tied deposit or a bridge event the branch ends as "aggregator <protocol> (bridge or swap
+  unknown)". Published trace end-state counts belong to the bridge-exit row above (re-run planned).
+
+Planned with the re-run (not part of the 2.23 rule). The dust floor prices a planted link but
+does not stop one: whoever controls the depositor can send the floor (about 0.001 ETH worth)
+to any address right after depositing. Once the runs carry link records, the current `linked`
+leads will be tallied by direction (incoming, which needs the counterparty's key, against
+outgoing), by time (before the voucher's first deposit, or between the deposit and the
+withdrawal) and by value, in target and decoy windows. A tiered rule (an incoming link, or an
+outgoing one made before the deposit, stays a lead; an outgoing-only link made after the
+deposit needs a higher floor, for example 0.01 ETH worth) is the candidate, to be registered
+and tested on a hold-out before it replaces the 2.23 rule.
+
 ## Reproducing the published numbers
 
 What a third party can run, and what depends on caches that are not in the repository
@@ -1102,15 +1235,16 @@ directory.
 | Synthetic benchmark (all tables of that section) | `python tools/simulate.py --experiment all --trials 200 --seed 1` | nothing (offline, about a minute) | Yes, exactly; the output is deterministic for a given version |
 | Semi-synthetic benchmark | `python tools/semisynthetic.py` | cached real runs from the placebo test | No, depends on private caches |
 | Placebo test (304 runs), early profile, hold-outs 1 and 2, Tutela / Beres baseline, decoy rates | `tools/placebo_eval.py` with the seeds and exclusion lists of [PREREG_HOLDOUT.md](PREREG_HOLDOUT.md) and [PREREG_HOLDOUT2.md](PREREG_HOLDOUT2.md); `tools/holdout_report.py` per sample | Explorer API key; the ENS universe and exclusion list (private; their SHA-256 is in the registrations); target windows complete before 2026-08-01 | Partly: the procedure is registered and the sample hashes are published, but the draw depends on the private universe and the cached runs. A re-run today also reads explorer data as it is now |
-| Rule re-scoring on cached runs (`tools/placebo_windows.py`, `tools/review4_*.py`, `tools/supplementary_s1.py`) | Offline on `.cache/labels/placebo` | The cached runs | No, private caches |
+| Rule re-scoring on cached runs (`tools/placebo_windows.py`, `tools/strong_eval_*.py`, `tools/supplementary_s1.py`) | Offline on `.cache/labels/placebo` | The cached runs | No, private caches |
 | Merkle-root exclusion and root ceiling | `tools/root_exclusion_eval.py`, `tools/root_ceiling.py` | Cached hold-out 2 runs and `.cache/merkle` (the tree index can be rebuilt from pool logs with an API key) | Partly |
-| Bridge-exit table | `tools/bridge_exits.py` | Cached hold-out exits | No. The 2026-11-13 sample (Ethereum blocks 26,100,000 to 26,300,000, seed 20261112) was run ad hoc and is not reproduced by a script in the repository |
+| Bridge-exit table (22 of 157 exits) | `tools/bridge_exits.py` | Cached hold-out exits | No, depends on private caches |
+| Bridge coverage of recent exits | `python tools/bridge_coverage.py --n 60 --seed 20261114 --pause 0.4` (pilot); full run in the Bridge coverage section | Explorer API key; a fetched label set for the exchange row | Yes in principle: the draw is fixed by the seed and the block range, the explorer data and the labels are read as they are today |
 | Two public cases (KuCoin, Harmony) | `python tools/real_cases.py` | Explorer API key; public addresses | Yes in principle; the explorer data changes, and runs before 2.22 are affected by the pagination defect |
 | ENS-labelled set and the Wang et al. protocol | `tools/ens_labels.py`, `tools/evaluate_labels.py`, `tools/wang_baseline.py` | Explorer key; names are read as they are today | No: the set moves with the ENS records |
 | Test register, tests, linter | `python -m pytest -q`, `ruff check .`, `ruff format --check .` | `.[dev]` | Yes |
 
 Data cut dates: the hold-out target windows end before 2026-08-01 (registrations); the placebo
-test windows end before August 2026; the bridge sample covers Ethereum blocks 26,100,000 to
+test windows end before August 2026; the bridge coverage pilot covers Ethereum blocks 26,100,000 to
 26,300,000.
 
 ## Limits
@@ -1156,7 +1290,7 @@ the recipient (`linked`). The ENS link and `linked` see the same relationship,
 so this confirms that careless users also transact directly; it does not
 measure the other signals. Two of the 16 pairs are also found by `shared_deposit`
 (depositor and recipient sent funds to the same deposit address of a
-labelled exchange); with the direct link that is two lead sources, so these two
+labelled exchange); with the direct link that is two lead-signal families, so these two
 are the `strong` pairs, and without `linked` they stay `moderate` (measured under 2.17; since 2.21 the shared deposit is context, so they are `moderate`). Otherwise the other
 signals find almost nothing here, for a reason the
 method states in advance: 24 of the 31 pairs come from depositors whose only
@@ -1203,7 +1337,7 @@ withdrawals in the 30-day window after the deposit.
 
 On the placebo runs under the current signal set (302 depositors, 30-day window:
 283,383 recipient-pool rows in target windows, 254,263 in decoy windows;
-`tools/review4_analyze.py`), only one pair has enough expected co-occurrences to
+`tools/strong_eval_analyze.py`), only one pair has enough expected co-occurrences to
 test: count match and self-relay (555 together against 252 expected in target
 windows, 526 against 263 in decoy windows; phi 0.037 and 0.033). Both read the same
 withdrawals and belong to one family, which is why the score takes only the larger
@@ -1231,13 +1365,21 @@ tests per family, per script and per status; the count, exploratory sweeps inclu
 number of comparisons a multiple-testing correction has to account for.
 
 A record is `confirmatory` only when `docs/PROTOCOL.lock` lists the SHA-256 of its script
-(`registry_report.py --lock SCRIPT... --out docs/PROTOCOL.lock`); with no lock file every
+and of the library modules it ran with (`registry_report.py --lock SCRIPT... --out
+docs/PROTOCOL.lock`); with no lock file every
 record is `exploratory`. No lock exists yet: nothing is registered as confirmatory until a
 hold-out 3 is. The default lock is looked up from the register's location
 (`<project>/docs/PROTOCOL.lock` for `<project>/.cache/registry/`), not from the working
-directory. The register cannot show from its own content that its tail was cut off; keep a
-witness (`registry_report.py --witness OUT`, last seq and hash) outside the register
-directory and check it with `registry_report.py --check-witness FILE`. A `confirmatory`
+directory. The register cannot show from its own content that its tail was cut off, nor that
+the whole chain was rewritten from its first line with every hash recomputed: only an
+external anchor shows either. Keep a witness (`registry_report.py --witness OUT`, last seq
+and hash) outside the register directory, publish it where the writer of the register cannot
+change it (a release asset, a Zenodo record, an OpenTimestamps proof of the witness file) and
+check against it, or against several, with `registry_report.py --check-witness FILE...`.
+Since 2.23 every record also carries the SHA-256 of each `tornado_demix` module loaded when
+it was written (`modules`); `registry_report.py --lock` lists every package module, tagged
+`[module]`, besides the scripts, and a record is confirmatory only when its script and all its
+modules are in the lock. The lock is a plain file and needs the same external anchor. A `confirmatory`
 record whose script hash the current lock does not list is printed by `registry_report.py`
 as "not listed" (it is not a broken chain and does not change the exit code); the lock
 should therefore only ever be appended to. A last line that was cut
@@ -1245,16 +1387,16 @@ off mid-write is reported and does not stop later appends.
 
 ## Checks of the code itself
 
-Run on 2026-09-28; tests, coverage and the live check re-run on 2026-10-02, tests and coverage again on 2026-10-07 (2.18.0). The `pytest` row was re-run on 2026-11-13 (2.21.0 plus the 2.22 changes on the working branch); the other rows are from the earlier runs and were not repeated.
+Run on 2026-09-28; tests, coverage and the live check re-run on 2026-10-02, tests and coverage again on 2026-10-07 (2.18.0). The `pytest` row was re-run on 2026-11-16 (2.23.0) and the `pip-audit` row on 2026-11-14; the other rows are from the earlier runs and were not repeated.
 
 | Check | Result |
 |---|---|
-| `pytest` (network blocked, incl. `getaddrinfo`) | 1684 passed, 7 deselected (live; 2026-11-13, this branch) |
+| `pytest` (network blocked, incl. `getaddrinfo`) | 2379 passed, 7 deselected (live; 2026-11-16, 2.23.0) |
 | `pytest-randomly`, seeds 1, 2, 3 | all pass in every order |
 | Branch coverage (`--cov-branch`) | 93 % overall; `heuristics` 97 %, `demix` 93 %, `cli` 89 % |
 | Property-based tests (Hypothesis, 24) and edge-case tests (10) | pass; the four that documented defects now pin the fixes |
 | Mutation testing (`mutmut` 3.8 on `heuristics.py` and `demix.py`, 3061 mutants, version 2.17.0; the static encoding check deselected) | 2305 killed (75 %), 754 survived, 2 not reached (2.16: 74 % of 2952) |
-| `pip-audit -r requirements-lock.txt` | no known vulnerabilities |
+| `pip-audit -r requirements-lock.txt` | no known vulnerabilities (2026-11-14; `certifi` 2026.10.23, after PYSEC-2026-4320 in the earlier lock) |
 | `pytest -m live` (every shipped pool re-verified on chain) | 56 pools on 8 networks verified (Polygon via drpc.org: publicnode returns empty `eth_call` results there) |
 | README cases re-run (Ronin, Wintermute, Beanstalk) | same figures: 12,595.3 ETH hop; one 9.9435 ETH inflow; 271 deposits in 2.97 h, one `weak` candidate |
 

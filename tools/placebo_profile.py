@@ -72,6 +72,9 @@ def main(argv=None):
         by_dep[addr].append((pool, ts))
 
     def window_counts(deps, hours, shift):
+        # Search window and profile window are the same ``[first, last + hours]`` span here, so
+        # every pool's span is read whole by construction (the production rule,
+        # heuristics.early_profile_gap, needs the same of a real run).
         per_pool = defaultdict(list)
         for pool, ts in deps:
             per_pool[pool].append(ts)

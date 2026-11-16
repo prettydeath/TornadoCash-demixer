@@ -1,0 +1,22 @@
+{
+ "tx_hash": "0x8d56dddd0b4b44f1b36e58821f771004bd09c3d0fc4fab85aa5333e24266b0cd",
+ "origin_chain_id": 1,
+ "ts": 1793296163,
+ "tx": {
+  "hash": "0x8d56dddd0b4b44f1b36e58821f771004bd09c3d0fc4fab85aa5333e24266b0cd",
+  "from": "0x5e36ae7bbef6c84d415410d1cd477e5a5ab977e1",
+  "to": "0x2cff890f0378a11913b6129b2e97417a2c302680",
+  "value": "0x798d79e9610c0",
+  "input": "0x",
+  "blockNumber": "0x1914e60",
+  "transactionIndex": "0xf3"
+ },
+ "receipt": {
+  "status": "0x1",
+  "from": "0x5e36ae7bbef6c84d415410d1cd477e5a5ab977e1",
+  "to": "0x2cff890f0378a11913b6129b2e97417a2c302680",
+  "transactionIndex": "0xf3",
+  "blockNumber": "0x1914e60",
+  "logs": []
+ }
+}

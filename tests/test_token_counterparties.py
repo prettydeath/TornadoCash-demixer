@@ -9,8 +9,15 @@ from tornado_demix.demix import run_demix
 from tornado_demix.deposit_addresses import own_token_transfers
 
 FAKE = "0x" + "f" * 40  # an attacker's fake token
-USDC = "0x" + "1" * 40  # a real token
+USDC = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"  # a real token (USDC, Circle docs)
 R = _recipient(3)  # a withdrawal recipient
+
+
+@pytest.fixture(autouse=True)
+def _contract_check(monkeypatch):
+    """A working contract check that says "not a contract": the fixture network has no
+    RPC endpoint, and an unknown contract status never makes a lead."""
+    monkeypatch.setattr("tornado_demix.demix.make_contract_check", lambda url: lambda a: False)
 
 
 def tok(frm, to, ts, h, contract, value):
@@ -67,7 +74,7 @@ def test_a_spoofed_token_row_gives_no_counterparty_and_no_linked(rows):
 
 def test_a_token_transfer_the_depositor_sent_still_links():
     sent = dict(_tx(USDC, 0, 1050, 105, "0xmine"))  # the depositor's call to the token
-    data, signals = _run([tok(fx.WALLET, R, 1050, "0xmine", USDC, 10**6)], [sent])
+    data, signals = _run([tok(fx.WALLET, R, 1050, "0xmine", USDC, 5 * 10**6)], [sent])
     assert R in data["counterparty_addresses"]
     assert "linked" in signals
 
@@ -127,9 +134,10 @@ def test_a_zero_value_or_failed_incoming_native_tx_gives_no_linked(row):
     assert "linked" not in signals
 
 
-def test_a_one_wei_successful_incoming_native_tx_still_links():
+def test_a_one_wei_successful_incoming_native_tx_is_a_counterparty_but_not_a_lead():
     data, signals = _run([], [native_in(R, 1050, "0xb2", 1)])
-    assert R in data["counterparty_addresses"] and "linked" in signals
+    assert R in data["counterparty_addresses"]
+    assert "linked" not in signals and "linked_dust" in signals
 
 
 def test_a_failed_outgoing_native_tx_gives_no_counterparty():

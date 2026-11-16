@@ -46,8 +46,18 @@ because it is a constant rather than case input.
 local analyst. It has **no authentication**; the form carries a per-session CSRF
 token and the session cookie is `SameSite=Strict`. Results are held in a
 process-wide store keyed by the session cookie. Do not put it on a
-network interface, behind a reverse proxy, or on a shared machine. Anyone who
-can reach the port can spend your API quota and read the last run's results.
+network interface, behind a reverse proxy, or on a shared machine. Results are
+kept per session: a run is read back only with the session cookie that started it, so
+another client cannot open it by guessing a link (the result token is random). The real
+risk of an exposed port is different: anyone who can reach it can start runs, spend your
+API quota, fill the process's memory and keep it busy, which is a denial of service, and the
+*Provider settings* take local paths (see below).
+
+**The HTTP cache directory field is local-only.** The form's *HTTP cache directory*
+(`http_cache`, the `--http-cache` flag) makes the process create and write cache files in
+any directory the account running it can write to. It is checked for length and for
+a null byte only, not confined to a folder. That is acceptable for one analyst on
+`127.0.0.1` and is another reason not to expose the UI.
 
 ## Interpreting output safely
 

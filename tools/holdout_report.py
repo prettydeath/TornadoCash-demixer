@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
 """Pre-registered hold-out metrics from the cached target/decoy runs of a sample directory.
 
-Offline: every run is re-scored with the CURRENT heuristics (tools/placebo_windows.narrow,
-no explorer calls) for the 30-day (720 h) and 72-hour exit windows. Per signal and per class
+Offline: every run is re-scored with the heuristics of this version (tools/placebo_windows.narrow,
+no explorer calls; direct links follow the 2.23 rule only for runs cached with link records,
+older runs keep the pre-2.23 rule, and the report states how many) for the 30-day (720 h) and 72-hour exit windows. Per signal and per class
 the report gives the target and decoy lead counts, the withdrawals examined and the ratio
-R = (Lc / Nc) / (Lk / Nk) (c = decoy, k = target), the false-lead share, with a percentile
+R = (Lc / Nc) / (Lk / Nk) (c = decoy, k = target), the decoy-to-target rate ratio (not a false-discovery rate), with a percentile
 bootstrap 95 % CI over depositors (2000 resamples, fixed seed) and an exact
 (Clopper-Pearson-based) 95 % CI. The exact interval is the one to read when a side has
-fewer than 5 leads.
+fewer than 5 leads. The exact interval assumes independent withdrawals; the report also gives
+the number of depositors carrying leads on each side, the largest single depositor's share of
+a side's leads and the bootstrap replicates dropped as undefined, and prints "insufficient
+information" instead of a reliable-looking interval when a side's leads come from fewer than
+3 depositors or one depositor holds more than 50 %.
 
 Works for any network directory (ethereum, polygon, arbitrum): it only reads
 <dir>/target/*.json and <dir>/decoy/*.json.
@@ -37,7 +42,8 @@ from scipy.stats import beta
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from placebo_windows import OUT, narrow  # noqa: E402
+from cluster_diag import diagnostics  # noqa: E402
+from placebo_windows import OUT, link_rule_note, narrow, print_link_rule_note  # noqa: E402
 
 from tornado_demix.deposit_addresses import shared_deposit_hits  # noqa: E402
 from tornado_demix.heuristics import LEAD_SOURCE, ranked_candidates  # noqa: E402
@@ -130,12 +136,11 @@ def _ratio(rs):
 
 
 def boot_ci(per, rng, n=2000):
-    bs = sorted(
-        x
-        for x in (_ratio([per[rng.randrange(len(per))] for _ in per]) for _ in range(n))
-        if x is not None
-    )
-    return [bs[int(0.025 * len(bs))], bs[max(int(0.975 * len(bs)) - 1, 0)]] if bs else None
+    """(interval or None, number of replicates dropped because R was undefined)."""
+    draws = [_ratio([per[rng.randrange(len(per))] for _ in per]) for _ in range(n)]
+    bs = sorted(x for x in draws if x is not None)
+    ci = [bs[int(0.025 * len(bs))], bs[max(int(0.975 * len(bs)) - 1, 0)]] if bs else None
+    return ci, n - len(bs)
 
 
 def _r(x):
@@ -165,7 +170,8 @@ def ratio_stats(per, rng, boot=2000):
     if not per or not t:
         out["note"] = "no target leads: R undefined"
         return out
-    boot_c = boot_ci(per, rng, boot)
+    boot_c, dropped = boot_ci(per, rng, boot)
+    out.update(diagnostics([p[0] for p in per], [p[2] for p in per], dropped))
     exact = exact_ratio_ci(t, te, d, de)
     out["R_boot95"] = None if boot_c is None else [_r(x) for x in boot_c]
     out["R_exact95"] = None if exact is None else [_r(x) for x in exact]
@@ -277,6 +283,8 @@ def _fmt(x):
 
 def render(summary, title="Hold-out placebo"):
     lines = [f"# {title}", ""]
+    if summary.get("link_rule"):
+        lines += [f"Direct-link rule: {summary['link_rule']}.", ""]
     lines.append(
         f"Depositors: {summary['depositors']}. R = (decoy leads / decoy withdrawals) / "
         f"(target leads / target withdrawals); bootstrap {summary['boot']} resamples over "
@@ -299,11 +307,35 @@ def render(summary, title="Hold-out placebo"):
                 continue
             ci = r["ci_used"]
             span = "n/a" if ci is None else f"{_fmt(ci[0])} - {_fmt(ci[1])}"
+            if r.get("warning"):
+                span = f"{r['warning']} (not reliable; {span})"
+            ctype = r["ci_type"] or "n/a"
+            if ctype == "exact":
+                ctype = f"exact, {r['ci_assumption']}"
             lines.append(
                 f"| {label} | {r['target']} | {r['decoy']} | {r['target_withdrawals']} | "
-                f"{r['decoy_withdrawals']} | {_fmt(r['R'])} | {span} | {r['ci_type'] or 'n/a'} | "
+                f"{r['decoy_withdrawals']} | {_fmt(r['R'])} | {span} | {ctype} | "
                 f"{r['R_boot95']} | {r['R_exact95']} |"
             )
+        lines += [
+            "",
+            "Depositors carrying leads, largest depositor's share, bootstrap replicates "
+            "dropped (R undefined):",
+            "",
+        ]
+        lines += [
+            "| metric | depositors target | depositors decoy | max share target | "
+            "max share decoy | dropped |",
+            "|---|---|---|---|---|---|",
+        ]
+        for label, _k in SIGNALS + CLASSES:
+            r = res[label]
+            if "depositors_with_target_leads" in r:
+                lines.append(
+                    f"| {label} | {r['depositors_with_target_leads']} | "
+                    f"{r['depositors_with_decoy_leads']} | {_fmt(r['max_target_lead_share'])} | "
+                    f"{_fmt(r['max_decoy_lead_share'])} | {r['bootstrap_dropped']} |"
+                )
         lines += ["", "Strong source combinations:", ""]
         combos = res["strong_source_combinations"]
         names = sorted(set(combos["target"]) | set(combos["decoy"]))
@@ -358,6 +390,7 @@ def main(argv=None):
     if not runs:
         raise SystemExit(f"no wallets with both target and decoy runs in {base}")
     summary = build(runs, args.boot, args.seed)
+    summary["link_rule"] = link_rule_note()
     samp = os.path.join(base, "summary.json")
     if os.path.exists(samp):
         with open(samp, encoding="utf-8") as fh:
@@ -372,3 +405,4 @@ def main(argv=None):
 
 if __name__ == "__main__":
     main()
+    print_link_rule_note()

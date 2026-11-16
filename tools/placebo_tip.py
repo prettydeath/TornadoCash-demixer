@@ -32,7 +32,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 
-from placebo_windows import OUT, narrow  # noqa: E402
+from placebo_windows import OUT, narrow, print_link_rule_note  # noqa: E402
 
 LONDON_BLOCK = 12_965_000
 RPC = "https://ethereum-rpc.publicnode.com"
@@ -175,3 +175,4 @@ def main(argv=None):
 
 if __name__ == "__main__":
     main()
+    print_link_rule_note()

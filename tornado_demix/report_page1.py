@@ -15,6 +15,7 @@ more the sections below list.
 from __future__ import annotations
 
 import html
+import re
 from collections import Counter
 from datetime import datetime, timezone
 
@@ -40,7 +41,7 @@ STATUS_LABEL = {
 }
 
 LEGEND_TEXT = {
-    "strong": "strong lead: two independent lead sources",
+    "strong": "strong lead: two different lead-signal families",
     "lead": "lead: one lead signal",
     "context": "context: a link that did not beat chance",
     "chance": "chance-level: amount+timing or gas price alone",
@@ -175,10 +176,10 @@ PAGE1_CSS = """
    .p1-word b{font-size:18pt}.p1-word b.long{font-size:13pt}.p1-word .cnt{font-size:8pt}
    .p1 .verdict .answer{font-size:9pt;padding:2.5mm 3.5mm;line-height:1.38}
    .p1-figs>div{padding:2mm 2.5mm;font-size:7.6pt}.p1-figs b{font-size:13pt}
-   .p1 h2{font-size:9.5pt;margin:3mm 0 1mm}
-   .p1-flow svg{max-width:none;max-height:80mm}
+   .p1 h2{font-size:9.5pt;margin:2mm 0 .8mm}
+   .p1-flow svg{max-width:none;max-height:52mm}
    .p1-legend{font-size:7.4pt;margin:.5mm 0 1mm}
-   .p1-tab th{font-size:7pt}.p1-tab td{font-size:7.6pt}
+   .p1-tab th{font-size:7pt;padding:.6mm 1.2mm}.p1-tab td{font-size:7.6pt;padding:.5mm 1.2mm;line-height:1.25}
    .chip1{font-size:6.8pt;padding:0 1.2mm}
    .p1-more{font-size:7.4pt}
    .p1-checks{gap:1mm}.p1-checks li{font-size:8pt;grid-template-columns:5mm minmax(0,1fr)}
@@ -200,10 +201,40 @@ def short_addr(addr: str) -> str:
     return f"{addr[:6]}…{addr[-4:]}" if addr and len(addr) > 12 else (addr or "")
 
 
+def asset_label(asset) -> str:
+    """An asset for a diagram label: a token known only by its address is shortened
+    (its full address is in the tables and the title)."""
+    asset = str(asset or "")
+    if len(asset) == 42 and asset.startswith("0x"):
+        return short_addr(asset)
+    return asset
+
+
 def _fit(text: str, limit: int) -> str:
     """Descriptive SVG text cut to ``limit`` characters (never used for a full address)."""
     text = str(text)
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+# Long identifiers inside an end-state reason: hex (addresses, CoW order uids, request ids),
+# base58 (Solana) and bech32 (bc1…) strings. Page 1 never shows part of one (it is whole or
+# left out); the full reason is in the cell's title and in the "Where the funds stop" section.
+_LONG_ID = re.compile(r"\b(?:0x[0-9a-fA-F]{16,}|bc1[0-9a-z]{20,}|[1-9A-HJ-NP-Za-km-z]{25,})\b")
+REASON_PAGE1_CHARS = 40  # a compacted reason longer than this is cut with an ellipsis
+
+
+def compact_reason(reason: str, limit: int = REASON_PAGE1_CHARS) -> str:
+    """An end-state reason for a page-1 table cell, cut to ``limit`` characters. An
+    identifier (address, order uid, request id) is never shown in part: one the cut would
+    split is left out whole (the full reason is in the cell's title and the stops section)."""
+    text = str(reason)
+    if len(text) <= limit:
+        return text
+    cut = limit - 1
+    for m in _LONG_ID.finditer(text):
+        if m.start() < cut < m.end():
+            cut = m.start()
+    return text[:cut].rstrip() + "…"
 
 
 def fmt_amount(value) -> str:
@@ -536,10 +567,10 @@ def text_cell(html_text: str) -> tuple[str, str]:
 def data_check(result: dict, unresolved: int = 0) -> tuple:
     """✓ or ! for data completeness: failed lookups and lists the explorer cut off are
     counted apart (a cut-off list is not a failed lookup)."""
-    from .report_html import failed_parts, incomplete_phrase
+    from .report_html import ambiguous_count, failed_parts, incomplete_phrase
 
     failed, cut = failed_parts(result)
-    if failed or cut or unresolved:
+    if failed or cut or unresolved or ambiguous_count(result):
         parts = []
         phrase = incomplete_phrase(result)
         if phrase:
@@ -549,7 +580,8 @@ def data_check(result: dict, unresolved: int = 0) -> tuple:
         text = "Data: " + "; ".join(parts) + ", so results may be incomplete."
         if cut:
             text += (
-                " A cut-off list is a list the explorer returned only in part, not a failed lookup."
+                " A cut-off or partly indexed list is a list the explorer returned only in "
+                "part, not a failed lookup."
             )
         return check("warn", _e(text), "failed", failed)
     return check(
@@ -613,6 +645,10 @@ _CONTEXT_PHRASE = {
     "real depositors",
     "linked_late": "a direct link withdrawn late did not beat chance on real depositors",
     "shared_deposit": "a shared exchange deposit address has not been shown to beat chance",
+    "linked_posthoc": "a direct link made after the withdrawal can be created afterwards",
+    "linked_dust": "a zero-value or dust transaction moves nothing and can name anyone",
+    "linked_unverified_token": "a transfer of an unlisted token can name anyone",
+    "linked_unknown_contract": "an address whose contract check failed may be a router or service",
 }
 
 
@@ -658,6 +694,30 @@ def _context_story(data: dict, ctx: list[dict]) -> list[str]:
             f"{_cap(_addrs(len(late)))} transacted with the depositor directly but first "
             f"withdrew more than {EARLY_EXIT_HOURS} h after the last deposit."
         )
+    link_kinds = {
+        "linked_dust": "only zero-value or dust",
+        "linked_unverified_token": "only an unlisted token",
+        "linked_posthoc": "real value only afterwards",
+    }
+    no_value = [c for c in ctx if set(c["signals"]) & set(link_kinds)]
+    if no_value:
+        kinds = [k for k in link_kinds if any(k in c["signals"] for c in no_value)]
+        named = [link_kinds[k] for k in kinds]
+        how = named[0] if len(named) == 1 else ", ".join(named[:-1]) + " or " + named[-1]
+        n = len({c["address"] for c in no_value})
+        out.append(
+            f"{_cap(_addrs(n))} transacted with the depositor directly, but no transaction "
+            f"of real value came before the first withdrawal to them ({how}): context, "
+            "not a lead."
+        )
+    unknown = {c["address"] for c in ctx if "linked_unknown_contract" in c["signals"]}
+    if unknown:
+        n = len(unknown)
+        out.append(
+            f"{_cap(_addrs(n))} transacted with the depositor directly, but "
+            f"{'its' if n == 1 else 'their'} contract status is unknown (the check "
+            "failed), so the link may be to a router or service: context, not a lead."
+        )
     shared = set()
     for pk, addr, deps in h.get("shared_deposits", []):
         if (pk, addr) in keys:
@@ -672,7 +732,15 @@ def _context_story(data: dict, ctx: list[dict]) -> list[str]:
         )
     fired = [
         s
-        for s in ("linked_sender", "linked_late", "shared_deposit")
+        for s in (
+            "linked_sender",
+            "linked_late",
+            "shared_deposit",
+            "linked_posthoc",
+            "linked_dust",
+            "linked_unverified_token",
+            "linked_unknown_contract",
+        )
         if any(s in c["signals"] for c in ctx)
     ]
     if fired:
@@ -913,20 +981,41 @@ def demix_page1(
     unresolved = len(data.get("unresolved") or [])
     incomplete = incomplete_phrase(data)
     if not vouchers:
-        p.update(
-            word="No deposits",
-            word_key="band",
-            word_value="none",
-            counts=[],
-            reason=(
+        n_found = len(data.get("deposits") or [])
+        if n_found:
+            word, reason, n_text = (
+                "Pool not settled",
+                f"{n_found} Tornado.Cash deposit{'s' if n_found != 1 else ''} found for this "
+                f"address on {display_name(net_name)}, but the pool could not be settled "
+                "(twin pools, receipt not conclusive); none searched."
+                + (f" Note: {incomplete}, so results may be incomplete." if incomplete else ""),
+                str(n_found),
+            )
+        else:
+            word, n_text = "No deposits", "0"
+            reason = (
                 f"No Tornado.Cash deposits found for this address on {display_name(net_name)}: it "
                 "made no "
                 "deposits into the configured pools of this network, so there is nothing to "
                 "demix."
                 + (f" Note: {incomplete}, so results may be incomplete." if incomplete else "")
-            ),
+            )
+        p.update(
+            word=word,
+            word_key="band",
+            word_value="none",
+            counts=[],
+            reason=reason,
             figures=[
-                figure("deposited", "0", "deposits into the configured pools", "", 0),
+                figure(
+                    "deposited",
+                    n_text,
+                    "deposits found, pool not settled"
+                    if n_found
+                    else "deposits into the configured pools",
+                    "",
+                    n_found,
+                ),
                 figure("searched", "0", "withdrawals searched", "", 0),
                 figure("candidates", "0", "candidate addresses", "", 0),
                 figure("leads", "0", "leads above the threshold", "", 0),
@@ -978,8 +1067,10 @@ def demix_page1(
         extra.insert(0, "dashed = how the depositor is linked to the address")
     n_addr = len(addrs)
     cand_label = (
-        f"{'address' if n_addr == 1 else 'addresses'}, {_n(hits, 'withdrawal')}, "
-        f"{format_totals_human(dict(value))}"
+        f"{'address' if n_addr == 1 else 'addresses'}; received {_n(hits, 'withdrawal')}, "
+        f"{format_totals_human(dict(value))} from all sources (not attributed to the "
+        f"depositor, who deposited "
+        f"{format_totals_human(deposited_by_asset(vouchers)) or 'no deposit found'})"
     )
     if n_addr != len(cands):
         cand_label += f" ({len(cands)} address-pool candidates; band counts are per candidate)"
@@ -1364,7 +1455,7 @@ def trace_page1(result: dict, network, uid: str, destinations, answer: str) -> s
             "lines": [
                 ("Start", "t b"),
                 (short_addr(result["start"]), "mono"),
-                (f"{fmt_amount(result['amount'])} {result['asset']}", "m"),
+                (f"{fmt_amount(result['amount'])} {asset_label(result['asset'])}", "m"),
             ],
         }
     ]
@@ -1386,14 +1477,15 @@ def trace_page1(result: dict, network, uid: str, destinations, answer: str) -> s
         t = terminals[i]
         by_hop[t["hop"]] += t["amount"]
         _tone, short = end_state(t["reason"])
+        why = f" ({t['order_note']})" if t.get("order_note") else ""
         right.append(
             {
                 "id": f"t:{num}",
                 "num": num,
                 "status": statuses[i],
-                "label": f"{fmt_amount(t['amount'])} {t['asset']}",
+                "label": f"{fmt_amount(t['amount'])} {asset_label(t['asset'])}",
                 "sub": short,
-                "title": f"{t['address']} — {t['reason']}",
+                "title": f"{t['address']} — {t['reason']}{why}",
             }
         )
         fedges.append({"a": f"h:{t['hop']}", "b": f"t:{num}", "w": t["amount"], "cls": statuses[i]})
@@ -1408,10 +1500,12 @@ def trace_page1(result: dict, network, uid: str, destinations, answer: str) -> s
     for num, i in enumerate(shown, 1):
         t = terminals[i]
         _tone, short = end_state(t["reason"])
+        # order_unknown inside the arrival's own transaction says so (order_note)
+        cell = t.get("order_note") or t["reason"]
         reason = (
             ""
             if t["reason"] in (short, LOOKUP_FAILED, BELOW_THRESHOLD)
-            else f'<div class="meta">{_e(t["reason"])}</div>'
+            else f' <span class="meta" title="{_e(t["reason"])}">{_e(compact_reason(cell))}</span>'
         )
         rows.append(
             [
@@ -1443,12 +1537,28 @@ def trace_page1(result: dict, network, uid: str, destinations, answer: str) -> s
                 "info",
                 _e(
                     f"Asset changes: {_n(bridged, 'bridge edge')} and {_n(swaps, 'swap')}; "
-                    "totals are per asset."
+                    "totals are per asset and chain."
                 ),
             )
         )
     if arrival_text(result):
-        checks.append(check("info", _e("Arrival: " + arrival_text(result) + ".")))
+        # several inflows of the arrival transaction can be the traced one: a warning
+        level = "warn" if result.get("arrival_matched") == "ambiguous_in_tx" else "info"
+        checks.append(check(level, _e("Arrival: " + arrival_text(result) + ".")))
+    possible = len(result.get("possible") or []) + (result.get("possible_more") or {}).get(
+        "count", 0
+    )
+    if possible:
+        checks.append(
+            check(
+                "warn",
+                _e(
+                    f"{_n(possible, 'possible outflow')} on incomplete histories: FIFO gives "
+                    "them none of the traced funds, but they may hold some; not followed "
+                    "(Possible outflows)."
+                ),
+            )
+        )
     checks.append(
         check(
             "info",
@@ -1507,11 +1617,11 @@ def trace_page1(result: dict, network, uid: str, destinations, answer: str) -> s
         "table_title": "Stops",
         "table": table_html(
             [
-                ("#", "5%"),
-                ("Address", "45%"),
-                ("Amount", "17%"),
-                ("Hop", "7%"),
-                ("End state", "26%"),
+                ("#", "4%"),
+                ("Address", "38%"),
+                ("Amount", "15%"),
+                ("Hop", "5%"),
+                ("End state", "38%"),
             ],
             rows,
         )
@@ -1524,6 +1634,11 @@ def trace_page1(result: dict, network, uid: str, destinations, answer: str) -> s
         "toc": [
             ("leads", "Where the funds stop", "every stop with its end state"),
             ("context", "Hops", "every edge with its FIFO bounds and transaction"),
+            *(
+                [("chance", "Possible outflows", "transfers of incomplete histories, not followed")]
+                if possible
+                else []
+            ),
             ("groups", "Flow diagram", "all hops as a diagram"),
             ("method", "Method and limitations", "FIFO, end states, limits"),
         ],
@@ -1689,22 +1804,25 @@ KIND_WORD = {
     "smart_account": "Smart account",
     "unknown": "Unknown",
     "not_deposit": "Not a deposit address",
+    "paid_exchange": "Paid an exchange",
 }
 
 
 def classify_page1(info: dict, network, uid: str, answer: str, targets: list, labels) -> str:
     """The first page of a deposit-address check: senders → address → sweep targets."""
     from .attribution import format_label
-    from .deposit_addresses import NOT_DEPOSIT, UNKNOWN_KIND
+    from .deposit_addresses import NOT_DEPOSIT, PAID_EXCHANGE, UNKNOWN_KIND
     from .honest import provenance as _provenance
 
     addr = info["address"]
     kind = info.get("kind") or "exchange_deposit"
     senders = info.get("senders") or []
-    is_deposit = kind not in (NOT_DEPOSIT, UNKNOWN_KIND)
+    is_deposit = kind not in (NOT_DEPOSIT, UNKNOWN_KIND, PAID_EXCHANGE)
     shown_s = senders[:TOP_N] if is_deposit else []
     word = KIND_WORD.get(kind, _cap(kind.replace("_", " ")))
     role = "operator" if info.get("operator") else "swept to"
+    if kind == PAID_EXCHANGE:
+        role = "paid"
     left = [
         {
             "id": f"s:{i}",

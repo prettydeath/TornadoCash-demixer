@@ -11,7 +11,8 @@ from collections import Counter
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from ens_labels import CACHE  # noqa: E402
-from review4_common import R4, narrow  # noqa: E402
+from placebo_windows import print_link_rule_note  # noqa: E402
+from strong_eval_common import EVAL_DIR, narrow  # noqa: E402
 
 from tornado_demix.heuristics import LEAD_SOURCE, ranked_candidates  # noqa: E402
 
@@ -39,5 +40,6 @@ for n in sorted(os.listdir(RUNS)):
             )
 out["bands"] = dict(out["bands"])
 out["strong_combos"] = dict(out["strong_combos"])
-json.dump(out, open(os.path.join(R4, "ens_strong.json"), "w", encoding="utf-8"), indent=1)
+json.dump(out, open(os.path.join(EVAL_DIR, "ens_strong.json"), "w", encoding="utf-8"), indent=1)
 print(json.dumps(out, indent=1))
+print_link_rule_note()

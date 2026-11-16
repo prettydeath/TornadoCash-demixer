@@ -24,7 +24,7 @@ found for it, and its deposit gas prices. Its deposits, however, are synthetic
 (the real deposits are removed), so the count targets, the early-exit windows
 and the early multi-pool profile are those of the planted voucher. The inherited
 link evidence is what makes the background realistic for the lead signals:
-without it no background recipient could ever earn a lead and the false-lead
+without it no background recipient could ever earn a lead and the decoy
 rate would be zero by construction. In a ``decoy`` window every inherited link
 hit is chance (the windows cannot hold the wallet's notes), so the ``decoy``
 false strong / moderate rate is a clean chance rate. In a ``target`` window a
@@ -90,7 +90,7 @@ at least one; and per signal the precision / recall of "pair has the signal".
 95 % CIs: percentile bootstrap over background runs (replicates on the same run
 are resampled together).
 
-What it can and cannot show: the background is real, so false-lead rates and
+What it can and cannot show: the background is real, so decoy rates and
 the dilution of count matches by real busy recipients are measured, not
 modelled. The positives are still planted by our own model of operational
 errors (independent Bernoulli errors, log-normal delays, fresh exits), so
@@ -370,7 +370,7 @@ def slim_run(data):
 
 def iter_backgrounds(sets=SETS, limit=None):
     """Yield (set name, wallet, {mode: slim run}) one depositor at a time."""
-    from review4_common import _inject_shared
+    from strong_eval_common import _inject_shared
 
     for name, base in sets:
         files = sorted(
@@ -505,7 +505,13 @@ def plant(run, profile, beh, rng, window_hours=WINDOW_HOURS):
         if ex["shared"]:
             shared.setdefault(ex["address"], []).append(_addr(rng))
 
-    data = {"wallet": wallet, "deposits": deposits, "vouchers": vouchers, "denoms": {}}
+    data = {
+        "wallet": wallet,
+        "params": {"exit_window_hours": window_hours},
+        "deposits": deposits,
+        "vouchers": vouchers,
+        "denoms": {},
+    }
     for pk in sorted(profile):
         res = run["denoms"][pk]
         d = detail[pk]

@@ -127,6 +127,40 @@ def test_cli_characterize_prints_the_deposit_check(monkeypatch, capsys):
     assert "not a deposit address" in out  # the next hop
 
 
+def _paid_lists():
+    """100 MATIC received; three years later 1 wei paid to a labelled exchange wallet."""
+    later = 1000 + 3 * 365 * 24 * 3600
+    return {
+        ("txlist", X): [_row(W, X, 100 * 10**18, 1000, "0xin"), _row(X, HOT, 1, later, "0xpay")]
+    }
+
+
+def test_paying_a_labelled_exchange_is_shown_as_context_in_every_output(
+    monkeypatch, capsys, tmp_path
+):
+    info = run_classify(Stub(_paid_lists()), X, _net(), labels=LAB, is_contract=eoa)
+    assert info["kind"] == "paid_exchange" and info["evidence"] is False
+    html = build_classify_report(info, _net(), labels=LAB)
+    assert "paid an exchange (Binance)" in html and "Paid, not swept" in html
+    assert "Exchange deposit" not in html and HOT in html
+    char = characterize_address(Stub(_paid_lists()), X, _net(), labels=LAB, is_contract=eoa)
+    assert char["deposit_check"]["kind"] == "paid_exchange"
+    assert "paid an exchange (Binance)" in build_characterize_report(char, _net())
+
+    monkeypatch.setattr(cli.config, "load_api_key", lambda path: "stub-key")
+    monkeypatch.setattr(cli, "EtherscanClient", lambda *a, **kw: Stub(_paid_lists()))
+    monkeypatch.setattr(cli, "load_attribution", lambda *a, **kw: dict(LAB))
+    monkeypatch.setattr(cli, "make_contract_check", lambda url: eoa)
+    out_json = str(tmp_path / "c.json")
+    cli.main(["classify-address", X, "--network", "polygon", "--json", out_json])
+    out = capsys.readouterr().out
+    assert "paid an exchange (Binance), not a deposit address" in out
+    assert f"paid {HOT}" in out and f"swept to {HOT}" not in out
+    with open(out_json, encoding="utf-8") as fh:
+        data = json.load(fh)
+    assert data["kind"] == "paid_exchange" and data["paid_targets"] == [HOT]
+
+
 @pytest.mark.parametrize(
     "argv",
     [
@@ -149,3 +183,18 @@ def test_blockscout_labels_without_a_cache_say_so(monkeypatch, capsys, tmp_path)
     assert cli._load_labels(args, net) == {}
     err = capsys.readouterr().err
     assert "Blockscout" in err and "labels blockscout" in err
+
+
+def test_web_ui_lists_the_paid_exchange_wallet_as_a_target(monkeypatch):
+    import sys
+
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "webui"))
+    import app as webapp
+
+    monkeypatch.setattr(webapp, "_labels", lambda net: dict(LAB))
+    monkeypatch.setattr(webapp, "make_contract_check", lambda url: eoa)
+    view, (_header, rows), reports = webapp._run_classify(Stub(_paid_lists()), X, _net())
+    assert view["kind_label"] == "paid an exchange (Binance), not a deposit address"
+    assert [t["address"] for t in view["targets"]] == [HOT] and view["senders"] == []
+    assert rows[0][2] == "paid_exchange"
+    assert json.loads(reports[X + ".json"])["kind"] == "paid_exchange"

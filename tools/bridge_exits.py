@@ -45,6 +45,7 @@ from tornado_demix.bridges import classify, is_inbound, load_bridges  # noqa: E4
 from tornado_demix.etherscan import EtherscanClient  # noqa: E402
 from tornado_demix.heuristics import ranked_candidates  # noqa: E402
 from tornado_demix.registry import record_safe as record  # noqa: E402
+from tornado_demix.txstatus import failed  # noqa: E402
 
 PLACEBO = os.path.join(ROOT, ".cache", "labels", "placebo")
 OUT = os.path.join(ROOT, ".cache", "bridge_exits")
@@ -94,7 +95,7 @@ def _filter_sent(rows, addr, start, end):
         r
         for r in rows
         if (r.get("from") or "").lower() == addr
-        and r.get("isError") != "1"
+        and not failed(r)
         and r.get("to")
         and start <= int(r.get("blockNumber") or 0) <= end
     ]

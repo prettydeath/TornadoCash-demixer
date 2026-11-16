@@ -47,13 +47,22 @@ upper min(o, traced amount arrived so far) as well. Per-event rows keep
 ``incomplete`` False before the overdraft, to show where it was found. A ledger told up front that its
 history is incomplete (``complete=False``) behaves as if overdrawn from the start.
 
-Event order inside a block: events sort by (block, order) where ``order`` is the
+Event order inside a block: events sort by (block, order, sub) where ``order`` is the
 transaction index when the explorer row has one (normal and token transfers do,
-internal transfers do not). A row without an index counts as the first of its
-block when it is an inflow and the last when it is an outflow, so an
-unordered inflow is never spent before it arrived; at an equal position inflows
-come before outflows, then by hash. Gas fees are not subtracted, which can only
-widen the interval (the balance is overstated, never understated).
+internal transfers borrow it from their transaction when it is seen) and ``sub`` the
+position inside the transaction (see ``sub_order``): the top-level value of a normal
+transaction moves before every internal transfer of it, internal transfers follow
+their ``traceId`` path component-wise (a call's value before its sub-calls; without
+one, Blockscout's flat trace ``index``, never compared with a path), token
+transfers their ``logIndex``. A row without an index counts as the first of its
+block when it is an inflow and the last when it is an outflow, so an unordered
+inflow is never spent before it arrived; inside one transaction a position that is
+missing or not comparable (an internal transfer without a readable ``traceId``, a
+token transfer without a ``logIndex``, native against token) sorts the inflow first
+too, but FIFO does not spend it on that outflow: the order is unknown (see
+``_order_unknown``). An equal transaction index alone never means "arrived before".
+Gas fees are not subtracted, which can only widen the interval (the balance is
+overstated, never understated).
 """
 
 from __future__ import annotations
@@ -67,12 +76,78 @@ def _tol(x: float) -> float:
     return 1e-9 * max(1.0, abs(x))
 
 
+# Spaces of a position inside one transaction (``sub``): (space, place).
+TOP, INTERNAL, LOG = 0, 1, 2  # top-level value (place ()), traceId path, logIndex
+FLAT = 3  # an internal transfer's flat trace index (Blockscout ``index``) without a traceId
+
+
+def trace_path(trace_id) -> tuple | None:
+    """The traceId of an internal transfer as integers ("0_1_12" -> (0, 1, 12); a
+    non-numeric prefix such as "call_" is dropped). None when missing or unreadable."""
+    parts = str(trace_id or "").strip().split("_")
+    while parts and parts[0] and not parts[0].isdigit():
+        parts = parts[1:]
+    if not parts or not all(p.isdigit() for p in parts):
+        return None
+    return tuple(int(p) for p in parts)
+
+
+def sub_order(a, b) -> int | None:
+    """-1 when position ``a`` comes before ``b`` inside one transaction, 1 when after,
+    None when not known: a position missing, equal, or in index spaces that are not
+    comparable (native against token, a traceId path against a flat trace index). The
+    top-level value moves before every internal transfer; traceId paths compare
+    component-wise, a call before its sub-calls; flat trace indexes (Blockscout numbers
+    the calls of a transaction in trace order) compare as numbers."""
+    if a is None or b is None:
+        return None
+    native = (TOP, INTERNAL, FLAT)
+    if a[0] in native and b[0] in native:
+        if a[0] != b[0]:
+            if TOP not in (a[0], b[0]):
+                return None
+            return -1 if a[0] == TOP else 1
+        if a[0] == TOP:
+            return None
+    elif a[0] != b[0]:
+        return None
+    if a[1] is None or b[1] is None or a[1] == b[1]:
+        return None
+    return -1 if a[1] < b[1] else 1
+
+
+def sub_key(sub, kind: str):
+    """Sort key of a position inside a transaction: an unknown one sorts an inflow
+    first and an outflow last (in its space when that is known)."""
+    if sub is None:
+        return (-1,) if kind == "in" else (_AFTER,)
+    if sub[1] is None:
+        marker = -1 if kind == "in" else _AFTER
+        return (sub[0], (marker,) if sub[0] == INTERNAL else marker)
+    return sub
+
+
+def unsub(key):
+    """The position inside a transaction a ``sub_key`` stands for (None: unknown)."""
+    if key in ((-1,), (_AFTER,)):
+        return None
+    if key[1] in (-1, _AFTER, (-1,), (_AFTER,)):
+        return (key[0], None)
+    return key
+
+
 def sort_key(event: dict):
     """Chain order of one address's events (see the module doc)."""
     order = event.get("order")
     if order is None:
         order = -1 if event["kind"] == "in" else _AFTER
-    return (event["block"], order, 0 if event["kind"] == "in" else 1, event.get("hash") or "")
+    return (
+        event["block"],
+        order,
+        sub_key(event.get("sub"), event["kind"]),
+        0 if event["kind"] == "in" else 1,
+        event.get("hash") or "",
+    )
 
 
 def rounded_bounds(lower: float, upper: float, digits: int = 6) -> tuple[float, float]:
@@ -92,16 +167,47 @@ def rounded_bounds(lower: float, upper: float, digits: int = 6) -> tuple[float, 
     return min(lo, hi), hi
 
 
+def compare(a, b) -> int | None:
+    """-1 when position ``a`` is known to come before ``b``, 1 after, None unknown.
+
+    Positions are (block, transaction index or None[, transaction hash, sub]). Different
+    blocks order by block. Inside one transaction (same hash, or the same index when a
+    hash is missing) the order is ``sub_order``: an equal index alone is not an order.
+    Between transactions of one block both indexes must be known.
+    """
+    if a[0] != b[0]:
+        return -1 if a[0] < b[0] else 1
+    ia, ib = a[1], b[1]
+    ta = a[2] if len(a) > 2 else None
+    tb = b[2] if len(b) > 2 else None
+    same = ta == tb if ta and tb else ia is not None and ia == ib
+    if same:
+        return sub_order(a[3] if len(a) > 3 else None, b[3] if len(b) > 3 else None)
+    if ia is None or ib is None or ia == ib:
+        return None
+    return -1 if ia < ib else 1
+
+
 def _known_before(lot_at, out_at) -> bool:
     """Whether a lot that arrived at ``lot_at`` is known to precede ``out_at``.
 
-    Positions are (block, transaction index or None); None means "not known".
-    Inside one block the order is known only when both indexes are; the same
-    transaction counts as inflow first.
+    None means "position not known" and counts as before (a lot placed at the start of
+    a block, an outflow fed without a position); otherwise see ``compare``.
     """
-    if lot_at is None or out_at is None or lot_at[0] != out_at[0]:
-        return lot_at is None or out_at is None or lot_at[0] < out_at[0]
-    return lot_at[1] is not None and out_at[1] is not None and lot_at[1] <= out_at[1]
+    if lot_at is None or out_at is None:
+        return True
+    return compare(lot_at, out_at) == -1
+
+
+def _order_unknown(lot_at, out_at) -> bool:
+    """A lot and an outflow in the same block whose order is not known (an index missing,
+    or the same transaction without comparable positions inside it)."""
+    return (
+        lot_at is not None
+        and out_at is not None
+        and lot_at[0] == out_at[0]
+        and compare(lot_at, out_at) is None
+    )
 
 
 class Ledger:
@@ -115,7 +221,10 @@ class Ledger:
         self.balance = 0.0
         self.t_lo = self.t_hi = 0.0
         self.traced_total = 0.0  # the most traced funds that can have arrived
-        self.lots: list = []  # [amount, tag, at] in arrival order
+        # [amount, tag, at, unordered, refs] in arrival order: ``unordered`` is how much of
+        # the lot an outflow of unknown order (same block, an index missing) may have
+        # taken, ``refs`` those outflows (see outflow)
+        self.lots: list = []
         self.incomplete = not complete
 
     @property
@@ -150,16 +259,26 @@ class Ledger:
         self.t_lo += lo
         self.t_hi += hi
         self.traced_total += hi
-        self.lots.append([amount, tag, at])
+        self.lots.append([amount, tag, at, 0.0, []])
 
-    def outflow(self, o: float, at=None) -> dict:
+    def unordered(self) -> tuple[float, list]:
+        """(amount, refs): how much of the traced funds left FIFO may have gone in outflows
+        of unknown order, and those outflows' ``ref`` values, first seen first."""
+        amount, refs = 0.0, []
+        for lot in self.lots:
+            amount += min(lot[0], lot[3])
+            refs += [r for r in lot[4] if r not in refs]
+        return amount, refs
+
+    def outflow(self, o: float, at=None, ref=None) -> dict:
         """Bounds and FIFO share of one outflow of size ``o`` at position ``at``.
 
         Returns {lower, upper, fifo, taken: [(tag, amount)], incomplete}; ``taken``
         lists the traced lots the FIFO amount came from, oldest first. A lot not
         known to have arrived before ``at`` (same block, an index unknown) is
-        skipped. Bounds that cross mean the history or its order is off: the
-        ledger is then marked incomplete rather than clamped.
+        skipped; the part of it this outflow may have taken is recorded on the lot
+        with ``ref`` (see unordered). Bounds that cross mean the history or its
+        order is off: the ledger is then marked incomplete rather than clamped.
         """
         if o > self.balance + _tol(o):
             self.mark_incomplete()
@@ -173,12 +292,20 @@ class Ledger:
         else:
             new_hi = min(self.t_hi, self.balance - o)
         need, taken, kept = o, [], []
+        maybe = o  # what is left of the outflow for lots of unknown order
         for lot in self.lots:
             if need > _tol(o) and _known_before(lot[2], at):
                 used = min(need, lot[0])
                 taken.append((lot[1], used))
                 need -= used
+                maybe -= used
                 lot[0] -= used
+            elif maybe > _tol(o) and _order_unknown(lot[2], at):
+                part = min(maybe, lot[0])
+                lot[3] += part
+                maybe -= part
+                if ref is not None and ref not in lot[4]:
+                    lot[4].append(ref)
             if lot[0] > _tol(o):
                 kept.append(lot)
         self.lots = kept

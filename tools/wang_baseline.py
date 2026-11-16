@@ -38,7 +38,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from ens_labels import CACHE, _load, _log, api_keys  # noqa: E402
-from placebo_windows import narrow  # noqa: E402
+from placebo_windows import narrow, print_link_rule_note  # noqa: E402
 
 from tornado_demix.errors import ApiError, ApiKeyError  # noqa: E402
 from tornado_demix.etherscan import EtherscanClient  # noqa: E402
@@ -174,3 +174,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    print_link_rule_note()

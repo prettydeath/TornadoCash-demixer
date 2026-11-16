@@ -124,7 +124,8 @@ def main(argv=None):
         reasons[got["reason"]] += 1
         per_wallet[w] = got
     total = sum(reasons.values())
-    # Blind wallets (no non-contract counterparty): would a withdrawal back to the wallet
+    # Blind wallets (no non-contract counterparty, or none with a qualifying link: placebo
+    # BLIND_REASONS): would a withdrawal back to the wallet
     # itself be found? Counted apart; it does not change "not detectable".
     self_seen = sum(1 for g in per_wallet.values() if g.get("self_detectable"))
     summary = {
@@ -134,8 +135,13 @@ def main(argv=None):
         "reasons": {r: reasons[r] for r in REASONS},
         "not_detectable": total - reasons["detected"],
         "not_detectable_share": round((total - reasons["detected"]) / total, 4) if total else None,
-        "no_counterparty_self_detectable": self_seen,
-        "not_detectable_even_with_self": reasons["no_counterparty"] - self_seen + reasons["missed"],
+        # blind wallets (no_counterparty or no_qualifying_link) whose withdrawal back to
+        # the wallet itself would be found
+        "blind_self_detectable": self_seen,
+        "not_detectable_even_with_self": reasons["no_counterparty"]
+        + reasons["no_qualifying_link"]
+        - self_seen
+        + reasons["missed"],
         "skipped": dict(skipped),
     }
     with open(os.path.join(POWER, f"summary_{args.dir}.json"), "w", encoding="utf-8") as fh:

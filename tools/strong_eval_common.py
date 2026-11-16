@@ -1,4 +1,4 @@
-"""Shared offline loaders for the review4 scripts (reuses tools/placebo_windows.narrow)."""
+"""Shared offline loaders for the strong_eval scripts (reuses tools/placebo_windows.narrow)."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from placebo_windows import OUT, narrow  # noqa: E402, F401
 
 from tornado_demix.deposit_addresses import shared_deposit_hits  # noqa: E402
 
-R4 = os.path.join(OUT, "review4")
+EVAL_DIR = os.path.join(OUT, "strong_eval")
 
 
 def recipients(data):

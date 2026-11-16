@@ -145,12 +145,20 @@ class _DepositClient(_FakeClient):
     def __init__(self, txs, logs):
         super().__init__(txs, logs)
         self.calls = []
+        eth = str(10**18)  # above the dust floor: a sender
+        # each incoming transfer is forwarded to the hot wallet minutes later
         self.lists = {
             ("txlist", DEPOSIT): [
-                {"from": fx.WALLET, "to": DEPOSIT, "hash": "0x1", "value": "1000"},
-                {"from": SHARER, "to": DEPOSIT, "hash": "0x2", "value": "1000"},
-                {"from": DEPOSIT, "to": HOT, "hash": "0x3", "value": "1000"},
-                {"from": DEPOSIT, "to": HOT, "hash": "0x4", "value": "1000"},
+                {
+                    "from": fx.WALLET,
+                    "to": DEPOSIT,
+                    "hash": "0x1",
+                    "value": eth,
+                    "timeStamp": "1000",
+                },
+                {"from": SHARER, "to": DEPOSIT, "hash": "0x2", "value": eth, "timeStamp": "1001"},
+                {"from": DEPOSIT, "to": HOT, "hash": "0x3", "value": eth, "timeStamp": "1300"},
+                {"from": DEPOSIT, "to": HOT, "hash": "0x4", "value": eth, "timeStamp": "1301"},
             ]
         }
 

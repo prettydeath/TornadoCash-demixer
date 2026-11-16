@@ -576,7 +576,7 @@ def test_web_report_carries_the_sha256_of_its_json(monkeypatch):
     assert "web UI run, equivalent to: tornado-demix demix" in reports[fx.WALLET]
 
 
-# --- fix round 1 -------------------------------------------------------------
+# --- order of tied candidates ------------------------------------------------
 
 
 def test_tied_candidates_are_listed_by_withdrawals_then_address():
@@ -684,3 +684,15 @@ def test_limitations_name_the_multi_profile_match_and_the_unlisted_bridges():
     text = " ".join(honest.LIMITATIONS)
     assert "listed bridges are named only" in text and "not listed end as contracts" in text
     assert '">="' in text and "6 h" in text and "exploratory" in text
+
+
+def _flat(text):
+    return " ".join(text.split())
+
+
+def test_bridge_summary_is_the_same_in_limitations_readme_and_llms_txt():
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    assert honest.BRIDGES_SUMMARY in honest.LIMITATIONS
+    for name in ("README.md", os.path.join("docs", "llms.txt")):
+        with open(os.path.join(root, name), encoding="utf-8") as fh:
+            assert _flat(honest.BRIDGES_SUMMARY) in _flat(fh.read()), name

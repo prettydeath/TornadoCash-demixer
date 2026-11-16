@@ -5,7 +5,7 @@ The direct-link source needs the depositor's counterparties (explorer transactio
 history), which is not cached for the universe, so "early direct link + shared deposit"
 cannot be formed there. The early multi-pool profile source can be computed from the
 universe itself (same rule as tools/placebo_profile.py, 10 notes, 2 pools, 72 h), so
-"early profile + labelled shared deposit" is counted. Output: review4/universe_combos.json.
+"early profile + labelled shared deposit" is counted. Output: strong_eval/universe_combos.json.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from ens_labels import _load  # noqa: E402
 from placebo_dar_universe import WINDOW  # noqa: E402
-from review4_common import OUT, R4  # noqa: E402
+from strong_eval_common import EVAL_DIR, OUT  # noqa: E402
 
 DAY = 86400
 uni = _load("universe.json")
@@ -84,5 +84,7 @@ for r in dar:
         detail.append({"wallet": w, "target": sorted(both_t), "decoy": sorted(both_d)})
 out = dict(res)
 out["detail"] = detail
-json.dump(out, open(os.path.join(R4, "universe_combos.json"), "w", encoding="utf-8"), indent=1)
+json.dump(
+    out, open(os.path.join(EVAL_DIR, "universe_combos.json"), "w", encoding="utf-8"), indent=1
+)
 print(json.dumps(out, indent=1))

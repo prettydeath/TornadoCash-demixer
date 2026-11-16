@@ -103,7 +103,7 @@ def stub_cluster(monkeypatch):
 
 def test_cmd_demix_warns_per_unresolved_pool(monkeypatch, args, capsys):
     """A pool skipped by a failed block lookup is printed as NOT searched,
-    so it is not read as "searched and found nothing" (Finding 2)."""
+    so it is not read as "searched and found nothing"."""
     monkeypatch.setattr(cli.config, "load_api_key", lambda path: "stub-key")
     monkeypatch.setattr(cli, "EtherscanClient", lambda *a, **kw: object())
     data = {
@@ -440,6 +440,55 @@ def test_cmd_trace_prints_edges_and_terminals_and_writes_json(monkeypatch, args,
     assert "Limitations:" in out and "no PROTOCOL.lock" in out
 
 
+def _possible_trace():
+    possible = {
+        "hop": 1,
+        "from": fx.BOB,
+        "to": OTHER,
+        "tx_hash": "0xc",
+        "ts": 0,
+        "asset": "ETH",
+        "value": 3.0,
+        "attributed": 0.0,
+        "lower": 0.0,
+        "upper": 1.0,
+        "kind": "possible",
+        "history_incomplete": True,
+        "bounds_available": True,
+        "status": "possible (history incomplete)",
+    }
+    terminal = {
+        "address": fx.BOB,
+        "asset": "ETH",
+        "amount": 1.0,
+        "hop": 0,
+        "reason": "order_unknown",
+        "label": None,
+        "outflows": [{"to": OTHER, "tx_hash": "0xc", "value": 3.0}],
+    }
+    return {
+        "start": fx.BOB,
+        "amount": 1.0,
+        "asset": "ETH",
+        "edges": [],
+        "terminals": [terminal],
+        "possible": [possible],
+        "possible_more": {"count": 2, "value": 4.0},
+        "nodes_expanded": 1,
+    }
+
+
+def test_cmd_trace_prints_possible_outflows_and_unordered_transfers(monkeypatch, args, capsys):
+    _stub(monkeypatch, trace_funds=lambda *a, **kw: _possible_trace())
+    _stub(monkeypatch, load_attribution=lambda *a, **kw: {})
+    cli.cmd_trace(args(address=fx.BOB, amount=1.0, token="", start_block=5, max_hops=3, json=""))
+    out = capsys.readouterr().out
+    assert "[order_unknown]" in out and f"order against the arrival unknown: 3.0 to {OTHER}" in out
+    assert "Possible outflows (history incomplete), not followed:" in out
+    assert f"{fx.BOB} -> {OTHER}  [0.0 - 1.0] of 3.0 ETH" in out
+    assert "2 more (sent 4 in total)" in out
+
+
 def test_the_trace_subcommand_parses():
     ns = cli.build_parser().parse_args(["trace", fx.BOB, "--amount", "2"])
     assert ns.func is cli.cmd_trace and ns.max_hops == cli.MAX_HOPS
@@ -492,3 +541,18 @@ def test_cmd_demix_prints_anchored_exit_groups(monkeypatch, args, capsys):
     assert seen["known_exits"] == [fx.BOB]
     assert "2 addresses, 12 notes; anchor " + fx.BOB + " (known exit)" in out
     assert OTHER in out and fx.ALICE not in out
+
+
+def test_cmd_trace_names_an_order_unknown_inside_one_transaction(monkeypatch, args, capsys):
+    trace = _possible_trace()
+    trace["terminals"][0]["order_note"] = "order inside one transaction unknown"
+    trace["terminals"][0]["outflows"] = [
+        {"to": OTHER, "tx_hash": "0xc", "value": 3.0, "same_tx": True},
+        {"to": fx.ALICE, "tx_hash": "0xd", "value": 1.0},
+    ]
+    _stub(monkeypatch, trace_funds=lambda *a, **kw: trace)
+    _stub(monkeypatch, load_attribution=lambda *a, **kw: {})
+    cli.cmd_trace(args(address=fx.BOB, amount=1.0, token="", start_block=5, max_hops=3, json=""))
+    out = capsys.readouterr().out
+    assert f"order inside one transaction unknown: 3.0 to {OTHER} in 0xc" in out
+    assert f"order against the arrival unknown: 1.0 to {fx.ALICE} in 0xd" in out

@@ -2,7 +2,8 @@
 """Decoy rates, cluster-aware rate ratios and lead decomposition for placebo samples.
 
 For each sample directory under .cache/labels/placebo (target/ and decoy/ runs), with the
-current rule (tornado_demix.heuristics.ranked_candidates):
+rule of this version (tornado_demix.heuristics.ranked_candidates; direct links follow
+the 2.23 direct-link rule for runs cached with link records, the pre-2.23 rule for older ones (the count is printed, tools/placebo_windows.link_rule_note)):
 
 * decoy rate per wallet: share of depositors with at least one decoy lead of a kind, with a
   Clopper–Pearson 95 % upper bound (an empirical false-positive rate per investigated wallet);
@@ -36,9 +37,10 @@ from scipy.stats import beta
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from placebo_windows import narrow  # noqa: E402
+from placebo_windows import link_rule_note, narrow, print_link_rule_note  # noqa: E402
 
 from tornado_demix.heuristics import ranked_candidates  # noqa: E402
+from tornado_demix.placebo import BLIND_REASONS  # noqa: E402
 from tornado_demix.registry import record_safe as record  # noqa: E402
 
 BASE = os.path.join(
@@ -130,13 +132,14 @@ def cluster_rr(rows):
 
 
 def blind_wallets(sub):
-    """Wallets with reason no_counterparty in power/summary_<sub>.json (None: not measured)."""
+    """Blind wallets in power/summary_<sub>.json (reason no_counterparty or
+    no_qualifying_link, placebo.BLIND_REASONS; None: not measured)."""
     path = os.path.join(BASE, "power", f"summary_{sub}.json")
     if not os.path.exists(path):
         return None
     with open(path, encoding="utf-8") as fh:
         wallets = json.load(fh)["wallets"]
-    return {w.lower() for w, got in wallets.items() if got["reason"] == "no_counterparty"}
+    return {w.lower() for w, got in wallets.items() if got["reason"] in BLIND_REASONS}
 
 
 def analyse(sub, keep=None, stratum="full"):
@@ -150,7 +153,7 @@ def analyse(sub, keep=None, stratum="full"):
         fd = ft.replace(os.sep + "target" + os.sep, os.sep + "decoy" + os.sep)
         if not os.path.exists(fd):
             continue
-        # re-apply the current heuristics over the full 30-day window (as tools/review4_*.py)
+        # re-apply the current heuristics over the full 30-day window (as tools/strong_eval_*.py)
         t, d = (narrow(json.load(open(f, encoding="utf-8")), 720) for f in (ft, fd))
         if keep is not None and not keep((t.get("wallet") or d.get("wallet") or "").lower()):
             continue
@@ -236,7 +239,9 @@ def main():
         strata, open(os.path.join(out, "decoy_rates_strata.json"), "w", encoding="utf-8"), indent=1
     )
     md = [
-        "# Decoy rates (current rule)",
+        "# Decoy rates (rule of this version)",
+        "",
+        f"Direct-link rule: {link_rule_note() or 'no run scored'}.",
         "",
         "Per wallet: share of depositors with ≥ 1 decoy lead (Clopper–Pearson 95 % upper bound). Per candidate: "
         "decoy leads / distinct recipients examined in decoy windows. R: plain ratio of lead rates per withdrawal, "
@@ -267,3 +272,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    print_link_rule_note()

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Placebo false-lead rate as a function of the exit window, from cached runs.
+"""Placebo decoy rate as a function of the exit window, from cached runs.
 
 Re-scores the target and decoy runs of tools/placebo_eval.py offline for exit
 windows of N hours after each voucher's last deposit: withdrawals outside the
@@ -12,6 +12,12 @@ the full run, so a price that was too common in the 30-day window but rare in a
 narrow one is not re-credited; this affects target and decoy alike.
 
 The full window (720 h) must reproduce the cached bands; the script checks it.
+
+Direct links: a run cached by 2.23 or later carries link records (``direct_links``) and is
+scored with the 2.23 rule (real value before the first withdrawal). An older cached run has
+none, so its counterparties are scored with the pre-2.23 rule (every non-contract
+counterparty is a direct link). Every tool built on :func:`narrow` prints how many runs that
+was (:func:`print_link_rule_note`, from its main()), and the generated reports state it.
 
 Usage
 -----
@@ -38,18 +44,62 @@ from tornado_demix.heuristics import (  # noqa: E402
     apply_heuristics,
     count_is_evidence,
     ranked_candidates,
+    voucher_forward_seconds,
 )
 
 OUT = os.path.join(CACHE, "placebo")
 FAMILIES = ("linked address", "amount+timing", "gas price", "early_profile")
 
 
+# Runs re-scored by narrow() in this process: (wallet, network, deposit shift) -> True when
+# the run carries link records (2.23 rule), False when it does not (pre-2.23 rule).
+LINK_RULE: dict[tuple, bool] = {}
+
+
+def link_rule_note() -> str:
+    """ "N of M runs scored with the pre-2.23 direct-link rule ...", or "" when narrow()
+    scored no run."""
+    if not LINK_RULE:
+        return ""
+    old = sum(1 for v in LINK_RULE.values() if not v)
+    return (
+        f"{old} of {len(LINK_RULE)} runs scored with the pre-2.23 direct-link rule (cached "
+        "without link records: zero-value, dust, unlisted-token, post-withdrawal and "
+        "unknown-contract links still count as direct links in those runs)"
+    )
+
+
+def print_link_rule_note() -> None:
+    """Print :func:`link_rule_note` (called by the main() of each tool built on narrow())."""
+    note = link_rule_note()
+    if note:
+        print(f"[link rule] {note}", flush=True)
+
+
 def narrow(data, hours):
     d = copy.deepcopy(data)
     h = d.get("heuristics", {})
+    # The narrowed run read withdrawals for ``hours`` only: the early profile (72 h span)
+    # applies, or not, by that window like in a real run.
+    # Never wider than what the cached run read.
+    read = voucher_forward_seconds(d.get("params") or {}) / 3600
+    d["params"] = dict(d.get("params") or {}, exit_window_hours=min(hours, read))
+    params = d["params"]
+    has_links = "direct_links" in d
+    key = (
+        (d.get("wallet") or "").lower(),
+        params.get("network"),
+        params.get("deposit_shift_seconds") or 0,
+    )
+    LINK_RULE[key] = LINK_RULE.get(key, True) and has_links
     gas_ok = {m[3].lower() for m in h.get("gas_price_matches", [])}
     senders = {s[3].lower(): s[2] for s in h.get("linked_senders", [])}
     linked = {a for _p, a in h.get("linked_addresses", [])}
+    # With link records the full run's context links stay candidates for the rule, and a
+    # counterparty whose contract status was unknown stays unknown.
+    unknown = set(h.get("linked_unknown_contracts", []))
+    if has_links:
+        linked |= {a for _p, a, _s in h.get("linked_context", [])}
     for pool_key, res in d.get("denoms", {}).items():
         spans = [
             (v["first_ts"], v["last_ts"] + hours * 3600)
@@ -86,7 +136,7 @@ def narrow(data, hours):
         d,
         linked,
         gas_gate=None,
-        is_contract=None,
+        is_contract=(lambda a: None if a in unknown else False) if has_links else None,
         withdrawal_senders=senders,
         shared_deposits=shared,
     )
@@ -186,3 +236,4 @@ def main(argv=None):
 
 if __name__ == "__main__":
     main()
+    print_link_rule_note()

@@ -122,15 +122,33 @@ def test_only_fired_signals_are_in_the_reason():
         assert absent not in why, absent
 
 
-def test_counterparty_links_keep_the_earliest_linking_transaction():
-    wallet = fx.WALLET
-    rows = [
-        {"from": wallet, "to": SENDER, "hash": "0x2", "timeStamp": "200"},
-        {"from": SENDER, "to": wallet, "hash": "0x1", "timeStamp": "100"},
-        {"from": wallet, "to": fx.BOB, "hash": "0x3", "timeStamp": "50"},
-    ]
-    links = counterparty_links(wallet, rows, {SENDER})
-    assert links == {SENDER: {"tx": "0x1", "ts": 100}}
+def test_counterparty_links_cite_the_earliest_lead_link_with_its_value_and_position():
+    def link(tx, ts, qualifies, raw=10**18):
+        return {
+            "tx": tx,
+            "ts": ts,
+            "block": ts // 10,
+            "kind": "native",
+            "direction": "in",
+            "asset": "ETH",
+            "token": None,
+            "raw": raw,
+            "amount": raw / 10**18,
+            "qualifies": qualifies,
+            "why": None if qualifies else "zero_value",
+        }
+
+    data = fx.two_pool_result()
+    first = min(r["ts"] for r in data["denoms"]["1 ETH"]["detail"][fx.BOB])
+    data["direct_links"] = {
+        fx.BOB: [link("0x2", first - 50, True), link("0x1", first - 100, False, 0)],
+        SENDER: [link("0x3", 50, True)],
+    }
+    links = counterparty_links(data, {fx.BOB})
+    assert set(links) == {fx.BOB}
+    cited = links[fx.BOB]
+    assert cited["tx"] == "0x2" and cited["position"] == "before" and cited["links"] == 2
+    assert cited["first_withdrawal_ts"] == first
 
 
 def test_short_reason_is_one_line_and_still_concrete():

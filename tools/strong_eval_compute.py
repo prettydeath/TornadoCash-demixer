@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Offline per-depositor tallies under the current rule (v2.17) for the review4 analyses.
+"""Offline per-depositor tallies under the current rule (v2.17) for the strong_eval analyses.
 
 Re-applies the heuristics with tools/placebo_windows.narrow (no explorer calls) to every
 cached target/decoy run of the 152 old and 150 post-2022 depositors, for the 72 h and 720 h
-windows, and stores compact per-depositor tallies in .cache/labels/placebo/review4/compact.json.
+windows, and stores compact per-depositor tallies in .cache/labels/placebo/strong_eval/compact.json.
 """
 
 from __future__ import annotations
@@ -16,7 +16,8 @@ from concurrent.futures import ProcessPoolExecutor
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from review4_common import OUT, R4, _inject_shared, exposure, narrow  # noqa: E402
+from placebo_windows import print_link_rule_note  # noqa: E402
+from strong_eval_common import EVAL_DIR, OUT, _inject_shared, exposure, narrow  # noqa: E402
 
 from tornado_demix.heuristics import LEAD_SOURCE, ranked_candidates  # noqa: E402
 
@@ -79,11 +80,12 @@ def main():
         jobs += [(sname, n) for n in names]
     with ProcessPoolExecutor(max_workers=6) as ex:
         res = list(ex.map(work, jobs, chunksize=4))
-    os.makedirs(R4, exist_ok=True)
-    with open(os.path.join(R4, "compact.json"), "w", encoding="utf-8") as fh:
+    os.makedirs(EVAL_DIR, exist_ok=True)
+    with open(os.path.join(EVAL_DIR, "compact.json"), "w", encoding="utf-8") as fh:
         json.dump(res, fh)
     print("depositors", len(res))
 
 
 if __name__ == "__main__":
     main()
+    print_link_rule_note()

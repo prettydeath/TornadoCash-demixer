@@ -28,7 +28,7 @@ from collections import Counter
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from placebo_windows import OUT, narrow  # noqa: E402
+from placebo_windows import OUT, narrow, print_link_rule_note  # noqa: E402
 
 from tornado_demix.heuristics import MIN_FIELD_SIZE, count_discrimination  # noqa: E402
 
@@ -124,3 +124,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    print_link_rule_note()

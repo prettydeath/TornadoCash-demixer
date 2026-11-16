@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Placebo (target-decoy) estimate of the false-lead rate on real data.
+"""Placebo (target-decoy) estimate of the decoy-to-target rate ratio on real data (not a false-discovery rate).
 
 For a random sample of real Ethereum depositors the real pipeline runs twice:
 
@@ -12,7 +12,9 @@ For a random sample of real Ethereum depositors the real pipeline runs twice:
 Everything else is the real pipeline: the wallet's own history, counterparties,
 deposit gas prices, funders. The ratio of decoy to target leads, per band and
 per withdrawal searched, estimates the share of target leads that are chance
-(a false-discovery rate; it is not a precision estimate). Confidence
+(a decoy-to-target rate ratio; it is not a false-discovery rate or a precision estimate).
+The JSON keys ``fdr`` / ``fdr_95ci`` and the register keys ``placebo.fdr.*`` keep their
+historic names for compatibility with registered records; they hold that ratio. Confidence
 intervals come from a bootstrap over depositors.
 
 A decoy lead is a false *note* link, not necessarily a false *identity* link:
@@ -45,6 +47,7 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from cluster_diag import diagnostics  # noqa: E402
 from ens_labels import CACHE, _load, _log, api_keys  # noqa: E402
 
 import tornado_demix.demix as demix  # noqa: E402
@@ -227,6 +230,13 @@ def report(results, boot=2000, seed=7):
             f = estimate(s, upto)[0]
             if f is not None:
                 samples.append(f)
+        keep = BANDS[: BANDS.index(upto) + 1]
+        diag = diagnostics(
+            [sum(p[0]["bands"][b] for b in keep) for p in pairs],
+            [sum(p[1]["bands"][b] for b in keep) for p in pairs],
+            boot - len(samples),
+        )
+        diag["ci_assumption"] = "bootstrap over depositors; " + diag["ci_assumption"]
         samples.sort()
         ci = (
             [
@@ -241,8 +251,11 @@ def report(results, boot=2000, seed=7):
             "decoy_leads": d,
             "target_withdrawals": te,
             "decoy_withdrawals": de,
+            # legacy key name kept for registered records: the decoy-to-target rate
+            # ratio, not a false-discovery rate
             "fdr": round(fdr, 3) if fdr is not None else None,
             "fdr_95ci": ci,
+            **diag,
         }
         record(
             "placebo.fdr.up_to_" + upto,

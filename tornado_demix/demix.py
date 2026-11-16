@@ -15,11 +15,12 @@ from datetime import datetime, timezone
 
 from .constants import WEI
 from .deposit_addresses import (
+    PAID_EXCHANGE,
     depositor_deposit_addresses,
     own_token_transfers,
     shared_deposit_hits,
 )
-from .errors import ApiError, ApiKeyError, BlockLookupError
+from .errors import ApiError, ApiKeyError, BlockLookupError, PermanentApiError, ProviderBlockedError
 from .etherscan import EtherscanClient
 from .events import fetch_withdrawals
 from .groups import exit_groups
@@ -27,13 +28,17 @@ from .heuristics import (
     apply_heuristics,
     count_in_voucher_order,
     count_is_evidence,
+    first_withdrawals,
+    lead_link,
+    link_shift,
     ranked_candidates,
 )
-from .incomplete import attach, lookup_failed, mark, truncated_since
+from .incomplete import attach, lookup_failed, mark, pool_ambiguous, truncated_since
 from .networks import Network, load_networks
 from .pools import Pool
 from .root_exclusion import apply_root_check
 from .rpc import make_contract_check, make_gas_price_gate
+from .txstatus import failed as _failed
 
 # Direct counterparties whose own transactions are read for Tornado withdrawal
 # calls (linked_sender). Busier counterparties are checked first.
@@ -50,6 +55,15 @@ NATIVE_DENOM_TOLERANCE = 0.005
 
 def _log(msg):
     print(msg, file=sys.stderr, flush=True)
+
+
+def _log_deposit_addresses(rows: list[dict]) -> None:
+    """Log the depositor's deposit addresses; a counterparty that only paid a labelled
+    exchange (``paid_exchange``) is not one and is counted apart."""
+    paid = sum(1 for d in rows if d.get("kind") == PAID_EXCHANGE)
+    _log("[*] exchange deposit addresses of the depositor: {}".format(len(rows) - paid))
+    if paid:
+        _log(f"[*] counterparties that paid a labelled exchange without a sweep (context): {paid}")
 
 
 def _default_network():
@@ -92,7 +106,7 @@ def detect_deposits(
         if token_txs is None:
             token_txs = client.token_transfers(wallet) if client is not None else []
         deposits.extend(_token_deposits(wallet, token_txs, token_pools, network.routers))
-        _resolve_twin_pools(client, deposits, token_pools, errors)
+    _resolve_twin_pools(client, deposits, network.pools, errors)
 
     deposits.sort(key=lambda d: d["ts"])
     return deposits
@@ -106,7 +120,7 @@ def _native_deposits(wallet, txs, network, via_suffix=""):
     native_pools = [p for p in network.pools if p.is_native]
     found = []
     for tx in txs:
-        if tx.get("isError") == "1":
+        if _failed(tx):
             continue
         if (tx.get("from") or "").lower() != wallet:
             continue
@@ -130,18 +144,28 @@ def _native_deposits(wallet, txs, network, via_suffix=""):
                 continue
             matched = target
         else:
-            # Sent via a router: the pool can only be inferred from the value.
-            matched = None
-            for pool in native_pools:
-                if abs(value - pool.denom) <= pool.denom * NATIVE_DENOM_TOLERANCE:
-                    matched = pool
-                    break
-            if matched is None:
+            # Sent via a router: the pool can only be inferred from the value. Twin
+            # pools share a denomination (Avalanche runs two 10 and two 100 AVAX
+            # pools behind both routers): such a deposit carries ``pool_ambiguous``
+            # until :func:`_resolve_twin_pools` reads the receipt's Deposit emitter.
+            twins = sorted(
+                (
+                    p
+                    for p in native_pools
+                    if abs(value - p.denom) <= p.denom * NATIVE_DENOM_TOLERANCE
+                ),
+                key=lambda p: p.key,
+            )
+            if not twins:
                 continue
+            matched = twins[0]
 
-        found.append(
-            _deposit(matched, tx, to, ("pool" if target is not None else "router") + via_suffix)
+        deposit = _deposit(
+            matched, tx, to, ("pool" if target is not None else "router") + via_suffix
         )
+        if target is None and len(twins) > 1:
+            deposit["pool_ambiguous"] = [p.key for p in twins]
+        found.append(deposit)
     return found
 
 
@@ -194,31 +218,57 @@ def _token_deposits(wallet, token_txs, token_pools, routers=()):
     return found
 
 
-def _resolve_twin_pools(client, deposits, token_pools, errors=None):
+def _resolve_twin_pools(client, deposits, pools, errors=None):
     """Pick the right twin for router deposits from the Deposit event's emitter.
 
-    One receipt per ambiguous deposit; twins are rare (three pairs on Ethereum).
-    A deposit the receipt cannot settle keeps ``pool_ambiguous`` and the first
-    twin's key, so a report can say the pool is uncertain.
+    Native and token pools alike, on every network. One receipt per transaction hash;
+    twins are rare (three pairs on Ethereum, two on Avalanche). A deposit the receipt
+    cannot settle keeps ``pool_ambiguous`` (and the first twin's key, for display
+    only): when ``errors`` is a list, a ``pool_ambiguous`` record (see
+    :func:`tornado_demix.incomplete.pool_ambiguous`) is appended for it, and
+    :func:`cluster_vouchers` leaves it out, so it is never searched as if it were the
+    first twin. A refusal that retrying cannot fix (:class:`PermanentApiError`) is
+    recorded once and the remaining receipts are not asked for; a blocked provider is
+    raised like a rejected key.
     """
-    by_key = {p.key: p for p in token_pools}
+    by_key = {p.key: p for p in pools}
+    receipts = {}  # tx hash -> emitters (None for an unknown hash)
+    refused = False
     for deposit in deposits:
         keys = deposit.get("pool_ambiguous")
-        if not keys or client is None or not hasattr(client, "deposit_emitters"):
+        if not keys:
             continue
-        try:
-            emitters = client.deposit_emitters(deposit["hash"]) or set()
-        except ApiKeyError:
-            raise
-        except ApiError as exc:
-            if errors is not None:
-                errors.append(lookup_failed("deposit receipt (twin pool)", exc, tx=deposit["hash"]))
-            continue
-        hit = [k for k in keys if by_key[k].address in emitters]
-        if len(hit) == 1:
-            pool = by_key[hit[0]]
-            deposit.update(pool_key=pool.key, denom=pool.denom, asset=pool.asset)
-            del deposit["pool_ambiguous"]
+        tx = deposit["hash"]
+        why = "no receipt read"
+        readable = client is not None and hasattr(client, "deposit_emitters")
+        if readable and tx not in receipts:
+            if refused:
+                why = "an earlier receipt lookup was refused"
+            else:
+                try:
+                    receipts[tx] = client.deposit_emitters(tx)
+                except (ApiKeyError, ProviderBlockedError):
+                    raise
+                except ApiError as exc:
+                    if errors is not None:
+                        errors.append(lookup_failed("deposit receipt (twin pool)", exc, tx=tx))
+                    refused = isinstance(exc, PermanentApiError)
+                    why = "receipt lookup failed"
+        if readable and tx in receipts:
+            emitters = receipts[tx]
+            hit = [k for k in keys if by_key[k].address in (emitters or set())]
+            if len(hit) == 1:
+                pool = by_key[hit[0]]
+                deposit.update(pool_key=pool.key, denom=pool.denom, asset=pool.asset)
+                del deposit["pool_ambiguous"]
+                continue
+            why = (
+                "receipt of an unknown transaction"
+                if emitters is None
+                else "{} of the candidate pools emitted a Deposit".format(len(hit))
+            )
+        if errors is not None:
+            errors.append(pool_ambiguous(tx, keys, why))
 
 
 def _deposit(pool, tx, to, via):
@@ -242,14 +292,15 @@ def native_counterparty_rows(wallet: str, txs: list[dict]) -> list[dict]:
     A failed transaction (``isError`` 1 or ``txreceipt_status`` 0) moved nothing and is
     dropped in both directions. An incoming transaction with value 0 is dropped too:
     anyone can send one to any address (address poisoners do it from look-alikes) and it
-    carries nothing. An incoming transaction with value, even 1 wei, is kept: it costs
-    the sender money and needs the sender's key, so it cannot name a third party. An
-    outgoing successful transaction is kept whatever its value (the depositor signed it;
-    a call to a contract is handled by the contract check)."""
+    carries nothing. An incoming transaction with value, even 1 wei, is kept, and so is
+    an outgoing successful transaction whatever its value: both make a counterparty, but
+    since version 2.23 only a link of real value (at least ``Network.dust_floor_wei``)
+    made before the first withdrawal to the counterparty can be a lead (see
+    :func:`direct_links`); the others are context."""
     wallet = wallet.lower()
     out = []
     for tx in txs:
-        if str(tx.get("isError", "0")) == "1" or str(tx.get("txreceipt_status", "1")) == "0":
+        if _failed(tx):
             continue
         incoming = (tx.get("to") or "").lower() == wallet and (
             tx.get("from") or ""
@@ -283,26 +334,151 @@ def wallet_counterparties(wallet: str, txs: list[dict]) -> set[str]:
     return parties
 
 
-def counterparty_links(wallet: str, txs: list[dict], addresses) -> dict[str, dict]:
-    """``{address: {"tx", "ts"}}``: the earliest transaction (of the rows that make
-    direct counterparties, see :func:`wallet_counterparties`) between the wallet and each
-    of ``addresses``. The reports cite it as the transaction behind a direct link."""
+def _int_field(tx: dict, key: str) -> int:
+    try:
+        return int(str(tx.get(key) or "0").strip() or "0")
+    except ValueError:
+        return 0
+
+
+def _counterparty(wallet: str, tx: dict) -> str:
+    """The other side of a row of ``wallet`` ("" when it is not between the wallet and
+    another address)."""
+    frm = (tx.get("from") or "").lower()
+    to = (tx.get("to") or "").lower()
+    if frm == wallet and to and to != wallet:
+        return to
+    if to == wallet and frm and frm != wallet:
+        return frm
+    return ""
+
+
+def direct_links(
+    wallet: str,
+    native_rows: list[dict],
+    internal_rows: list[dict],
+    token_rows: list[dict],
+    network: Network | None = None,
+) -> dict[str, list[dict]]:
+    """``{counterparty: [link, ...]}``: every row that makes a direct counterparty, with
+    what it moved. Each link: ``tx``, ``ts``, ``block``, ``kind`` (native, internal,
+    token), ``direction`` ("out": from the depositor, "in": to it), ``asset``, ``token``
+    (contract address or None), ``raw`` (integer value), ``amount`` (in whole units, None
+    for an unlisted token whose decimals are its own claim), ``qualifies`` and ``why``.
+
+    ``qualifies`` (value that can make a lead) holds for a successful native or internal
+    transfer of at least the network's dust floor (``Network.dust_floor_wei``) and for a
+    transfer of a listed real token (``Network.real_tokens``) at or above its floor.
+    Otherwise ``why`` says what is missing: ``zero_value``, ``dust`` or
+    ``unverified_token``. Failed rows make no link at all. Whether the link came before
+    the first withdrawal is decided by :func:`tornado_demix.heuristics.apply_heuristics`,
+    which knows the withdrawals."""
+    network = network or _default_network()
     wallet = wallet.lower()
-    wanted = {a.lower() for a in addresses}
-    out: dict[str, dict] = {}
-    for tx in txs:
-        sides = {(tx.get("from") or "").lower(), (tx.get("to") or "").lower()}
-        if wallet not in sides or not tx.get("hash"):
-            continue
-        for addr in sides & wanted:
-            if addr == wallet:
+    floor = network.dust_floor_wei
+    tokens = network.real_tokens
+    out: dict[str, list[dict]] = defaultdict(list)
+
+    def add(tx, kind, asset, token, raw, amount, qualifies, why, decimals=None, floor_raw=None):
+        frm = (tx.get("from") or "").lower()
+        to = (tx.get("to") or "").lower()
+        if frm == wallet and to and to != wallet:
+            other, direction = to, "out"
+        elif to == wallet and frm and frm != wallet:
+            other, direction = frm, "in"
+        else:
+            return
+        out[other].append(
+            {
+                "tx": tx.get("hash") or "",
+                "ts": _int_field(tx, "timeStamp"),
+                "block": _int_field(tx, "blockNumber"),
+                "kind": kind,
+                "direction": direction,
+                "asset": asset,
+                "token": token,
+                "raw": raw,
+                "amount": amount,
+                "decimals": decimals,
+                "floor_raw": floor_raw,
+                "qualifies": qualifies,
+                "why": why,
+            }
+        )
+
+    for kind, rows in (("native", native_rows), ("internal", internal_rows)):
+        for tx in rows:
+            if _failed(tx):
                 continue
-            try:
-                ts = int(tx.get("timeStamp") or 0)
-            except (TypeError, ValueError):
-                ts = 0
-            if addr not in out or ts < out[addr]["ts"]:
-                out[addr] = {"tx": tx["hash"], "ts": ts}
+            raw = _int_value(tx)
+            why = None if raw >= floor else ("zero_value" if raw <= 0 else "dust")
+            add(tx, kind, network.currency, None, raw, raw / WEI, why is None, why, 18, floor)
+    for tx in token_rows:
+        if _failed(tx):
+            continue
+        token = (tx.get("contractAddress") or "").lower()
+        raw = _int_value(tx)
+        info = tokens.get(token)
+        if info is None:
+            # the symbol is whatever the token contract says: kept apart, never as the asset
+            claimed = str(tx.get("tokenSymbol") or "").strip()[:16]
+            add(tx, "token", "unverified token", token, raw, None, False, "unverified_token")
+            if out.get(_counterparty(wallet, tx)):
+                out[_counterparty(wallet, tx)][-1]["claimed_symbol"] = claimed
+            continue
+        why = None if raw >= info["min_raw"] else ("zero_value" if raw <= 0 else "dust")
+        amount = raw / 10 ** info["decimals"]
+        add(
+            tx,
+            "token",
+            info["symbol"],
+            token,
+            raw,
+            amount,
+            why is None,
+            why,
+            info["decimals"],
+            info["min_raw"],
+        )
+    return dict(out)
+
+
+def counterparty_links(data: dict, addresses) -> dict[str, dict]:
+    """``{address: link}``: the transaction the reports cite behind each direct link of
+    ``addresses``, from ``data["direct_links"]`` (:func:`direct_links`). The cited link is
+    the earliest one that qualifies and came before the first withdrawal to that address
+    (a lead's link); without one, the earliest qualifying link; without one, the
+    earliest link. Each cited link adds ``position`` ("before", "after" or "unknown"
+    relative to the first withdrawal to the address; "unknown" also for a link without a
+    time), ``first_withdrawal_ts``, ``lead_seconds`` (how long before that withdrawal,
+    for "before") and ``links`` (how many linking rows there are). In a decoy run the
+    link is compared at its time minus the deposit shift (``heuristics.link_shift``);
+    ``ts`` stays the real time."""
+    links_by = data.get("direct_links") or {}
+    firsts = first_withdrawals(data)
+    shift = link_shift(data)
+    out: dict[str, dict] = {}
+    for addr in {a.lower() for a in addresses}:
+        links = links_by.get(addr) or []
+        if not links:
+            continue
+        first = firsts.get(addr)
+        cited = lead_link(links, first, shift)
+        if cited is None:
+            real = [x for x in links if x["qualifies"]]
+            cited = min(real or links, key=lambda x: (x["ts"], x["tx"]))
+        at = cited["ts"] - shift
+        if first is None or cited["ts"] <= 0:
+            position = "unknown"
+        else:
+            position = "before" if at < first else "after"
+        out[addr] = dict(
+            cited,
+            position=position,
+            first_withdrawal_ts=first,
+            lead_seconds=first - at if position == "before" else None,
+            links=len(links),
+        )
     return out
 
 
@@ -315,7 +491,8 @@ def withdrawal_senders(
     and only within the searched block ranges, so the cost stays bounded. A counterparty
     whose busy check or history read fails is skipped, not fatal; when ``errors`` is a
     list the failure is appended to it (:mod:`tornado_demix.incomplete`), so "no linked
-    sender" is never reported for a counterparty that was not read.
+    sender" is never reported for a counterparty that was not read. Failed rows and
+    zero-value incoming rows (spam) do not make a counterparty here.
     """
     wallet = wallet.lower()
     hashes = {
@@ -343,6 +520,12 @@ def withdrawal_senders(
     tornado = {p.address for p in network.pools} | set(network.routers)
     seen = Counter()
     for tx in txs:
+        # A failed row moved nothing, and a zero-value incoming row costs a spammer
+        # nothing: neither may take one of the MAX_SENDER_COUNTERPARTIES slots.
+        if _failed(tx):
+            continue
+        if (tx.get("to") or "").lower() == wallet and _int_value(tx) <= 0:
+            continue
         for side in ("from", "to"):
             addr = (tx.get(side) or "").lower()
             if addr and addr != wallet and addr not in tornado:
@@ -398,6 +581,8 @@ def withdrawal_senders(
             continue
         for tx in rows:
             h = (tx.get("hash") or "").lower()
+            if _failed(tx):
+                continue
             if (tx.get("from") or "").lower() == addr and h in hashes:
                 found[h] = addr
     return found
@@ -413,6 +598,10 @@ def cluster_vouchers(deposits, gap_hours=24, max_span_hours=None):
     """
     by_pool = defaultdict(list)
     for deposit in deposits:
+        if deposit.get("pool_ambiguous"):
+            # Pool uncertain among twins: searching twins[0] could look in the wrong
+            # pool. The deposit stays listed and is recorded (incomplete.pool_ambiguous).
+            continue
         by_pool[deposit["pool_key"]].append(deposit)
 
     vouchers = []
@@ -502,7 +691,7 @@ def immediate_funders(wallet, txs, before_ts, pool_addresses=()):
         sender = (tx.get("from") or "").lower()
         if (
             (tx.get("to") or "").lower() != wallet
-            or tx.get("isError") == "1"
+            or _failed(tx)
             or int(tx.get("value") or 0) <= 0
             or (tx.get("input") or "0x") not in ("", "0x")
             or sender in skip
@@ -642,7 +831,7 @@ def analyze_denom(
     for item in internal:
         if (item.get("from") or "").lower() != pool.address:
             continue
-        if item.get("isError") == "1":
+        if _failed(item):
             continue
         to = (item.get("to") or "").lower()
         value = pool.to_units(int(item.get("value", "0")))
@@ -856,6 +1045,7 @@ def run_demix(
     # Failed lookups and cut-off lists of THIS run (see tornado_demix.incomplete).
     errors: list[dict] = []
     start_mark = mark(client)
+    read_ts = int(time.time())  # what the windows were clamped to (params.read_ts)
 
     all_txs = client.outgoing_txs(wallet)  # txlist returns both directions
     internal_txs = client.internal_txs(wallet)
@@ -869,12 +1059,16 @@ def run_demix(
     # spoofed, zero-value or fake-token Transfer can name any address at any time
     # (see deposit_addresses.own_token_transfers); a 0-value or failed native tx
     # carries nothing either (native_counterparty_rows).
-    link_rows = (
-        native_counterparty_rows(wallet, all_txs)
-        + internal_txs
-        + own_token_transfers(wallet, all_txs, token_txs)
-    )
-    counterparties = wallet_counterparties(wallet, link_rows)
+    native_rows = native_counterparty_rows(wallet, all_txs)
+    internal_rows = [tx for tx in internal_txs if not _failed(tx)]
+    token_rows = own_token_transfers(wallet, all_txs, token_txs)
+    # What each link moved, and when: a lead needs real value before the first
+    # withdrawal (heuristics.apply_heuristics reads result["direct_links"]). The direct
+    # counterparties are exactly the addresses with a link record: a row in which the
+    # depositor is neither sender nor recipient (a contract-creation internal row) links
+    # nobody.
+    links = direct_links(wallet, native_rows, internal_rows, token_rows, network)
+    counterparties = set(links)
     deposits = detect_deposits(
         client,
         wallet,
@@ -956,6 +1150,7 @@ def run_demix(
         "wallet": wallet,
         # Read by the power check (tornado_demix.power) to plant a link in a decoy run.
         "counterparty_addresses": sorted(counterparties),
+        "direct_links": links,
         "funders": immediate_funders(
             wallet, all_txs, min(d["ts"] for d in deposits), [p.address for p in network.pools]
         ),
@@ -967,6 +1162,7 @@ def run_demix(
             "network": network.name,
             "currency": network.currency,
             "exit_window_hours": exit_window_hours,
+            "read_ts": read_ts,
             "deposit_shift_seconds": deposit_shift_seconds,
             # Count matches are checked against each voucher's own window.
             "voucher_order": True,
@@ -991,8 +1187,9 @@ def run_demix(
             exclude={p.address for p in network.pools} | set(network.routers),
             errors=errors,
             gas_fund_wei=network.gas_fund_wei,
+            floors=network.sender_floors,
         )
-        _log("[*] exchange deposit addresses of the depositor: {}".format(len(deposit_rows)))
+        _log_deposit_addresses(deposit_rows)
         recipients = {addr for res in results.values() for addr in res["detail"]}
         deposit_hits = shared_deposit_hits(deposit_rows, recipients, wallet)
         # Deposit addresses found by activity alone (no exchange label on the hot
@@ -1015,18 +1212,37 @@ def run_demix(
         ),
         "shared_deposits": deposit_hits,
     }
+    # The cut-off lists so far: the early profile needs to know whether a pool's withdrawals are whole.
+    result["truncated"] = truncated_since(client, start_mark)
     apply_heuristics(result, counterparties, **heuristics_args)
-    # The transaction behind each direct link the evidence cites: linked candidates
-    # and the depositor-side senders of withdrawals.
-    h = result["heuristics"]
-    cited = {a for _pk, a in h["linked_addresses"]} | {s for _p, _a, s, _t in h["linked_senders"]}
-    result["counterparty_links"] = counterparty_links(wallet, link_rows, cited)
+
+    def cite():
+        # The transaction behind each direct link the evidence cites: linked and
+        # context-linked candidates and the depositor-side senders of withdrawals.
+        h = result["heuristics"]
+        cited = (
+            {a for _pk, a in h["linked_addresses"]}
+            | {a for _pk, a, _s in h["linked_context"]}
+            | {s for _p, _a, s, _t in h["linked_senders"]}
+        )
+        result["counterparty_links"] = counterparty_links(result, cited)
+
+    cite()
 
     def refresh():
         score_collected(result, counterparties, heuristics_args)
+        cite()
 
     if root_check:
         apply_root_check(client, result, network, refresh, root_cache_dir, errors=errors)
+    # A counterparty whose contract status is unknown never makes a lead; when the check
+    # itself recorded no failure (no RPC endpoint), the unknown status is recorded here.
+    recorded = {e.get("address") for e in getattr(is_contract, "errors", [])}
+    for addr in result["heuristics"].get("linked_unknown_contracts", []):
+        if addr not in recorded:
+            errors.append(
+                lookup_failed("contract check (eth_getCode)", "no RPC endpoint", address=addr)
+            )
     result["deposit_addresses"] = deposit_rows
     result["deposit_context_hits"] = context_hits
     result["fresh_addresses"] = fresh_addresses(client, result, errors=errors)

@@ -47,3 +47,69 @@ class _Client:
 
 def test_fetch_deposit_index_sorted_by_leaf():
     assert fetch_deposit_index(_Client(), "0xp", 0, 300) == [(100, 0, "0xa"), (200, 4, "0xe")]
+
+
+# --- ROOT_HISTORY_SIZE per pool, read from the contract (no hard-coded 100/30) ---------
+
+
+class _Pool:
+    def __init__(self, key, address):
+        self.key, self.address = key, address
+
+
+class _HistoryClient:
+    chain_id = 1
+
+    def __init__(self, sizes):
+        self.sizes = sizes
+        self.calls = []
+
+    def eth_call(self, to, data):
+        self.calls.append(to)
+        size = self.sizes.get(to)
+        if size is None:
+            from tornado_demix.errors import ApiError
+
+            raise ApiError("not answered")
+        return "0x" + format(size, "064x")
+
+
+def test_pool_histories_reads_each_pool_and_caches(tmp_path):
+    from root_ceiling import pool_histories
+
+    pools = [_Pool("0.1 ETH", "0x" + "01" * 20), _Pool("100 ETH", "0x" + "02" * 20)]
+    client = _HistoryClient({pools[0].address: 100, pools[1].address: 30})
+    got = pool_histories(client, pools, str(tmp_path))
+    assert got == {"0.1 ETH": 100, "100 ETH": 30}
+    again = _HistoryClient({})
+    assert pool_histories(again, pools, str(tmp_path)) == got and again.calls == []
+
+
+def test_pool_histories_unreadable_pool_is_none(tmp_path):
+    from root_ceiling import pool_histories
+
+    pools = [_Pool("1 ETH", "0x" + "03" * 20)]
+    assert pool_histories(_HistoryClient({}), pools, str(tmp_path)) == {"1 ETH": None}
+
+
+def test_pool_rows_use_each_pool_history_and_skip_unread_pools():
+    from root_ceiling import pool_rows
+
+    per_pool = {
+        "a": {"windows": [("w", 0, 300)], "deposits": {"w": [(100, "0xb")]}},
+        "b": {"windows": [("w", 0, 300)], "deposits": {"w": [(100, "0xb")]}},
+        "c": {"windows": [("w", 0, 300)], "deposits": {"w": [(100, "0xb")]}},
+    }
+    loaded = {k: (INDEX, [110]) for k in per_pool}
+    # leaf 1, withdrawal at block 110 (4 leaves): history 5 can exclude, 2 cannot
+    rows, missing, unchecked = pool_rows(["a", "b", "c"], loaded, per_pool, {"a": 5, "b": 2})
+    assert rows["a"]["excludable"] == 1 and rows["a"]["history"] == 5
+    assert rows["b"]["excludable"] == 0 and rows["b"]["history"] == 2
+    assert "c" not in rows and unchecked == ["c"] and missing == 0
+
+
+def test_ceiling_tool_has_no_global_history_argument():
+    import root_ceiling
+
+    src = open(root_ceiling.__file__, encoding="utf-8").read()
+    assert "--history" not in src and "= 100;" not in src

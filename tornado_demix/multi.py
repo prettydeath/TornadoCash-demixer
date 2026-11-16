@@ -15,6 +15,7 @@ artefact of the shared window, not evidence of a link.
 
 from __future__ import annotations
 
+import time
 from collections import Counter, defaultdict
 
 from .demix import (
@@ -480,6 +481,7 @@ def group_view(
     is listed in ``unresolved`` and its failure in ``errors``; it is not fatal.
     """
     start_mark = mark(client)
+    read_ts = int(time.time())  # what the windows were clamped to (params.read_ts)
     errors: list[dict] = []
     wallets = sorted(results)
     deposits = sorted(
@@ -498,6 +500,7 @@ def group_view(
         "network": network.name,
         "currency": network.currency,
         "exit_window_hours": exit_window_hours,
+        "read_ts": read_ts,
         "voucher_order": True,
         "group": True,
     }
@@ -526,7 +529,7 @@ def group_view(
     spans = {}
     for pool_key in sorted({v["pool_key"] for v in vouchers}):
         pool = network.by_key[pool_key]
-        own = [d for d in deposits if d["pool_key"] == pool_key]
+        own = [d for d in deposits if d["pool_key"] == pool_key and "pool_ambiguous" not in d]
         # One window per pool: a single voucher-shaped span over every merged note.
         span = {
             "pool_key": pool_key,
@@ -566,10 +569,20 @@ def group_view(
     out["profile"] = wallet_profile(out)
 
     counterparties = set(wallets)
+    # What each member's links moved and when: the same lead rule as a single wallet
+    # (a member itself is the actor, see apply_heuristics).
+    merged_links: dict[str, list[dict]] = {}
     for data in results.values():
         counterparties.update(data.get("counterparty_addresses", []))
+        for addr, links in (data.get("direct_links") or {}).items():
+            merged_links.setdefault(addr, []).extend(links)
+    # The 2.23 link rule needs every member's records; a group with an older member
+    # (no records) is scored with the pre-2.23 rule as a whole, never per address.
+    if results and all("direct_links" in data for data in results.values()):
+        out["direct_links"] = merged_links
     is_contract = make_contract_check(network.rpc_url)
     gas_gate = make_gas_price_gate(network.rpc_url)
+    out["truncated"] = truncated_since(client, start_mark)
     apply_heuristics(out, counterparties, gas_gate=gas_gate, is_contract=is_contract)
     errors += getattr(is_contract, "errors", [])
     errors += getattr(gas_gate, "errors", [])

@@ -34,6 +34,11 @@ def _worker(path, n):
         reg.record("conc.t", THIS, {"i": i}, {"x": i}, path=path, lock_path=path + ".nolock")
 
 
+def _module_lines():
+    """Lock lines for the library modules loaded now (what a record will carry)."""
+    return "".join(f"{h}  {m}  [module]\n" for m, h in reg.library_hashes().items())
+
+
 @pytest.fixture
 def path(tmp_path):
     return str(tmp_path / "reg" / "tests.jsonl")  # directory does not exist yet
@@ -87,7 +92,7 @@ def test_status_without_and_with_lock(path, tmp_path):
 
     assert go()["status"] == "exploratory"  # no lock file
     digest = go()["script_sha256"]
-    lock.write_text(f"# locked\n{digest}  s.py\n", encoding="utf-8")
+    lock.write_text(f"# locked\n{digest}  s.py\n" + _module_lines(), encoding="utf-8")
     assert go()["status"] == "confirmatory"
     script.write_text("print(2)\n", encoding="utf-8")
     assert go()["status"] == "exploratory"
@@ -155,6 +160,9 @@ def test_lock_file_creation(tmp_path):
     digest = reg.sha256_file(str(script))
     assert digest in out.read_text(encoding="utf-8")
     assert reg.locked_hashes(str(out)) == {digest}
+    # the library modules are locked too, marked as modules (not confirmatory scripts)
+    modules = reg.locked_module_hashes(str(out))
+    assert reg.sha256_file(reg.__file__) in modules and digest not in modules
 
 
 def test_env_var_overrides_default(tmp_path, monkeypatch):
@@ -168,7 +176,7 @@ def _locked(tmp_path, path):
     """A lock listing THIS script, next to a register at <tmp>/proj/.cache/registry/."""
     lock = tmp_path / "proj" / "docs" / "PROTOCOL.lock"
     lock.parent.mkdir(parents=True)
-    lock.write_text(f"{reg.sha256_file(THIS)}  s.py\n", encoding="utf-8")
+    lock.write_text(f"{reg.sha256_file(THIS)}  s.py\n" + _module_lines(), encoding="utf-8")
     return str(lock)
 
 
@@ -248,3 +256,135 @@ def test_report_checks_the_witness_file(path, tmp_path, capsys):
         fh.write(b"\n".join(lines[:1]) + b"\n")
     assert registry_report.main([path, "--check-witness", str(wfile)]) == 1
     assert "BROKEN" in capsys.readouterr().out
+
+
+# --- library modules in each record; external witness -------------------------------
+
+
+def test_record_carries_the_hashes_of_the_library_modules_in_use(path):
+    import tornado_demix.heuristics  # noqa: F401  (loaded, so it is in use)
+
+    rec = _rec(path, 0)
+    mods = rec["modules"]
+    assert mods["tornado_demix/registry.py"] == reg.sha256_file(reg.__file__)
+    assert "tornado_demix/heuristics.py" in mods
+    assert all(k.startswith("tornado_demix/") for k in mods)
+    assert reg.verify_chain(path) == []
+
+
+def test_changed_library_module_is_detected_in_the_record(path):
+    rec = _rec(path, 0)
+    lines = _lines(path)
+    forged = lines[0].replace(rec["modules"]["tornado_demix/registry.py"].encode(), b"0" * 64)
+    with open(path, "wb") as fh:
+        fh.write(forged + b"\n")
+    assert reg.verify_chain(path) == [0]
+
+
+def test_confirmatory_needs_the_library_modules_locked_too(path, tmp_path):
+    script = tmp_path / "s.py"
+    script.write_text("print(1)\n", encoding="utf-8")
+    lock = tmp_path / "PROTOCOL.lock"
+    mods = {"tornado_demix/a.py": "a" * 64, "tornado_demix/b.py": "b" * 64}
+
+    def go():
+        return reg.record("a.b", str(script), {}, {}, path=path, lock_path=str(lock), modules=mods)
+
+    digest = reg.sha256_file(str(script))
+    line_a = f"{'a' * 64}  tornado_demix/a.py  [module]\n"
+    line_b = f"{'b' * 64}  tornado_demix/b.py  [module]\n"
+    lock.write_text(f"{digest}  s.py\n", encoding="utf-8")
+    assert go()["status"] == "exploratory"  # library not locked
+    lock.write_text(f"{digest}  s.py\n" + line_a, encoding="utf-8")
+    assert go()["status"] == "exploratory"  # one module changed or not locked
+    lock.write_text(f"{digest}  s.py\n" + line_a + line_b, encoding="utf-8")
+    assert go()["status"] == "confirmatory"
+    # a module hash alone never makes its file a confirmatory script
+    assert "a" * 64 not in reg.locked_hashes(str(lock))
+
+
+def _rewrite_from_genesis(path, n):
+    """Rewrite the whole chain with other values, every hash recomputed."""
+    os.remove(path)
+    for i in range(n):
+        reg.record(f"fam.t{i}", THIS, {"i": i + 100}, {"r": -1}, path=path, lock_path=path + ".x")
+
+
+def test_full_rewrite_is_only_detected_with_an_external_witness(path, tmp_path):
+    for i in range(3):
+        _rec(path, i)
+    w = reg.witness(path)
+    wfile = tmp_path / "published" / "witness.json"
+    wfile.parent.mkdir()
+    wfile.write_text(json.dumps(w), encoding="utf-8")
+    _rewrite_from_genesis(path, 3)
+    assert reg.verify_chain(path) == []  # the file alone cannot show it
+    assert reg.verify_chain(path, witness=w) == [2]
+    assert reg.verify_chain(path, witness=str(wfile)) == [2]  # a witness file path
+    assert reg.verify_chain(path, witness=[str(wfile), reg.witness(path)]) == [2]
+
+
+def test_verify_chain_with_several_witnesses_checks_each(path):
+    _rec(path, 0)
+    w0 = reg.witness(path)
+    _rec(path, 1)
+    w1 = reg.witness(path)
+    assert reg.verify_chain(path, witness=[w0, w1]) == []
+    assert reg.verify_chain(path, witness=[w0, {"seq": 1, "hash": "f" * 64}]) == [1]
+
+
+def test_report_accepts_several_witness_files(path, tmp_path, capsys):
+    _rec(path, 0)
+    a = tmp_path / "a.json"
+    a.write_text(json.dumps(reg.witness(path)), encoding="utf-8")
+    _rec(path, 1)
+    b = tmp_path / "b.json"
+    b.write_text(json.dumps(reg.witness(path)), encoding="utf-8")
+    assert registry_report.main([path, "--check-witness", str(a), str(b)]) == 0
+    _rewrite_from_genesis(path, 2)
+    assert registry_report.main([path, "--check-witness", str(a), str(b)]) == 1
+
+
+def test_report_docs_explain_the_external_anchor():
+    doc = registry_report.__doc__
+    assert "OpenTimestamps" in doc and "full rewrite" in doc
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [{}, {"hash": "a" * 64}, {"seq": "2", "hash": "a" * 64}, {"seq": 1}, {"seq": True, "hash": ""}],
+)
+def test_a_witness_without_seq_and_hash_is_an_error_not_intact(path, bad):
+    _rec(path, 0)
+    with pytest.raises(ValueError):
+        reg.verify_chain(path, witness=bad)
+
+
+def test_report_exits_2_on_an_unusable_witness_file(path, tmp_path, capsys):
+    _rec(path, 0)
+    empty = tmp_path / "empty.json"
+    empty.write_text("", encoding="utf-8")
+    nohash = tmp_path / "nohash.json"
+    nohash.write_text("{}", encoding="utf-8")
+    for f in (empty, nohash, tmp_path / "missing.json"):
+        assert registry_report.main([path, "--check-witness", str(f)]) == 2
+        out = capsys.readouterr()
+        assert "intact" not in out.out
+
+
+def test_the_witness_of_an_empty_register_is_accepted(path):
+    assert reg.verify_chain(path, witness=reg.witness(path)) == []
+
+
+def test_unlisted_reports_a_confirmatory_record_whose_modules_left_the_lock(path, tmp_path):
+    script = tmp_path / "s.py"
+    script.write_text("print(1)\n", encoding="utf-8")
+    lock = tmp_path / "PROTOCOL.lock"
+    mods = {"tornado_demix/a.py": "a" * 64}
+    digest = reg.sha256_file(str(script))
+    lock.write_text(f"{digest}  s.py\n{'a' * 64}  tornado_demix/a.py  [module]\n", "utf-8")
+    rec = reg.record("a.b", str(script), {}, {}, path=path, lock_path=str(lock), modules=mods)
+    assert rec["status"] == "confirmatory"
+    assert reg.unlisted(path, str(lock)) == []
+    lock.write_text(f"{digest}  s.py\n", "utf-8")  # module line removed
+    assert reg.unlisted(path, str(lock)) == [0]

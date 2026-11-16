@@ -312,3 +312,97 @@ def test_only_the_sponsored_transactions_actually_read_are_taken_as_own():
     info = classify_deposit_address(client, X, eoa, LAB, lambda a: False)
     assert info["kind"] == "exchange_deposit" and info["sweep_targets"] == [HOT]
     assert len(client.info_calls) == 3
+
+
+# --- dust floors: dust that is swept does not make a sender ----------------------------
+
+REAL_USDC = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"  # USDC on Ethereum (Circle docs)
+SPAMMER = "0x" + "6" * 40
+
+
+def _native_sweeps(dust_value, n=3):
+    """X receives 1 ETH from W and sweeps it (native); SPAMMER sends ``dust_value`` first."""
+    txl = [tx(SPAMMER, X, dust_value, 9_000, h="0xdust")]
+    for i in range(n):
+        t = 10_000 + i * 100_000
+        txl.append(tx(W, X, 10**18, t, h=f"0xin{i:04d}"))
+        txl.append(tx(X, HOT, 10**18 - 10**15, t + 600, h=f"0xsw{i:04d}"))
+    return {("txlist", X): txl, ("tokentx", X): []}
+
+
+@pytest.mark.parametrize("value", [1, 10**15 - 1])
+def test_native_dust_below_the_floor_is_not_a_sender(value):
+    rows = da.transfers(X, _native_sweeps(value)[("txlist", X)], [])
+    assert da.swept_senders(X, rows) == {W}
+    info = classify_deposit_address(Client(_native_sweeps(value)), X, eoa, LAB, lambda a: False)
+    assert info is not None and info["senders"] == [W]
+
+
+def test_native_value_at_the_floor_is_a_sender():
+    rows = da.transfers(X, _native_sweeps(10**15)[("txlist", X)], [])
+    assert da.swept_senders(X, rows) == {W, SPAMMER}
+
+
+def test_the_network_floor_applies_polygon_dust_is_not_a_sender():
+    from tornado_demix.characterize import run_classify
+    from tornado_demix.networks import load_networks
+
+    polygon = load_networks()["polygon"]
+    lists = _native_sweeps(10**18)  # 1 POL: real on Ethereum's scale, dust on Polygon's
+    for (_action, _addr), rows in lists.items():
+        for r in rows:
+            if r["from"] == W:
+                r["value"] = str(100 * 10**18)
+            elif r["from"] == X:
+                r["value"] = str(100 * 10**18 - 10**15)
+    rows = da.transfers(X, lists[("txlist", X)], [])
+    assert da.swept_senders(X, rows) == {W, SPAMMER}  # Ethereum floors by default
+    assert da.swept_senders(X, rows, polygon.sender_floors) == {W}
+    info = run_classify(Client(lists), X, polygon, LAB, is_contract=eoa)
+    assert info["senders"] == [W]
+
+
+def test_listed_token_dust_is_not_a_sender_and_an_unlisted_token_has_no_floor():
+    lists = deposit()
+    for r in lists[("tokentx", X)]:
+        r["contractAddress"] = REAL_USDC
+    for r in lists[("txlist", X)]:
+        r["to"] = REAL_USDC
+    lists[("tokentx", X)].append(tok(SPAMMER, X, 10**6, 5_000, h="0xdust", contract=REAL_USDC))
+    info = classify_deposit_address(Client(lists), X, eoa, LAB, lambda a: False)
+    assert info["senders"] == [W]  # 1 USDC is below the 2 USDC floor
+    lists[("tokentx", X)][-1]["value"] = str(2 * 10**6)
+    info = classify_deposit_address(Client(lists), X, eoa, LAB, lambda a: False)
+    assert info["senders"] == sorted([W, SPAMMER])
+
+
+def test_depositor_scan_passes_the_network_floors():
+    from tornado_demix.networks import load_networks
+
+    polygon = load_networks()["polygon"]
+    lists = _native_sweeps(10**18)
+    for r in lists[("txlist", X)]:
+        if r["from"] == W:
+            r["value"] = str(100 * 10**18)
+        elif r["from"] == X:
+            r["value"] = str(100 * 10**18 - 10**15)
+    found = depositor_deposit_addresses(
+        Client(lists), W, [tx(W, X)], eoa, LAB, floors=polygon.sender_floors
+    )
+    assert found and found[0]["senders"] == [W]
+
+
+def test_a_sponsored_paid_exchange_result_does_not_carry_sponsored_and_wording_is_exact():
+    tkl, infos = [], {}
+    for i in range(4):
+        t = 10_000 + i * 100_000
+        tkl.append(tok(W, X, 10**8, t, h=f"0xin{i}"))
+        tkl.append(tok(X, HOT, 10**5, t + 600, h=f"0xsp{i}"))  # a sliver, not a sweep
+        infos[f"0xsp{i}"] = {"from": SPONSOR, "to": X}
+    client = Client({("txlist", X): [], ("tokentx", X): tkl}, infos=infos)
+    info = classify_deposit_address(client, X, eoa, LAB, lambda a: False)
+    assert info is not None and info["kind"] == "paid_exchange"
+    assert "sponsored" not in info
+    text = da.check_text(info)
+    assert "did not sweep" not in text
+    assert "did not forward or sweep the value it received" in text

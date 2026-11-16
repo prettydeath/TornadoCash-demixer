@@ -5,16 +5,22 @@ run (exploratory sweeps included) is known and can feed a multiple-testing corre
 Records are chained: ``prev_hash`` is the SHA-256 of the previous line's exact bytes and
 ``hash`` covers the record itself, so an edited or deleted line is detected by
 :func:`verify_chain`. A truncated tail is not detectable from the file alone; keep a
-:func:`witness` (last seq + hash) somewhere else and pass it to :func:`verify_chain`.
+:func:`witness` (last seq + hash) somewhere else and pass it to :func:`verify_chain`. A full
+rewrite from the genesis line (every hash recomputed) is not detectable from the file either:
+only an external anchor shows it, a witness published where the writer cannot change it
+(a release asset, a Zenodo record, an OpenTimestamps proof of the witness file).
 A confirmatory record whose script hash the current lock does not list is reported by
 :func:`unlisted`, not as a broken chain (the lock should only ever be appended to). A last
 line that was cut off mid-write (no newline) is reported by :func:`partial_tail`; it does
 not stop later appends.
 
-A record is ``confirmatory`` only when the protocol lock lists the SHA-256 of the script that
-produced it; with no lock file everything is ``exploratory``. The lock is looked up from the
-register's location (:func:`lock_for`), not from the working directory. The status depends only on the script file's hash:
-changes in library code the script calls are not covered. Stdlib only; the append is
+Each record also carries ``modules``: the SHA-256 of every ``tornado_demix`` module loaded
+when it was written (the library code the script ran with). A record is ``confirmatory`` only
+when the protocol lock lists the SHA-256 of the script that produced it and every one of those
+module hashes (module lines are tagged ``[module]`` and never make a file a confirmatory
+script); with no lock file everything is ``exploratory``. The lock is looked up from the
+register's location (:func:`lock_for`), not from the working directory. The lock is a plain
+file: anyone with write access can change it, so it too needs an external anchor. Stdlib only; the append is
 guarded by an exclusive lock on a sidecar file (msvcrt on Windows, fcntl elsewhere).
 """
 
@@ -96,17 +102,62 @@ def sha256_file(path):
         return _sha(fh.read())
 
 
-def locked_hashes(lock_path):
-    """Script hashes listed in a protocol lock (``sha256  path`` per line, ``#`` comments)."""
+MODULE_TAG = "[module]"
+
+
+def _lock_lines(lock_path):
+    """``(sha256, is_module)`` per line of a protocol lock (``#`` starts a comment)."""
     if not lock_path or not os.path.isfile(lock_path):
-        return set()
-    out = set()
+        return []
+    out = []
     with open(lock_path, encoding="utf-8") as fh:
         for line in fh:
-            line = line.split("#", 1)[0].strip()
-            if line:
-                out.add(line.split()[0].lower())
+            parts = line.split("#", 1)[0].split()
+            if parts:
+                out.append((parts[0].lower(), MODULE_TAG in parts[1:]))
     return out
+
+
+def locked_hashes(lock_path):
+    """Script hashes listed in a protocol lock (``sha256  path`` per line, ``#`` comments)."""
+    return {h for h, module in _lock_lines(lock_path) if not module}
+
+
+def locked_module_hashes(lock_path):
+    """Library module hashes listed in a protocol lock (lines tagged ``[module]``)."""
+    return {h for h, module in _lock_lines(lock_path) if module}
+
+
+def _package_dir():
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def library_hashes():
+    """``{"tornado_demix/<file>.py": sha256}`` of every package module loaded now."""
+    pkg = _package_dir()
+    root = os.path.dirname(pkg)
+    out = {}
+    for mod in list(sys.modules.values()):
+        f = getattr(mod, "__file__", None)
+        if not f or not f.endswith(".py"):
+            continue
+        f = os.path.abspath(f)
+        if not f.startswith(pkg + os.sep):
+            continue
+        try:
+            out[os.path.relpath(f, root).replace(os.sep, "/")] = sha256_file(f)
+        except OSError:
+            continue
+    return dict(sorted(out.items()))
+
+
+def package_files():
+    """Every ``.py`` file of the package, for a protocol lock."""
+    pkg = _package_dir()
+    out = []
+    for folder, _dirs, files in os.walk(pkg):
+        out += [os.path.join(folder, f) for f in files if f.endswith(".py")]
+    return sorted(out)
 
 
 def _last_line(fh):
@@ -147,15 +198,22 @@ def _rel(script_path):
     return rel.replace(os.sep, "/")
 
 
-def record(test_id, script_path, params, result, *, path=None, lock_path=None):
-    """Append one test result to the register and return the record."""
+def record(test_id, script_path, params, result, *, path=None, lock_path=None, modules=None):
+    """Append one test result to the register and return the record.
+
+    ``modules`` ({path: sha256}) defaults to :func:`library_hashes`.
+    """
     path = _resolve(path)
     try:
         digest = sha256_file(script_path)
     except OSError:
         digest = None
+    modules = library_hashes() if modules is None else dict(modules)
     lock = lock_for(path) if lock_path is None else lock_path
-    status = "confirmatory" if digest and digest in locked_hashes(lock) else "exploratory"
+    locked = bool(digest) and digest in locked_hashes(lock)
+    if locked:
+        locked = set(modules.values()) <= locked_module_hashes(lock)
+    status = "confirmatory" if locked else "exploratory"
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     with _exclusive(path + ".lock"):
         with open(path, "ab+") as fh:  # bytes, no encoding=
@@ -182,6 +240,7 @@ def record(test_id, script_path, params, result, *, path=None, lock_path=None):
                 "test_id": test_id,
                 "script": _rel(script_path),
                 "script_sha256": digest,
+                "modules": modules,
                 "params": _clean(params),
                 "result": _clean(result),
                 "status": status,
@@ -249,34 +308,73 @@ def partial_tail(path):
 
 
 def unlisted(path, lock_path=None):
-    """Seq numbers of ``confirmatory`` records whose script hash the lock does not list.
+    """Seq numbers of ``confirmatory`` records the lock no longer covers.
 
-    Not a chain error: the lock may have been replaced or shortened after the record was
-    written. The lock should be append-only; an entry removed from it shows up here.
+    A record is listed when the lock does not list its script hash or one of its library
+    module hashes. Not a chain error: the lock may have been replaced or shortened after the
+    record was written. The lock should be append-only; an entry removed from it shows up here.
     """
     if not os.path.isfile(path):
         return []
-    locked = locked_hashes(lock_for(path) if lock_path is None else lock_path)
+    lock = lock_for(path) if lock_path is None else lock_path
+    locked, modules = locked_hashes(lock), locked_module_hashes(lock)
+
+    def covered(rec):
+        mods = rec.get("modules") or {}
+        mods = mods.values() if isinstance(mods, dict) else []
+        return str(rec.get("script_sha256")) in locked and all(str(h) in modules for h in mods)
+
     return sorted(
         rec["seq"]
         for _raw, rec in _records(path)
         if rec is not None
         and rec.get("status") == "confirmatory"
         and isinstance(rec.get("seq"), int)
-        and str(rec.get("script_sha256")) not in locked
+        and not covered(rec)
     )
+
+
+def _witnesses(witness):
+    """A witness, a witness file path, or a list of either, as a list of dicts.
+
+    ``ValueError`` for a given witness that is not ``{"seq": int, "hash": str}`` (an
+    unreadable file raises ``OSError``): a wrong file must never pass as a verification. The
+    witness of an empty register (``seq`` None, genesis hash) checks nothing and is skipped.
+    """
+    if witness is None:
+        return []
+    items = witness if isinstance(witness, (list, tuple)) else [witness]
+    out = []
+    for w in items:
+        if isinstance(w, (str, os.PathLike)):
+            with open(w, encoding="utf-8") as fh:
+                w = json.load(fh)
+        if not isinstance(w, dict):
+            raise ValueError(f"witness is not an object: {w!r:.60}")
+        seq, digest = w.get("seq"), w.get("hash")
+        if seq is None and digest == GENESIS:
+            continue
+        if isinstance(seq, bool) or not isinstance(seq, int) or seq < 0:
+            raise ValueError(f"witness has no integer seq: {w!r:.80}")
+        if not isinstance(digest, str) or not digest:
+            raise ValueError(f"witness has no hash: {w!r:.80}")
+        out.append(w)
+    return out
 
 
 def verify_chain(path, witness=None):
     """Seq numbers of broken records; [] = intact.
 
-    A record is broken when its hash, ``prev_hash`` or seq is wrong. With a ``witness`` ({"seq", "hash"} from :func:`witness`) a register that
-    lacks that record, or holds another one under that seq, is broken at the witness seq
-    (a truncated or rewritten tail). A half-written last line is not listed here, see
-    :func:`partial_tail`.
+    A record is broken when its hash, ``prev_hash`` or seq is wrong. ``witness`` is a
+    ``{"seq", "hash"}`` from :func:`witness`, the path of a JSON file holding one, or a list
+    of either: a register that lacks the witnessed record, or holds another one under that
+    seq, is broken at the witness seq (a truncated tail, or a chain rewritten after the
+    witness was taken). Without an external witness a full rewrite from genesis verifies
+    clean. A half-written last line is not listed here, see :func:`partial_tail`.
     """
+    witnesses = _witnesses(witness)
     if not os.path.isfile(path):
-        return [witness["seq"]] if witness and witness.get("seq") is not None else []
+        return sorted({w["seq"] for w in witnesses})
     tail = partial_tail(path)
     broken, prev, expected = set(), GENESIS, 0
     hashes = {}
@@ -297,9 +395,9 @@ def verify_chain(path, witness=None):
             broken.add(seq)
         hashes[seq] = rec.get("hash")
         prev, expected = _sha(raw), seq + 1
-    if witness and witness.get("seq") is not None:
-        if hashes.get(witness["seq"]) != witness.get("hash"):
-            broken.add(witness["seq"])
+    for w in witnesses:
+        if hashes.get(w["seq"]) != w.get("hash"):
+            broken.add(w["seq"])
     return sorted(broken)
 
 

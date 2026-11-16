@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from typing import Callable
 
 from .attribution import format_label, label_of
+from .incomplete import is_notice
 
 # A deposit gas price reused by more withdrawals than this in one window is a
 # common wallet default, not a fingerprint.
@@ -47,7 +48,8 @@ MIN_FIELD_SIZE = 5
 # notes is chance-level; over >= 2 pools and >= 10 notes the chance share was 0.12
 # on 28,739 real depositors (a direct linked address: 0.25). The recipient's
 # withdrawals come from the search windows, so an exit window under
-# EARLY_PROFILE_HOURS hours cannot hold the full window and nobody qualifies.
+# EARLY_PROFILE_HOURS hours cannot hold the full window: the signal is then not applied
+# at all (``early_profile_gap``), and nobody is credited or ruled out by it.
 EARLY_PROFILE_MIN_POOLS = 2
 EARLY_PROFILE_MIN_NOTES = 10
 EARLY_PROFILE_HOURS = 72
@@ -126,8 +128,36 @@ def count_match_in_order(data: dict, pool_key: str, recs: list[dict]) -> bool:
 
 
 def wallet_profile(data: dict) -> dict[str, int]:
-    """Notes deposited per pool over all of the wallet's deposits: {pool_key: count}."""
-    return dict(Counter(d["pool_key"] for d in data.get("deposits", []) if d.get("pool_key")))
+    """Notes deposited per pool over all of the wallet's deposits: {pool_key: count}.
+
+    A deposit whose twin pool is uncertain (``pool_ambiguous``) is left out: it was not
+    searched, like :func:`tornado_demix.multi.wallet_fingerprint` over the vouchers."""
+    return dict(
+        Counter(
+            d["pool_key"]
+            for d in data.get("deposits", [])
+            if d.get("pool_key") and not d.get("pool_ambiguous")
+        )
+    )
+
+
+# Recorded (``data["heuristics"]["early_profile_note"]``) and shown in the evidence when
+# a deposit's twin pool is undecided: the profile without that note is only part of the
+# fingerprint, and a recipient could match the part where the whole would not match.
+EARLY_PROFILE_POOL_NOTE = "early profile not applied: pool uncertain"
+# The same for a search window shorter than EARLY_PROFILE_HOURS, and for a pool whose
+# withdrawal list was cut off or still being indexed (or left a hole in the span): a recipient
+# can hold the profile in the part that was read and not in the whole.
+# The window note also covers a last deposit younger than EARLY_PROFILE_HOURS when the run was
+# read (``params.read_ts``): the search window was clamped to the chain head, the 72 h after
+# the deposit have not elapsed, and a match could still vanish.
+EARLY_PROFILE_WINDOW_NOTE = "early profile not applied: window shorter than 72 h"
+EARLY_PROFILE_HISTORY_NOTE = "early profile not applied: withdrawal history incomplete"
+
+
+def pool_uncertain(data: dict) -> int:
+    """Number of the wallet's deposits whose twin pool is undecided (``pool_ambiguous``)."""
+    return sum(1 for d in data.get("deposits", []) if d.get("pool_ambiguous"))
 
 
 def early_profile_applies(profile: dict[str, int]) -> bool:
@@ -137,12 +167,83 @@ def early_profile_applies(profile: dict[str, int]) -> bool:
     )
 
 
+def _incomplete_pools(data: dict) -> set[str]:
+    """Pool keys whose withdrawal list the explorer cut off or only partly indexed.
+
+    Read from ``data["truncated"]`` (``incomplete.attach``; a notice does not count),
+    matched on the pool contract the list was read from."""
+    addresses = {
+        (e.get("address") or "").lower()
+        for e in data.get("truncated") or []
+        if not is_notice(e) and e.get("address")
+    }
+    return {
+        pool_key
+        for pool_key, res in data.get("denoms", {}).items()
+        if (res.get("pool") or "").lower() in addresses
+    }
+
+
+def _span_uncovered(data: dict, pool_key: str, lo: int, hi: int) -> bool:
+    """True when the pool's search windows leave a hole inside ``[lo, hi]``.
+
+    Each voucher is searched from its first deposit to its last plus the exit window; two
+    vouchers further apart than that leave their gap unread. A group view reads one span per
+    pool, and a run without vouchers has nothing to compare."""
+    params = data.get("params") or {}
+    vouchers = [v for v in data.get("vouchers", []) if v.get("pool_key") == pool_key]
+    if params.get("group") or not vouchers:
+        return False
+    forward = voucher_forward_seconds(params)
+    merged: list[list[float]] = []
+    for v in sorted(vouchers, key=lambda v: v["first_ts"]):
+        start, end = v["first_ts"], v["last_ts"] + forward
+        if merged and start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+    return not any(a <= lo and hi <= b for a, b in merged)
+
+
+def early_profile_gap(data: dict, profile: dict[str, int]) -> str | None:
+    """Why the fetched withdrawals cannot carry the early profile, or None when they can.
+
+    The signal compares counts over ``[first deposit, last deposit + EARLY_PROFILE_HOURS]``
+    in every pool of the profile, so it needs that whole span read: a search window under
+    EARLY_PROFILE_HOURS hours, a list the explorer cut off or only partly indexed, or a hole
+    between the pool's windows each give a note (:data:`EARLY_PROFILE_WINDOW_NOTE`,
+    :data:`EARLY_PROFILE_HISTORY_NOTE`) instead of a verdict."""
+    if voucher_forward_seconds(data.get("params") or {}) < EARLY_PROFILE_HOURS * 3600:
+        return EARLY_PROFILE_WINDOW_NOTE
+    incomplete = _incomplete_pools(data)
+    for pool_key in profile:
+        if pool_key in incomplete:
+            return EARLY_PROFILE_HISTORY_NOTE
+        stamps = [
+            d["ts"]
+            for d in data.get("deposits", [])
+            if d.get("pool_key") == pool_key and d.get("ts") and not d.get("pool_ambiguous")
+        ]
+        read_ts = (data.get("params") or {}).get("read_ts")
+        if stamps and read_ts and max(stamps) + EARLY_PROFILE_HOURS * 3600 > read_ts:
+            return EARLY_PROFILE_WINDOW_NOTE
+        if stamps and _span_uncovered(
+            data, pool_key, min(stamps), max(stamps) + EARLY_PROFILE_HOURS * 3600
+        ):
+            return EARLY_PROFILE_HISTORY_NOTE
+    return None
+
+
 def _early_profile_hits(data: dict, profile: dict[str, int]) -> list[str]:
     """Recipients holding exactly ``profile`` inside every pool's early window."""
     deposits = data.get("deposits", [])
     windows = {}
     for pool_key in profile:
-        stamps = [d["ts"] for d in deposits if d.get("pool_key") == pool_key and d.get("ts")]
+        stamps = [
+            d["ts"]
+            for d in deposits
+            if d.get("pool_key") == pool_key and d.get("ts") and not d.get("pool_ambiguous")
+        ]
         if not stamps or pool_key not in data.get("denoms", {}):
             return []
         windows[pool_key] = (min(stamps), max(stamps) + EARLY_PROFILE_HOURS * 3600)
@@ -162,6 +263,67 @@ def _early_profile_hits(data: dict, profile: dict[str, int]) -> list[str]:
     return hits
 
 
+def first_withdrawals(data: dict) -> dict[str, int]:
+    """``{recipient: time of its first withdrawal}`` over every pool of the run, the
+    withdrawals a Merkle-root check excluded included (they happened)."""
+    out: dict[str, int] = {}
+    for res in data.get("denoms", {}).values():
+        groups = [res.get("detail", {}), res.get("root_excluded_detail", {})]
+        for group in groups:
+            for addr, recs in group.items():
+                for r in recs:
+                    ts = r.get("ts")
+                    if ts is not None and (addr not in out or ts < out[addr]):
+                        out[addr] = ts
+    return out
+
+
+def link_shift(data: dict) -> int:
+    """Seconds a decoy run moved its deposits back (``params.deposit_shift_seconds``).
+
+    The link records keep their real times; a decoy window compares each link at
+    ``ts - shift`` with its (shifted) withdrawals, so the target and the decoy apply the
+    same timing relative to the deposits. 0 for a normal run."""
+    try:
+        return max(int((data.get("params") or {}).get("deposit_shift_seconds") or 0), 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def lead_link(links: list[dict], first_ts: int | None, shift: int = 0) -> dict | None:
+    """The earliest link that qualifies (real value) and came strictly before
+    ``first_ts`` (the first withdrawal to the counterparty), or None. ``shift`` moves
+    each link back by that many seconds first (a decoy window, :func:`link_shift`). With
+    no known withdrawal every qualifying link counts. A link without a time (``ts`` 0 or
+    missing) is never known to come first, so it never counts."""
+    good = [
+        x
+        for x in links
+        if x.get("qualifies")
+        and (x.get("ts") or 0) > 0
+        and (first_ts is None or x["ts"] - shift < first_ts)
+    ]
+    return min(good, key=lambda x: (x["ts"], x["tx"])) if good else None
+
+
+def link_status(links: list[dict], first_ts: int | None, shift: int = 0) -> str:
+    """``lead`` when :func:`lead_link` finds a link; else the context signal that says
+    why not: ``linked_posthoc`` (real value, but none known to precede the first
+    withdrawal: after it, or at an unknown time), ``linked_unverified_token`` (a token off
+    the real-token list), ``linked_dust`` (zero-value or dust). ``none`` for an empty
+    list: no record links the address to the depositor, so it is no direct link at all
+    (in a run with link records the pre-2.23 rule is never applied per address)."""
+    if not links:
+        return "none"
+    if lead_link(links, first_ts, shift) is not None:
+        return "lead"
+    if any(x.get("qualifies") for x in links):
+        return "linked_posthoc"
+    if any(x.get("why") == "unverified_token" for x in links):
+        return "linked_unverified_token"
+    return "linked_dust"
+
+
 def apply_heuristics(
     data: dict,
     counterparties: set[str],
@@ -169,14 +331,27 @@ def apply_heuristics(
     is_contract: Callable[[str], bool | None] | None = None,
     withdrawal_senders: dict[str, str] | None = None,
     shared_deposits: dict[str, list[str]] | None = None,
+    direct_links: dict[str, list[dict]] | None = None,
 ) -> dict:
     """Add ``signals`` and ``confidence`` to every recipient of a run_demix() result.
 
     Signals are keyed by (pool_key, address), so a signal earned in one pool does
     not follow the address into another. ``gas_gate(block)`` says whether the
     sender chose that block's gas price (None: ungated). ``is_contract(address)``
-    returns True, False or None; a contract counterparty does not earn ``linked``.
-    A direct link (the depositor itself or a non-contract counterparty) earns
+    returns True, False or None; a contract counterparty does not earn ``linked``,
+    and neither does one whose check failed (None, since version 2.23; before, the
+    signal was kept): it gets ``linked_unknown_contract``, context. Without a checker
+    (``is_contract`` None) counterparties are taken as non-contracts.
+    ``direct_links`` (default ``data["direct_links"]``, see
+    :func:`tornado_demix.demix.direct_links`) says what each counterparty's linking
+    rows moved and when. A counterparty is a direct link only when one of its links
+    qualifies (real value, see ``direct_links``) and came before the first withdrawal
+    to it in any pool (:func:`link_status`); otherwise it gets a context signal:
+    ``linked_posthoc`` (real value, but only after that withdrawal),
+    ``linked_unverified_token`` (a token off the real-token list) or ``linked_dust``
+    (zero-value or below the dust floor). Without link records (a bare counterparty
+    set from a caller that filtered it) every counterparty is taken as a direct link.
+    A direct link (the depositor itself or such a counterparty) earns
     ``linked`` only when the recipient's first withdrawal in the pool is within
     :data:`EARLY_EXIT_HOURS` after a voucher's last deposit there; a later one earns
     ``linked_late``, which is context: no score, no band (placebo test,
@@ -198,7 +373,14 @@ def apply_heuristics(
     linked_hits = []  # (pool_key, recipient): every direct link, early or late
     late_hits = []  # (pool_key, recipient, hours after the last deposit or None)
     linked_contracts = set()  # direct counterparties that are contracts
+    unknown_contracts = set()  # direct counterparties whose contract check failed
+    context_hits = []  # (pool_key, recipient, context link signal)
     sender_hits = []  # (pool_key, recipient, sender, tx_hash)
+    links_by = data.get("direct_links") if direct_links is None else direct_links
+    # The depositor itself; in a group view (multi.group_view) every merged wallet.
+    own = ({wallet} | {w.lower() for w in data.get("wallets") or []}) - {""}
+    firsts = first_withdrawals(data)
+    shift = link_shift(data)
     deposit_hits = []  # (pool_key, recipient, [deposit addresses])
     signals = {}  # (pool_key, address) -> set of signal names
     discriminations = {}  # (pool_key, address) -> count discrimination in [0, 1]
@@ -256,14 +438,42 @@ def apply_heuristics(
                 sig.add("shared_deposit")
                 deposit_hits.append((pool_key, addr, list(shared_deposits[addr])))
 
-            # A withdrawal back to the depositor itself, or to a direct
-            # non-contract counterparty. Only an early one is a lead.
-            direct = addr == wallet
-            if not direct and addr in counterparties:
-                if is_contract is not None and is_contract(addr):
+            # A withdrawal back to the depositor itself, or to a direct non-contract
+            # counterparty whose link moved real value before the first withdrawal to
+            # it. Only an early one is a lead; every other direct link is context.
+            direct = addr == wallet and addr != ""
+            # in a run with link records, an address without one is no direct link
+            recorded = links_by is None or bool(links_by.get(addr))
+            if not direct and addr in own:
+                # A merged member of a group view is the actor itself (no link record
+                # needed), but as in 2.22 a contract member is not a direct link and
+                # one whose check failed is context (linked_unknown_contract).
+                status = is_contract(addr) if is_contract is not None else False
+                if status:
                     linked_contracts.add(addr)
+                elif status is None:
+                    unknown_contracts.add(addr)
+                    sig.add("linked_unknown_contract")
+                    context_hits.append((pool_key, addr, "linked_unknown_contract"))
                 else:
                     direct = True
+            elif not direct and addr in counterparties and recorded:
+                status = is_contract(addr) if is_contract is not None else False
+                if status:
+                    linked_contracts.add(addr)
+                elif status is None:
+                    unknown_contracts.add(addr)
+                    sig.add("linked_unknown_contract")
+                    context_hits.append((pool_key, addr, "linked_unknown_contract"))
+                elif links_by is None:
+                    direct = True  # a bare counterparty set: the caller vouches for it
+                else:
+                    kind = link_status(links_by.get(addr) or [], firsts.get(addr), shift)
+                    if kind == "lead":
+                        direct = True
+                    else:
+                        sig.add(kind)
+                        context_hits.append((pool_key, addr, kind))
             if direct:
                 linked_hits.append((pool_key, addr))
                 stamps = [r["ts"] for r in recs if r.get("ts") is not None]
@@ -277,7 +487,9 @@ def apply_heuristics(
 
     profile = wallet_profile(data)
     profile_hits = []  # (pool_key, recipient, {pool_key: count})
-    if early_profile_applies(profile):
+    uncertain = pool_uncertain(data)
+    gap = early_profile_gap(data, profile) if early_profile_applies(profile) else None
+    if early_profile_applies(profile) and not uncertain and not gap:
         for addr in _early_profile_hits(data, profile):
             for pool_key in profile:
                 signals.setdefault((pool_key, addr), set()).add("early_profile")
@@ -300,10 +512,16 @@ def apply_heuristics(
         "linked_addresses": linked_hits,
         "linked_late": late_hits,
         "linked_contracts": sorted(linked_contracts),
+        "linked_unknown_contracts": sorted(unknown_contracts),
+        "linked_context": context_hits,
         "linked_senders": sender_hits,
         "shared_deposits": deposit_hits,
         "early_profiles": profile_hits,
     }
+    if uncertain:
+        data["heuristics"]["early_profile_note"] = EARLY_PROFILE_POOL_NOTE
+    elif gap:
+        data["heuristics"]["early_profile_note"] = gap
     return data
 
 
@@ -313,6 +531,10 @@ SIGNAL_LABEL = {
     "gas_price": "Unique gas-price reuse",
     "linked": "Linked address (direct counterparty)",
     "linked_late": "Late direct link (context)",
+    "linked_posthoc": "Direct link made after the withdrawal (context)",
+    "linked_dust": "Zero-value or dust direct link (context)",
+    "linked_unverified_token": "Direct link by an unlisted token (context)",
+    "linked_unknown_contract": "Direct link, contract status unknown (context)",
     "linked_sender": "Withdrawal sent by the depositor or its counterparty",
     "shared_deposit": "Shared exchange deposit address",
     "profile_match": "Denomination-profile match",
@@ -426,16 +648,119 @@ def _voucher_text(data: dict, voucher: dict) -> str:
     return f"the {voucher['count']}-note voucher of the {voucher['pool_key']} pool{where}"
 
 
-def _link_text(data: dict, address: str) -> str:
+def _link_text(data: dict, address: str, explained=()) -> str:
     """ "tx 0x…" of the transaction that makes ``address`` a direct counterparty, or a
-    plain statement that the run did not record it (never an invented hash)."""
+    plain statement that the run did not record it (never an invented hash).
+    ``explained``: times of the withdrawals the link would explain (a sender's)."""
     link = (data.get("counterparty_links") or {}).get(address)
     if link and link.get("tx"):
+        if "direction" in link:
+            return link_description(link, explained, link_shift(data))
         if link.get("ts"):
             when = datetime.fromtimestamp(link["ts"], tz=timezone.utc).strftime("%Y-%m-%d")
             return f"tx {link['tx']}, first transaction between them on {when}"
         return f"tx {link['tx']}"
     return "linking transaction not recorded in this run"
+
+
+_LINK_KIND = {"native": "tx", "internal": "internal transfer", "token": "token transfer"}
+
+
+def _units(raw: int, decimals: int, places: int | None = None) -> str:
+    """``raw`` in whole units as an exact decimal (no exponent, trailing zeros cut);
+    ``places`` rounds down to that many decimals first."""
+    whole, frac = divmod(int(raw), 10**decimals)
+    digits = str(frac).rjust(decimals, "0") if decimals else ""
+    if places is not None:
+        digits = digits[:places]
+    digits = digits.rstrip("0")
+    return f"{whole}.{digits}" if digits else str(whole)
+
+
+def link_value_text(link: dict) -> str:
+    """What a link moved: "1.5 ETH", "0-value", "0.000999999999999999 ETH (dust, below the
+    0.001 ETH floor)", "unverified token 0x…" (an unlisted token's claimed symbol is not
+    shown: its contract chooses it)."""
+    if link.get("why") == "unverified_token":
+        return f"unverified token {link.get('token')}"
+    if not link.get("raw"):
+        return "0-value"
+    asset = link.get("asset", "")
+    decimals = link.get("decimals")
+    if decimals is None:  # a record without decimals (older run): the float amount
+        text = f"{link['amount']:.6g} {asset}".strip()
+        return text + (" (dust)" if link.get("why") == "dust" else "")
+    if link.get("why") == "dust":
+        floor = link.get("floor_raw")
+        below = f", below the {_units(floor, decimals)} {asset} floor" if floor else ""
+        return f"{_units(link['raw'], decimals)} {asset} (dust{below})".strip()
+    return f"{_units(link['raw'], decimals, 6)} {asset}".strip()
+
+
+def _day_range(stamps) -> str:
+    """ "2020-10-26", "2020-10-23..26", "2020-10-30..11-02" or "2020-12-30..2021-01-02" (UTC)."""
+    days = [datetime.fromtimestamp(t, tz=timezone.utc) for t in (min(stamps), max(stamps))]
+    a, b = (d.strftime("%Y-%m-%d") for d in days)
+    if a == b:
+        return a
+    if a[:7] == b[:7]:
+        return f"{a}..{b[8:]}"
+    if a[:4] == b[:4]:
+        return f"{a}..{b[5:]}"
+    return f"{a}..{b}"
+
+
+def link_position_text(link: dict, explained=(), shift: int = 0) -> str:
+    """Where the link stands against the first withdrawal to the counterparty. A
+    counterparty that received no withdrawal (a withdrawal sender) is placed against the
+    withdrawals it would explain instead (``explained``: their times, compared with the
+    link at ``ts - shift`` as in a decoy run); "unknown" only when neither time is known."""
+    if not link.get("ts"):
+        return "at an unknown time, so not known to precede the first withdrawal to it"
+    first = link.get("first_withdrawal_ts")
+    if link.get("position") == "before" and first is not None:
+        ahead = link.get("lead_seconds")
+        ahead = first - link["ts"] if ahead is None else ahead
+        return f"{_duration(ahead)} before the first withdrawal to it"
+    if link.get("position") == "after":
+        return "after the first withdrawal to it"
+    stamps = [t for t in explained if t]
+    if stamps:
+        at = link["ts"] - shift
+        days = _day_range(stamps)
+        if at > max(stamps):
+            return f"after the withdrawals it would explain ({days}) — context"
+        if at < min(stamps):
+            return f"{_duration(min(stamps) - at)} before the withdrawals it would explain ({days})"
+        return f"between the withdrawals it would explain ({days}) — context"
+    return "time of the first withdrawal to it unknown"
+
+
+def link_short(link: dict) -> str:
+    """ "0-value tx after the first withdrawal to it" — the link in a few words."""
+    kind = _LINK_KIND.get(link.get("kind"), "tx")
+    value = link_value_text(link)
+    side = "from the depositor" if link.get("direction") == "out" else "to the depositor"
+    head = f"{value} {kind}" if value == "0-value" else f"{kind} of {value}"
+    return f"{head} {side} {link_position_text(link)}"
+
+
+def link_description(link: dict, explained=(), shift: int = 0) -> str:
+    """The cited link with value, asset, direction, block, UTC time and its position
+    against the first withdrawal (``demix.counterparty_links``), or against the
+    withdrawals it would explain (``explained``, see :func:`link_position_text`)."""
+    kind = _LINK_KIND.get(link.get("kind"), "tx")
+    side = "from the depositor" if link.get("direction") == "out" else "to the depositor"
+    when = (
+        datetime.fromtimestamp(link["ts"], tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        if link.get("ts")
+        else "time unknown"
+    )
+    block = f"block {link['block']}" if link.get("block") else "block unknown"
+    return (
+        f"{kind} {link['tx']}: {link_value_text(link)} {side}, {block}, {when}, "
+        f"{link_position_text(link, explained, shift)}"
+    )
 
 
 def _last_deposit_before(data: dict, pool_key: str, ts: int):
@@ -506,6 +831,10 @@ EVIDENCE_LABEL = {
     "gas_price": "gas price",
     "linked": "linked address",
     "linked_late": "late direct link (context)",
+    "linked_posthoc": "post-withdrawal direct link (context)",
+    "linked_dust": "zero-value or dust direct link (context)",
+    "linked_unverified_token": "unlisted-token direct link (context)",
+    "linked_unknown_contract": "direct link, contract status unknown (context)",
     "linked_sender": "linked withdrawal sender",
     "shared_deposit": "shared exchange deposit address",
     "profile_match": "denomination profile",
@@ -528,11 +857,36 @@ def _linked_detail(data, signals, address, pool_key, recs):
         return f"{who}; {delay}, within {EARLY_EXIT_HOURS} h"
     if "linked_late" in signals:
         return "a direct link, but withdrawn late: see the next line"
+    if signals & LINK_CONTEXT_SIGNALS:
+        return "a direct transaction with the depositor that does not count: see the next line"
     if own:
         return "is the depositor's own address"
     if address in data.get("heuristics", {}).get("linked_contracts", []):
         return "transacts with the depositor, but is a contract (router, DEX, service): not counted"
     return "no direct transaction with the depositor"
+
+
+# Why a direct link is context, not a lead (since version 2.23), per context signal.
+LINK_CONTEXT_WHY = {
+    "linked_posthoc": "no real-value link is known to precede the first withdrawal to it "
+    "(it came after that withdrawal, or its time is unknown), and whoever controls the "
+    "depositor can create such a link afterwards",
+    "linked_dust": "the link moved no real value (zero-value or below the dust floor); "
+    "it costs only gas and can be sent to any address (the floor only prices a planted "
+    "link: one above it costs whoever controls the depositor about the floor plus gas)",
+    "linked_unverified_token": "the link is a transfer of a token off the list of real "
+    "assets, whose Transfer events anyone can make say anything",
+    "linked_unknown_contract": "the contract check of this address failed, so a router, "
+    "DEX or service cannot be told from a person",
+}
+LINK_CONTEXT_SIGNALS = frozenset(LINK_CONTEXT_WHY)
+
+
+def _link_context_detail(data, signal, address):
+    return (
+        f"is a direct counterparty of the depositor ({_link_text(data, address)}), but "
+        f"{LINK_CONTEXT_WHY[signal]}: context, not a lead"
+    )
 
 
 def _late_detail(data, pool_key, address):
@@ -571,14 +925,19 @@ def _sender_detail(data, pool_key, address, hits_total):
     by_sender: dict[str, list[str]] = {}
     for sender, tx in hits:
         by_sender.setdefault(sender, []).append(tx)
+    when = {
+        r.get("hash"): r.get("ts")
+        for r in data["denoms"].get(pool_key, {}).get("detail", {}).get(address, [])
+    }
     parts = []
     for sender, txs in by_sender.items():
         n = len(txs)
+        sent = [when[t] for t in txs if when.get(t)]
         who = (
             f"the depositor itself ({sender})"
             if sender == wallet
             else f"{sender}, which is a direct counterparty of the depositor "
-            f"({_link_text(data, sender)})"
+            f"({_link_text(data, sender, sent)})"
         )
         first = f"tx {txs[0]}" if n == 1 else f"first tx {txs[0]}"
         parts.append(
@@ -638,11 +997,20 @@ def _root_detail(data, pool_key, address, kind):
 
 def _early_profile_detail(data, signals):
     profile = wallet_profile(data)
+    uncertain = pool_uncertain(data)
+    if uncertain:
+        return (
+            f"{EARLY_PROFILE_POOL_NOTE} ({_plural(uncertain, 'deposit')} whose twin pool "
+            "could not be settled, so the wallet's full note profile is not known)"
+        )
     if not early_profile_applies(profile):
         return (
             f"does not apply: the wallet's profile ({_profile_text(data, profile) or 'no notes'}) "
             f"needs at least {EARLY_PROFILE_MIN_POOLS} pools and {EARLY_PROFILE_MIN_NOTES} notes"
         )
+    gap = early_profile_gap(data, profile)
+    if gap:
+        return f"{gap} (the withdrawals read do not cover the whole {EARLY_PROFILE_HOURS} h span)"
     text = _profile_text(data, profile)
     if "early_profile" in signals:
         return (
@@ -762,6 +1130,8 @@ def candidate_evidence(data: dict, pool_key: str, address: str) -> list[dict]:
     ]
     if "linked_late" in signals:
         lines.insert(4, ("linked_late", _late_detail(data, pool_key, address)))
+    for signal in sorted(signals & LINK_CONTEXT_SIGNALS):
+        lines.insert(4, (signal, _link_context_detail(data, signal, address)))
     if "profile_match" in signals:
         lines.append(("profile_match", "received the wallet's full multi-pool fingerprint"))
     for kind in ("root_excluded", "root_partial"):
@@ -803,9 +1173,19 @@ def _short_evidence(data, signal, pool_key, address, recs, hits, disc) -> str:
         who = "the depositor's own address" if own else "direct counterparty of the depositor"
         delay = _delay_text(data, pool_key, recs).replace("first withdrawal ", "")
         delay = delay.replace(" after the voucher's last deposit", " after the last deposit")
+        link = (data.get("counterparty_links") or {}).get(address)
+        if not own and link and "direction" in link:
+            who += f" ({link_short(link)})"
         return f"{who}, first withdrawal {delay}" + (" (late)" if signal == "linked_late" else "")
     if signal == "linked_sender":
         return _sender_summary(data, pool_key, address, hits)
+    if signal in LINK_CONTEXT_SIGNALS:
+        link = (data.get("counterparty_links") or {}).get(address)
+        if signal == "linked_unknown_contract":
+            return "direct counterparty, contract status unknown"
+        if link and "direction" in link:
+            return f"direct counterparty, {link_short(link)}"
+        return f"direct counterparty, {EVIDENCE_LABEL[signal]}"
     if signal == "shared_deposit":
         hits_ = [
             addrs
@@ -922,6 +1302,10 @@ METHOD_FAMILY = {
     "gas_price": "gas price",
     "linked": "linked address",
     "linked_late": "context",
+    "linked_posthoc": "context",
+    "linked_dust": "context",
+    "linked_unverified_token": "context",
+    "linked_unknown_contract": "context",
     "linked_sender": "context",
     "shared_deposit": "context",
     "root_excluded": "context",
@@ -936,7 +1320,13 @@ METHOD_FAMILY = {
 # (since version 2.21: in the second hold-out, labelled shared deposits at 30 days
 # were 18 target against 30 decoy leads on Ethereum, R 1.77 (0.16-3.91), and 23
 # against 13 on Polygon, R 0.58 (0.00-3.16); not above chance).
-CONTEXT_SIGNALS = frozenset({"linked_late", "linked_sender", "shared_deposit"})
+# Since version 2.23 a direct link whose transaction moved no real value, used an
+# unlisted token, came after the first withdrawal, or whose counterparty's contract
+# status is unknown is context too (LINK_CONTEXT_SIGNALS): excluded by construction,
+# not measured.
+CONTEXT_SIGNALS = frozenset({"linked_late", "linked_sender", "shared_deposit"}) | frozenset(
+    LINK_CONTEXT_WHY
+)
 
 # What is known about each context signal, in running text. The one source for every
 # generated "how to read" text (a test pins that the keys equal CONTEXT_SIGNALS).
@@ -947,6 +1337,10 @@ CONTEXT_VERDICT = {
         "not shown above chance at 30 days; post-hoc, untested "
         "(at 72 h: Ethereum 14/2, Polygon 23/0)"
     ),
+    "linked_posthoc": "not a lead by construction: it can be made after the withdrawal",
+    "linked_dust": "not a lead by construction: it moves no real value",
+    "linked_unverified_token": "not a lead by construction: anyone can make such a transfer",
+    "linked_unknown_contract": "not a lead: the address could be a contract",
 }
 
 # A note on a candidate, not evidence for it: some of its withdrawals were excluded by
@@ -970,7 +1364,7 @@ BAND_ORDER = {"strong": 3, "moderate": 2, "weak": 1}
 LINKED_SIGNALS = frozenset({"linked", "linked_sender", "shared_deposit"})
 LEAD_SIGNALS = frozenset({"linked", "early_profile"})
 
-# Independent sources of lead evidence; "strong" needs two of them.
+# Lead-signal families; "strong" needs two of them (their independence is not established).
 LEAD_SOURCE = {
     "linked": "direct link",
     "early_profile": "early multi-pool profile",
@@ -988,8 +1382,8 @@ EARLY_EXIT_HOURS = 72
 def confidence_band(signals):
     """Return "strong", "moderate" or "weak" from the candidate's signal set.
 
-    strong: lead signals from two independent sources (an early direct link, an
-    early multi-pool profile match); moderate: a lead signal from one source;
+    strong: lead signals from two different families (an early direct link, an
+    early multi-pool profile match; their independence is not established); moderate: a lead signal from one source;
     weak: amount+timing, gas price and/or context-only signals (late direct link,
     withdrawal sender, shared deposit address).
     Amount+timing and gas price never raise the band: on real depositors they
@@ -1008,7 +1402,10 @@ def band_rationale(band: str, signals: set[str]) -> str:
     """Plain-language reason for the band; never claims a signal the candidate lacks."""
     sources = sorted({LEAD_SOURCE[s] for s in signals if s in LEAD_SOURCE})
     if band == "strong":
-        return f"two independent lead signals ({' and '.join(sources)})"
+        return (
+            f"two different lead-signal families ({' and '.join(sources)}); "
+            "their independence is not established"
+        )
     if band == "moderate":
         return f"one lead signal ({sources[0]}); other evidence is context only"
     if "linked_sender" in signals:
@@ -1021,6 +1418,11 @@ def band_rationale(band: str, signals: set[str]) -> str:
             "no lead signal; a shared exchange deposit address is "
             f"{CONTEXT_VERDICT['shared_deposit']}; at 30 days 18 against 30 decoy leads on "
             "Ethereum and 23 against 13 on Polygon, so it is context only"
+        )
+    link_ctx = sorted(signals & LINK_CONTEXT_SIGNALS)
+    if link_ctx:
+        return (
+            f"no lead signal; {LINK_CONTEXT_WHY[link_ctx[0]]}, so the direct link is context only"
         )
     if "linked_late" in signals:
         return (
@@ -1163,7 +1565,7 @@ def conclusion(data: dict) -> str:
             f"Top candidate: {top['address']} ({top['pool_key']}), band {top['band']}, "
             f"score {top['confidence']:.2f}."
         )
-        lines.append(f"Evidence families: {', '.join(families)} ({len(families)} independent).")
+        lines.append(f"Evidence families: {', '.join(families)} ({len(families)} families).")
         lines.append(f"Basis: {candidate_reason(top)}")
         per_band = [
             f"{sum(c['band'] == band for c in cands)} {band}"

@@ -62,6 +62,7 @@ from tornado_demix.etherscan import EtherscanClient  # noqa: E402
 from tornado_demix.events import decode_withdrawal  # noqa: E402
 from tornado_demix.networks import get_network  # noqa: E402
 from tornado_demix.rpc import RpcClient  # noqa: E402
+from tornado_demix.txstatus import failed  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CACHE = os.path.join(ROOT, ".cache", "labels")
@@ -218,7 +219,7 @@ def build_universe(
                 continue
             rows = keys.next().fetch_all("txlist", addr, lo, hi)
             for tx in rows:
-                if tx.get("isError") == "1" or (tx.get("to") or "").lower() != addr:
+                if failed(tx) or (tx.get("to") or "").lower() != addr:
                     continue
                 value = int(tx.get("value") or 0) / 1e18
                 pool = targets.get(addr) or next(

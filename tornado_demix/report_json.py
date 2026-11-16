@@ -13,6 +13,7 @@ from .heuristics import (
     MIN_FIELD_SIZE,
     ranked_candidates,
 )
+from .honest import json_fields
 from .incomplete import summary as incomplete_summary
 from .report_csv import (
     _fmt_hours,
@@ -78,6 +79,24 @@ def analysis_assumptions(data: dict) -> dict:
     return {"params": rows, "windows": windows}
 
 
+def exit_group_summary(data: dict) -> dict:
+    """Counts of anchored and unanchored exit groups of a demix result.
+
+    Each group in ``result.exit_groups`` carries ``anchored``; an unanchored group is a
+    co-withdrawal pattern with no strong/moderate candidate and no known exit in it."""
+    groups = data.get("exit_groups") or []
+    anchored = sum(1 for g in groups if g.get("anchored"))
+    return {
+        "anchored": anchored,
+        "unanchored": len(groups) - anchored,
+        "note": (
+            "Unanchored groups (anchored=false in result.exit_groups) are co-withdrawal "
+            "patterns with no strong or moderate candidate and no known exit among their "
+            "members: context, not evidence."
+        ),
+    }
+
+
 def demix_json(data: dict, attribution: dict[str, dict] | None = None) -> str:
     """A demix result as JSON: parameters, ranked candidates and the raw result.
 
@@ -93,6 +112,8 @@ def demix_json(data: dict, attribution: dict[str, dict] | None = None) -> str:
         "candidates": ranked_candidates(data, attribution=attribution),
         # "N lookups failed - results may be incomplete", or "" (tornado_demix.incomplete)
         "incomplete": incomplete_summary(data),
+        "exit_group_summary": exit_group_summary(data),
+        **json_fields(),
         "result": data,
     }
     return json.dumps(doc, indent=1, default=_json_default, sort_keys=True)
@@ -155,6 +176,7 @@ def multi_json(corr: dict) -> str:
         "generated_utc": datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "wallets": sorted(results),
         "incomplete": incomplete_summary(corr),
+        **json_fields(),
         "errors": corr.get("errors", []),
         "truncated": corr.get("truncated", []),
         "shared_candidates": corr.get("strong", []),

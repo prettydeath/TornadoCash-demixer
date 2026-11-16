@@ -12,6 +12,7 @@ import os
 import time
 
 from .config import PACKAGE_DATA
+from .deposit_addresses import ENTRY_POINTS
 from .errors import BlockLookupError
 
 BRIDGES_CSV = os.path.join(PACKAGE_DATA, "bridges.csv")
@@ -129,6 +130,9 @@ DEST_CHAIN_NOT_SUPPORTED = "destination_chain_not_supported"
 DEST_POOL_NOT_LISTED = "destination_pool_not_listed"
 LOOKUP_FAILED = "lookup_failed"
 DEPOSIT_EXPIRED = "deposit_expired_possible_refund"
+# a listed aggregator that paid back only a native refund, without a bridge event of the
+# table in the transaction: it bridged (through a bridge not listed) or swapped
+BRIDGE_OR_SWAP_UNKNOWN = "bridge_or_swap_unknown"
 TOKEN_WRAPPED = {137}  # chains whose wrapped coin is an ordinary token (Polygon: WPOL)
 
 
@@ -197,16 +201,174 @@ def decode_deposits(client, tx_hash, origin_chain_id=1, table=None, ts=None):
 
 
 def decode_receipt_deposits(receipt, tx_hash, origin_chain_id=1, table=None, ts=None):
-    """decode_deposits over a receipt already read (None or a failed one: no deposits)."""
+    """decode_deposits over a receipt already read (None or a failed one: no deposits).
+
+    Each deposit also carries ``tx_to``, the contract the transaction called."""
     if not receipt or receipt.get("status") == "0x0":
         return []
     logs = [dict(log, transactionHash=tx_hash) for log in receipt.get("logs") or []]
     deposits = decode_across_deposits(logs, origin_chain_id, table)
     sender = (receipt.get("from") or "").lower() or None
+    called = (receipt.get("to") or "").lower() or None
     for d in deposits:
         d["ts"] = ts
         d["tx_from"] = sender
+        d["tx_to"] = called
     return deposits
+
+
+# ---------------------------------------------------------------------------
+# Who made a call inside a transaction, and which tokens moved into a contract.
+#
+# ERC-4337: a smart account's call arrives through an EntryPoint, in a transaction a
+# bundler sent. After it runs each user operation the EntryPoint logs
+# UserOperationEvent(bytes32 indexed userOpHash, address indexed sender, address indexed
+# paymaster, uint256 nonce, bool success, uint256 actualGasCost, uint256 actualGasUsed),
+# so the logs of one operation lie after the previous operation's event and before its
+# own. EntryPoint addresses (v0.6, v0.7, v0.8, the same on every chain): one list,
+# deposit_addresses.ENTRY_POINTS, with its source.
+# ---------------------------------------------------------------------------
+
+TOPIC_TRANSFER = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+TOPIC_USER_OPERATION = "0x49628fd1471006c1482da88028e9ce4dbb080b815c9b0344d39e5a8e6ec1419f"
+
+
+def _index(log):
+    try:
+        return (
+            int(log["logIndex"], 16) if isinstance(log["logIndex"], str) else int(log["logIndex"])
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def user_operations(receipt):
+    """Successful user operations of a listed EntryPoint in ``receipt``, in log order.
+
+    Returns [{"sender", "entry_point", "start", "end"}]: the operation's logs are those
+    with start < log index < end (start is the previous operation's event of the same
+    EntryPoint, or -1). A failed operation is left out (its calls were reverted)."""
+    out, last = [], {}
+    rows = []
+    for log in (receipt or {}).get("logs") or []:
+        topics = [t.lower() for t in log.get("topics") or []]
+        emitter = (log.get("address") or "").lower()
+        if len(topics) < 3 or topics[0] != TOPIC_USER_OPERATION or emitter not in ENTRY_POINTS:
+            continue
+        index = _index(log)
+        if index is None:
+            continue
+        rows.append((index, emitter, topics, _words(log.get("data"))))
+    for index, emitter, topics, w in sorted(rows, key=lambda r: r[0]):
+        start = last.get(emitter, -1)
+        last[emitter] = index
+        if len(w) >= 2 and w[1] == 1:
+            out.append(
+                {
+                    "sender": _address(topics[2]),
+                    "entry_point": emitter,
+                    "start": start,
+                    "end": index,
+                }
+            )
+    return out
+
+
+def operation_of(receipt, addr, log_index):
+    """The successful user operation of ``addr`` whose logs hold ``log_index``, or None."""
+    if log_index is None:
+        return None
+    for op in user_operations(receipt):
+        if op["sender"] == addr and op["start"] < log_index < op["end"]:
+            return op
+    return None
+
+
+def token_inflows(receipt, token, to, start=-1, end=None):
+    """[(sender, amount, log index)] of the ``token`` Transfer logs into ``to`` in
+    ``receipt`` (only those with start < log index < end when bounds are given)."""
+    out = []
+    for log in (receipt or {}).get("logs") or []:
+        topics = [t.lower() for t in log.get("topics") or []]
+        if len(topics) < 3 or topics[0] != TOPIC_TRANSFER:
+            continue
+        if (log.get("address") or "").lower() != token or _address(topics[2]) != to:
+            continue
+        index = _index(log)
+        if index is not None and (index <= start or (end is not None and index >= end)):
+            continue
+        w = _words(log.get("data"))
+        out.append((_address(topics[1]), w[0] if w else 0, index))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Across MulticallHandler: a deposit with a message is filled to a handler contract,
+# which runs the message's calls in the fill transaction and pays the real recipients.
+# Two deployments are listed, each address with its own source:
+#   0x0f7ae28d...: the MulticallHandler of Across's deployed-addresses list (Ethereum,
+#     Optimism, BNB Chain, Polygon, Base, Arbitrum); on Avalanche that list names
+#     0x9610954a... instead;
+#   0x924a9f03...: a verified "MulticallHandler" on each explorer below (not in that list,
+#     but Across fills pay it).
+# ---------------------------------------------------------------------------
+
+_ACROSS_ADDRESSES = (
+    "https://github.com/across-protocol/contracts/blob/master/broadcast/deployed-addresses.md"
+)
+_HANDLER_A = "0x0f7ae28de1c8532170ad4ee566b5801485c13a0e"
+_HANDLER_B = "0x924a9f036260ddd5808007e1aa95f08ed08aa569"
+MULTICALL_HANDLERS = {
+    **{(c, _HANDLER_A): _ACROSS_ADDRESSES for c in (1, 10, 56, 137, 8453, 42161)},
+    (43114, "0x9610954acdca5ff7905f051a040ce33fe613c60e"): _ACROSS_ADDRESSES,
+    (1, _HANDLER_B): f"https://etherscan.io/address/{_HANDLER_B}#code",
+    (10, _HANDLER_B): f"https://optimistic.etherscan.io/address/{_HANDLER_B}#code",
+    (137, _HANDLER_B): f"https://polygonscan.com/address/{_HANDLER_B}#code",
+    (8453, _HANDLER_B): f"https://basescan.org/address/{_HANDLER_B}#code",
+    (42161, _HANDLER_B): f"https://arbiscan.io/address/{_HANDLER_B}#code",
+}
+
+
+def is_multicall_handler(chain_id, address):
+    """True for an Across MulticallHandler listed above on that chain."""
+    if chain_id is None:
+        return False
+    return (int(chain_id), (address or "").lower()) in MULTICALL_HANDLERS
+
+
+def handler_payouts(receipt, handler, token, after):
+    """[(recipient, amount, log index)] of the ``token`` Transfer logs from ``handler``
+    after log ``after`` in ``receipt`` (a burn to the zero address, which unwraps the
+    wrapped native coin, and a transfer back to the handler itself are left out)."""
+    out = []
+    for log in (receipt or {}).get("logs") or []:
+        topics = [t.lower() for t in log.get("topics") or []]
+        if len(topics) < 3 or topics[0] != TOPIC_TRANSFER:
+            continue
+        if (log.get("address") or "").lower() != token or _address(topics[1]) != handler:
+            continue
+        index = _index(log)
+        to = _address(topics[2])
+        if index is None or index <= after or to in (handler, "0x" + "0" * 40):
+            continue
+        w = _words(log.get("data"))
+        out.append((to, w[0] if w else 0, index))
+    return out
+
+
+def fills_to(receipt, recipient, table, chain_id):
+    """Number of Across fill logs of a listed SpokePool in ``receipt`` paying ``recipient``."""
+    n = 0
+    for log in (receipt or {}).get("logs") or []:
+        topics = [t.lower() for t in log.get("topics") or []]
+        if not topics or topics[0] not in (TOPIC_ACROSS_FILL, TOPIC_ACROSS_FILL_V3):
+            continue
+        if classify(table, chain_id, log.get("address")) != ACROSS:
+            continue
+        w = _words(log.get("data"))
+        if len(w) >= 10 and _address(w[9]) == recipient:
+            n += 1
+    return n
 
 
 def bridge_emitters(receipt, chain_id, table, exclude=()):
@@ -297,7 +459,7 @@ def find_fill(dest_client, deposit, table=None):
     only when its original relay data (tokens, amounts, recipient, depositor) equal
     the deposit's. A sped-up fill is followed to its updated recipient and amount.
 
-    Returns {chain_id, tx_hash, block, ts, recipient, output_amount, original_recipient,
+    Returns {chain_id, tx_hash, log_index, block, ts, recipient, output_amount, original_recipient,
     original_output_amount, sped_up, depositor, relayer, input_token, output_token,
     input_amount} or None when the explorer shows no such fill. Explorer errors
     propagate (TornadoDemixError).
@@ -333,6 +495,7 @@ def find_fill(dest_client, deposit, table=None):
                 return {
                     "chain_id": dest,
                     "tx_hash": (log.get("transactionHash") or "").lower(),
+                    "log_index": _index(log),
                     "block": int(log["blockNumber"], 16),
                     "ts": int(log["timeStamp"], 16) if log.get("timeStamp") else None,
                     "recipient": recipient,

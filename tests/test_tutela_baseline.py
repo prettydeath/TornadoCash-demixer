@@ -257,7 +257,7 @@ def test_ratio_row_with_no_target_leads_has_no_R_but_an_exact_interval():
     assert r["R_exact95"][0] > 0 and r["R_exact95"][1] is None
 
 
-def test_cp_ratio_ci_matches_the_review4_formula_on_a_known_case():
+def test_cp_ratio_ci_matches_the_strong_eval_formula_on_a_known_case():
     # t = d = 5, equal exposure: symmetric around 1 on the log scale
     lo, hi = tb.cp_ratio_ci(5, 100, 5, 100)
     assert lo == pytest.approx(1 / hi, rel=1e-2)

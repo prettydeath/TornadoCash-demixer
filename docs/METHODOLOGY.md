@@ -31,11 +31,29 @@ Denominations are per chain and per asset: `0.1 / 1 / 10 / 100 ETH` on Ethereum,
 `100 / 1000 (×2) / 10000 / 100000 DAI` and five more ERC-20 denomination sets on Ethereum, and so
 on.
 
-> **Twin token pools.** Ethereum runs two contracts for 1000 DAI, 50000 cDAI and 500000
-> cDAI. A deposit through the router names only the router, so since 2.18 the pool is read
-> from the contract that emitted the Deposit event in the receipt; a deposit whose receipt
-> cannot be read is marked `pool_ambiguous`. Before 2.18 such a deposit went to one twin by
-> registry order, whichever contract received it.
+> **Twin pools.** Some denominations have two contracts: on Ethereum 1000 DAI, 50000 cDAI
+> and 500000 cDAI (token pools), on Avalanche 10 AVAX and 100 AVAX (native pools). A deposit
+> through a router (any declared router of the network, for example both Avalanche routers
+> `0x171f…` and `0x0d55…`) names only the router. Since 2.23 the pool is read from the
+> contract that emitted the Deposit event in the receipt, on every network and for every
+> router, native and token alike (2.18 did this for Ethereum token twins only; before 2.18,
+> and for Avalanche native twins before 2.23, such a deposit went to the first twin by
+> registry order, whichever contract received it). A deposit the receipt cannot settle is
+> marked `pool_ambiguous`: it is listed, not searched and left out of the note profile;
+> while any deposit is `pool_ambiguous` the early multi-pool profile is not applied
+> ("early profile not applied: pool uncertain"), because the remaining notes are only part
+> of the fingerprint; and the Merkle-root check places it by looking its transaction hash
+> up in each twin's tree, or, when that fails (and in decoy runs), leaves every pool it
+> may belong to unchecked with the reason recorded.
+>
+> The early profile also needs the whole `[first deposit, last deposit + 72 h]` span of every
+> pool read. With a search window under 72 h (`exit_window_hours`) it is not applied
+> ("early profile not applied: window shorter than 72 h", also when the last deposit was
+> less than 72 h old at the time of the run, `params.read_ts`, so the window ended at the
+> chain head); nor when a pool's withdrawal list
+> was cut off or only partly indexed by the explorer, or the pool's windows leave a hole in
+> the span ("early profile not applied: withdrawal history incomplete"). Both notes are
+> recorded in `heuristics.early_profile_note` and shown in the evidence.
 
 > **Detection gap: undeclared routers.** The router path only fires for an address the
 > network declares in its `router_address` column. Ethereum, Polygon, Avalanche,
@@ -220,7 +238,10 @@ answer, and a failure is never read as "none found". Each failure becomes one re
 `{"kind": "lookup_failed", "what", "address" or "tx", "error"}` in the run's
 `errors` list (`tornado_demix/incomplete.py`); `run_demix`, `multi`, `characterize`
 and `trace` results carry `errors`, `error_count` and `truncated` (the lists the
-explorer cut off during that run). The CLI prints "N lookups failed - results may be
+explorer cut off during that run, and since 2.23 the lists it answered while part of
+the range was still being indexed: Blockscout status "2", reason `partial_indexing`;
+the rows are kept, never cached, the run notice names "partial indexing" and no trace
+ledger built on such a list is certain). The CLI prints "N lookups failed - results may be
 incomplete" with the list, and the HTML report, the web UI and the JSON show the same
 notice near the top. What is recorded: a counterparty whose history, busy check,
 contract check or transaction read failed in the deposit-address classifier (it
@@ -334,6 +355,12 @@ run_demix result) and `group` (`null` without `--group`; otherwise `caveat`, `wa
 `profile`, `candidates`, `exact_k` rows, `exact_k_caveat`, `notices` and the raw
 `result`).
 
+**JSON honesty fields and `cluster --json`.** Every JSON export (demix, multi, trace,
+classify-address, characterize, cluster) carries `limitations`, `exploratory` and
+`exploratory_banner`. The cluster JSON (`cluster --json`, web UI `cluster.json`) is an
+object `{tool, limitations, exploratory, exploratory_banner, traces}`; before v2.23 the web
+UI file was a bare list of traces, so a reader of that file must take `traces` now.
+
 ## 4b. Extra heuristics (gas price, linked address) and scoring
 
 Two further signals from the Tornado forensics literature (as used by Tutela) are
@@ -364,7 +391,9 @@ gas-price gate and the contract check make bounded, memoised RPC calls.
   flagged `linked`, the single strongest structural signal. A counterparty that is
   a contract (`eth_getCode` over the network's RPC) is a router, a DEX or a service
   rather than a person and does not earn `linked`; the evidence line says so. When
-  the check cannot be made the signal is kept. A withdrawal back to the depositor's
+  the check cannot be made (a failed `eth_getCode`, or no RPC endpoint) the address
+  gets `linked_unknown_contract`, context, and the failure is recorded in the run's
+  errors (since 2.23; before, the signal was kept). A withdrawal back to the depositor's
   own address is `linked` as well, and so is a direct ERC-20 transfer between the
   depositor and the candidate (token transfers are read once per run, on every network
   since 2.22). A token row counts only when the depositor really took part in it
@@ -378,7 +407,34 @@ gas-price gate and the contract check make bounded, memoised RPC calls.
   a link. Native transactions count unless they failed (`isError` 1 or receipt status
   0); an incoming one counts only with value, even 1 wei (it costs the sender and
   needs its key, while a 0-value transaction can be sent to anyone, as address
-  poisoners do). Internal transfers are not filtered. Since 2.17
+  poisoners do). Internal transfers count unless they failed. Such rows make a
+  counterparty; since 2.23 a counterparty is a direct link (`linked` or `linked_late`)
+  only when one of its linking transactions moved real value **before the first
+  withdrawal to it** (in any pool, strictly earlier): native coin or an internal transfer
+  of at least the network's dust floor (`networks.DUST_FLOOR_WEI`: 0.001 ETH on Ethereum,
+  Optimism, Base and Arbitrum, 0.001 BNB, 1 POL, 1 xDAI, 0.1 AVAX), or a transfer of a
+  listed real token at or above its floor (`data/real_tokens.csv`: the Ethereum pool
+  tokens, USDC from Circle's list, USDT from Tether's, WETH/WPOL, each with its source
+  URL; floors such as 1 USDC or 0.001 WETH). Otherwise the candidate gets a context
+  signal that says why: `linked_dust` (zero-value or below the floor), `linked_unverified_token`
+  (a token off the list: a fake token can emit a Transfer naming anyone inside the
+  depositor's own transaction), `linked_posthoc` (real value only after the withdrawal:
+  whoever controls the depositor can create such a link afterwards). These are excluded
+  by construction, not measured. The evidence of every direct link cites one transaction
+  (the earliest link that counts, else the earliest real-value one, else the earliest)
+  with its value, asset, direction, block, UTC time and position against the first
+  withdrawal ("0-value tx after the first withdrawal to it"). The floors and the token
+  list are judgement calls: a genuine payment in an unlisted token is context. The floors
+  are roughly equal in value, about 0.001 ETH each at CoinGecko prices of 2026-11-14
+  (0.001 ETH; 0.003 BNB; 20 POL; 2 xDAI; 0.25 AVAX; tokens 2 USD of a stablecoin,
+  0.001 WETH, 0.00003 WBTC); prices move and the floors do not. **The floor is the price
+  of a planted link, not a barrier**: an outgoing transfer above it needs only the
+  depositor's key, so whoever controls the depositor can create one to any address for
+  about the floor plus the gas of a transfer (about 2 USD on every network at the
+  floors above, plus gas), for example to addresses that often receive
+  withdrawals. In a decoy window (placebo test) each link is compared at its time minus
+  the deposit shift, so the decoy applies the same timing relative to the deposits as
+  the target. Since 2.17
   a direct link is `linked` only when the recipient's first withdrawal in that
   pool came within 72 hours (`EARLY_EXIT_HOURS`) after a voucher's last deposit
   into the same pool; a later one is `linked_late`, shown in the evidence with
@@ -391,7 +447,9 @@ gas-price gate and the contract check make bounded, memoised RPC calls.
 - **Linked withdrawal sender.** `withdraw()` may be called by anyone, and the
   caller is recorded as the transaction sender. If the depositor, or one of its
   direct non-contract counterparties, sent a withdrawal transaction, its recipient
-  is flagged `linked_sender`. Since 2.19 this is **context only**: it is shown in
+  is flagged `linked_sender`. At most 25 counterparties are read, busiest first;
+  since 2.23 failed rows and zero-value incoming rows are not counted, so spam cannot
+  fill those slots. Since 2.19 this is **context only**: it is shown in
   the evidence but has no weight, never raises the band and is not an independent
   family (like `linked_late`). It did not separate from chance in any placebo
   sample: 8 target against 2 decoy leads on 302 depositors (R 0.27, interval
@@ -424,7 +482,24 @@ gas-price gate and the contract check make bounded, memoised RPC calls.
   row without one), short by at most 0.01 ETH or 1 % of a token amount (the
   forwarding test of Victor used by Tutela); a sweep may also forward the sum of
   several incoming transfers of the same asset received in the window and after the
-  previous outgoing transfer of that asset, with the same tolerance. Counting rows:
+  previous outgoing transfer of that asset, with the same tolerance. A target labelled
+  as an exchange needs evidence of a sweep too since 2.23 (the label names the exchange,
+  it is not evidence of a sweep), under a balance-sweep rule of its own
+  (`sweeps_balance_to`), because exchanges batch their sweeps (daily or less often) and
+  may leave a fee or dust behind: an outgoing transfer of an asset to the labelled
+  wallet counts when it moves at least 90 % (`LABELLED_SWEEP_SHARE`) of the value of
+  that asset the address received since its previous outgoing transfer of that asset (to
+  anyone; several deposits swept together add up), and happens at most 30 days
+  (`LABELLED_SWEEP_SECONDS`; 216,000 blocks for a row without a timestamp) after the
+  latest of those receipts. A transfer that passes the forwarding test above counts as
+  well (deposits forwarded one by one, each within 38,400 s), so a label never makes the
+  test harder than for an unlabelled wallet. Both values are exploratory judgement calls,
+  not measured on a labelled set; one such transfer is enough. In 2.22 a labelled target was accepted
+  on the label alone, so an ordinary wallet that received 1 ETH and paid 1 wei to a
+  labelled exchange years later came out as an `exchange_deposit` with `evidence`. An
+  address whose outgoing transfers reach the sweep share only by counting payments to
+  labelled exchange wallets that are not such sweeps (a small share of what arrived, or
+  more than 30 days later) is now `paid_exchange` (see Kinds). Counting rows:
   a token transfer is one transfer (the `txlist` call to the token contract, value
   0, is not counted next to the `tokentx` row), zero-value transfers are ignored,
   and a token transfer out of the address is kept only when its transaction is one of
@@ -439,12 +514,20 @@ gas-price gate and the contract check make bounded, memoised RPC calls.
   examined): spoofed "from the depositor" transfers to look-alike addresses cannot take
   one of the 25 slots. Senders (since 2.22): an incoming transfer counts only when it
   is non-zero and the address later sweeps the same asset, so a fake token (which can
-  forge any "from", even an exchange hot wallet), a dust spoof or a gas top-up does not
-  make a sender. A per-customer address can have a few hundred one-off senders
+  forge any "from", even an exchange hot wallet) does not make a sender. Since 2.23 the
+  transfer must also reach the dust floor of its asset, the same floors as the direct-link
+  rule: the native coin at the network's floor (0.001 ETH on Ethereum, 20 POL on Polygon,
+  see `networks.DUST_FLOOR_WEI`) and a listed real token at its floor in
+  `data/real_tokens.csv`; an unlisted token needs a non-zero amount. So a 1-wei spoof or a
+  small top-up does not make a sender even when the address later sweeps that asset
+  (in 2.22 it did when the address swept that asset, although the text said otherwise).
+  A per-customer address can have a few hundred one-off senders
   (exchange deposit addresses with 56 to 142 were seen); a busy hub pays out to many
   destinations, a deposit address forwards what it receives, hence the 95 % sweep share
-  above 50 senders. The 300 / 50 / 95 % values are judgement calls, not measured on a
-  labelled set. A spoof routed through a contract the address itself called is not
+  above 50 senders. An address with more than 300 senders is not classified (it is taken
+  as a hub and dropped, not given a separate status); the cap is unchanged in 2.23, and
+  with the floors dust can no longer push an address over it. The 300 / 50 / 95 % values
+  are judgement calls, not measured on a labelled set. A spoof routed through a contract the address itself called is not
   detected. An account
   whose code is an EIP-7702 delegation designator (`0xef0100` plus a 20-byte
   address) is an EOA, not a contract. A recipient in the window that
@@ -462,7 +545,8 @@ gas-price gate and the contract check make bounded, memoised RPC calls.
   (`--no-deposit-addresses`).
 
   Kinds (since 2.21). Every listed address has a `kind`. `exchange_deposit` is the rule
-  above: a sweep target is labelled as an exchange and none has another category, and
+  above: a sweep target is labelled as an exchange, receives a swept balance (since
+  2.23, the labelled rule above) and none has another category, and
   only a sweep to labelled exchange wallets is `evidence`; this is the only kind that
   was ever a lead (since 2.21 it is context too). `deposit_like` (since 2.22) has the
   same sweep behaviour but only unlabelled busy sweep targets: whose deposit address it
@@ -471,6 +555,18 @@ gas-price gate and the contract check make bounded, memoised RPC calls.
   deposit address between two addresses, and `deposit_like` only as context.
   Exchange names from several labels are case-folded and deduplicated ("Binance,
   binance" is "Binance").
+  `paid_exchange` (since 2.23) is an address that paid a labelled exchange wallet without
+  sweeping what it had received (no payment of at least 90 % of what arrived since the
+  previous outgoing transfer of that asset within 30 days of the latest arrival, and none
+  that passes the forwarding test): a
+  customer paying an exchange, not an address the exchange controls. It is reported only
+  where the 2.22 rule would have accepted it (sweep targets and paid targets together
+  reach the sweep share), names the exchange and the paid wallets (`paid_targets`), has no
+  senders, no gas funder and no `sweep_target`, is never `evidence`, never scored and
+  never links two addresses (not even as context). In `demix` such a counterparty is
+  listed apart from the deposit addresses (CLI `[paid]`, report row "paid an exchange",
+  not counted as a deposit address in the log line or the section count). An
+  operator-executed forwarder found for the same address outranks it.
   `service_deposit` has the same sweep behaviour but a labelled sweep target of another
   category (gambling, bridge, payment, ...): it is shown with the service name, never
   scored and never linked. `forwarder` is a per-account forwarder whose token outflows
@@ -494,7 +590,10 @@ gas-price gate and the contract check make bounded, memoised RPC calls.
   0.01 ETH on Ethereum, Arbitrum, Optimism and Base, 0.01 BNB, 2 POL on Polygon (exchange
   top-ups of 0.0155 to 1.6 POL were seen; 0.01 found none of them), 1 xDAI and 0.5 AVAX;
   apart from Polygon these are estimates. A result whose token history hit the
-  1,000-row cap is marked `incomplete`.
+  1,000-row cap is marked `incomplete`. A failed transaction (`isError` 1 or receipt
+  status 0) moved nothing: since 2.23 its rows count in no test of the classifier
+  (senders, sweeps, forwarding, gas funder, forwarder), in either direction; the
+  failed transactions the address sent are shown apart as `failed_sends`.
 
   Checking one address. `tornado-demix classify-address <address> --network N
   [--labels-blockscout]` (and "classify" in the web UI) runs the same classifier on a
@@ -524,7 +623,7 @@ family, no weight, no band. The signals
 fall into evidence families: amount+timing (`count_match`, `self_relayed`,
 `early_profile`, `profile_match`), gas price, linked address (`linked`). The
 **band** needs a lead signal — an early direct link or an early multi-pool
-profile. Lead signals come from two independent sources: an early direct link
+profile. Lead signals come from two different families, whose independence is not established: an early direct link
 (`linked`) and an early multi-pool profile (`early_profile`). `strong` needs lead
 signals from both of them, `moderate` a lead signal from one, and `weak` is
 amount+timing, gas price and/or context-only signals. Amount+timing and gas price never raise the band; they
@@ -534,7 +633,7 @@ windows that end before the wallet's first deposit, the pipeline found
 amount+timing and gas-price leads as often as in the real windows, and only
 linked-address leads clearly more often (30 against 7 over 30 days; 19 against 1
 within 72 hours, measured before 2.17, and counting the withdrawal sender, which 2.19 removed); the early multi-pool profile was added in 2.15 on the same kind
-of evidence. Version 2.16 added the two-source rule for `strong`: among
+of evidence. Version 2.16 added the two-family rule for `strong`: among
 candidates with a lead signal, a second amount+timing family did not lower the
 chance share (4 real against 1 decoy at 72 hours, 4 against 0 over 30 days;
 `tools/placebo_strong.py`). Before 2.16 a lead signal plus any other family was
@@ -626,18 +725,40 @@ Rules (the semantics are fixed; the wording is the code's):
 withdrawals; it does not add evidence for anyone. A root that is not in the pool's index
 (a withdrawal whose root cannot be read from the calldata, or an index that does not reach that
 block) keeps the withdrawal and is counted as "not found". So does a root that the pool no longer
-accepted at the withdrawal block, and a calldata with several valid candidate roots (see below).
+accepted at the withdrawal block, and a transaction without a single decoded withdraw root (see below).
 
-**Which root counts.** The calldata is not decoded, so the nullifier is searched at every byte
-offset and the 32-byte word before **each** occurrence is a candidate root
-(`tornado_demix/withdraw_root.py`). A wrapper such as Multicall can carry
-`[old root][nullifier]` in a call that is not the withdrawal, so a candidate is accepted only when
-it is a root the pool still accepted at the withdrawal block: it is in the rebuilt tree's root
-index, it was not produced after the block, and fewer than `ROOT_HISTORY_SIZE` insertions
-happened after it (the pool keeps a ring of the last `ROOT_HISTORY_SIZE` roots; insertions of
-the withdrawal's own block are counted in the way that favours acceptance). With zero or several
-accepted candidates the root is unknown and the withdrawal is never excluded
-(`roots_outside_history` and `roots_ambiguous` in the summary).
+**Which root counts.** The root is the `_root` argument of the decoded `withdraw` call that
+reached the pool (`tornado_demix/withdraw_root.py`): the pool's
+`withdraw(bytes,bytes32,bytes32,address,address,uint256,uint256)` called on the pool, the
+router's `withdraw(address,bytes,bytes32,...)` called on a router the network declares with
+`_tornado` equal to the pool, or either of them inside a Multicall wrapper (Multicall3/Multicall2
+`aggregate`, `aggregate3`, `aggregate3Value`, `tryAggregate`, `blockAndAggregate`,
+`tryBlockAndAggregate`, and `multicall(bytes[])` on the same contract), decoded recursively up
+to four levels with each sub-call's own target. A decoded call counts only when its
+`_nullifierHash` is the withdrawal's nullifier. Several different decoded roots
+(`roots_ambiguous`) or no decoded call (`roots_undecoded`, shown as "no withdraw call decoded")
+leave the root unknown and the withdrawal is never excluded. So does a matching call inside a
+frame that lets it fail without reverting the transaction (`aggregate3`/`aggregate3Value` with
+`allowFailure`, `tryAggregate`/`tryBlockAndAggregate` with `requireSuccess` false,
+`multicall(bytes[])` of an unknown contract, a wrapper selector called on an address that is not
+a known Multicall deployment of the chain, or anything nested in one): it may have reverted
+while the real withdrawal ran elsewhere (`roots_unverified`, "call may have failed"). A call in a
+strict frame must have succeeded, and one nullifier is spent once, so a strict root is used even
+next to such calls. Decoding is bounded per transaction (calldata size, calls visited, bytes
+sliced); calldata past the bound counts as undecoded. Known Multicall deployments are listed
+with their source in `tornado_demix/data/multicalls.csv`: Multicall3
+(`0xca11bde05977b3631167028862be2a173976ca11`, the same deterministic address on every supported
+chain) and, on Ethereum only, Multicall2 and Multicall (MakerDAO). Any other contract can answer
+to a strict wrapper selector and still ignore a failing sub-call, so its frames are treated as
+able to fail. The old search for the 32-byte
+word before the nullifier is kept only as a diagnostic: a wrapper can place an older root right
+before the nullifier in a call that is not the withdrawal and build the real call elsewhere, so
+a root found that way is never used. A decoded root is then accepted only when the pool still
+accepted it at the withdrawal block: it is in the rebuilt tree's root index, it was not
+produced after the block, and fewer than `ROOT_HISTORY_SIZE` insertions happened after it (the
+pool keeps a ring of the last `ROOT_HISTORY_SIZE` roots; insertions of the withdrawal's own
+block are counted in the way that favours acceptance); otherwise it is counted in
+`roots_outside_history`.
 
 **History size per pool.** `ROOT_HISTORY_SIZE` is read from each pool contract with `eth_call`
 once and cached in `.cache/merkle/<chain>_<pool>.history.json`. It is not the same for every
@@ -686,22 +807,27 @@ below was computed for the pools it lists, the 0.1, 1, 10 and 100 ETH pools with
 pools with 30), so a withdrawal proven against a root older than the wallet's newest note is
 the only kind that can be excluded. In the cached hold-out windows at most 11.01 % of
 Ethereum and 10.94 % of Polygon withdrawals could be excluded at all (`tools/root_ceiling.py`,
-upper bound, newest note only; see [EVALUATION.md](EVALUATION.md)). Most withdrawals in a
+upper bound, newest note only, measured before 2.23 with one history size per chain; the tool
+now reads it per pool and a re-run is planned; see [EVALUATION.md](EVALUATION.md)). Most withdrawals in a
 window are made after the wallet's notes are in every accepted root, so the exclusion cannot
 decide them; it can only remove those that are old enough.
 
 **Limits.** The exclusion tests the wallet's *notes*, not its funds: a withdrawal proven
-against a newer root is not excluded, whoever made it. A withdrawal whose calldata does not
-expose the root next to the nullifier is not excluded. Candidates
+against a newer root is not excluded, whoever made it. A withdrawal whose calldata holds no decodable
+`withdraw` call to the pool (an unknown wrapper contract, a call built inside another contract)
+is not excluded. Candidates
 admitted only through a count that the removal changes are re-evaluated once; a candidate that
 would newly appear after the removal is not looked for.
 
 The evaluation tools log every test they compute to a hash-chained register
 (`tornado_demix/registry.py`, see "Test register" in EVALUATION.md), so the number of
 tests actually run, exploratory sweeps included, is known when results are corrected for
-multiple comparisons.
+multiple comparisons. The hash chain proves integrity only relative to an external witness
+taken earlier (a copy of the chain head kept elsewhere); it is not proof of pre-registration.
+A confirmatory claim needs a public timestamped witness, frozen parameters and a data
+manifest made before the data were read.
 
-A record is marked `confirmatory` only when the protocol lock lists the SHA-256 of the script that produced it. That is all the status says: it depends on the script file's hash alone, so a change in the library code the script calls (or in the inputs, parameters or data) is not covered by it.
+A record is marked `confirmatory` only when the protocol lock lists the SHA-256 of the script that produced it and of every `tornado_demix` module loaded when it was written. That is all the status says: helper modules beside the script under `tools/`, the inputs, parameters and data are not covered by it.
 
 ## 5. Cluster tracing (split exits)
 
@@ -759,9 +885,12 @@ each attributed transfer is an edge to the next address.
 **One ledger per address.** Every (chain, address, asset) the funds reach has one
 ledger. All traced inflows into it are merged, each tagged with the branch it came
 by (the arrival transaction and its sender), and the address's events are replayed
-once in chain order (block, then transaction index). FIFO starts at the first
-traced arrival: an outgoing transfer before it carries none of the traced funds,
-and no edge comes from a transfer earlier than the arrival that funds it. The
+once in chain order (block, then transaction index, then the position inside the
+transaction, see below). FIFO starts at the first traced arrival: an outgoing
+transfer before it carries none of the traced funds, and FIFO lets an outgoing
+transfer take a traced lot only when the lot is known to have arrived before it, so
+no edge comes from a transfer earlier than the arrival that funds it, also inside
+one transaction (2.23). The
 traced share of each outgoing transfer is split back across the incoming branches
 by the lots FIFO consumed, oldest first (`sources` on the edge: arrival
 transaction, sender, amount); an edge's `hop` is one more than the shortest
@@ -772,7 +901,14 @@ level at a time in a fixed order (hop, time of first arrival, address), and afte
 each level the replay runs again over all fetched histories merged in time order
 (chains interleave by timestamp, so a bridge fill comes after its deposit); an
 address reached again by a later branch is simply replayed with the merged ledger
-and is expanded (fetched) once. An internal transfer out of an address (a contract
+and is expanded (fetched) once. A replay queues an address's events only while the
+address holds traced funds or has traced funds pending; the events of an address
+without them are plain arithmetic on its own ledger (no outflow can carry traced
+funds) and are caught up, cached, when funds reach it or the replay ends, and a
+history is sorted again only when a newly read one changes its order. The results
+are the same as replaying every event (tested on random graphs); a 40-level chain
+with 10,000 events per address takes about 5 s instead of about 65 s. An internal
+transfer out of an address (a contract
 wallet) is an outgoing transfer like any other. An internal transfer has no
 transaction index of its own; it takes the index of any fetched normal or token
 row of the same transaction, zero-value and failed rows included (the zero-value
@@ -788,6 +924,59 @@ its outflows was replayed in between or the credit exceeds its balance. The cost
 is that such an outflow can be missed as an edge (its funds stay at the address).
 When the recipient's history does not list the inflow at all, the amount is
 credited at the time of the sending transfer.
+
+**Order inside one transaction (2.23).** One transaction can move the asset into
+and out of an address several times (a contract that pays out its older balance and
+is then paid the traced funds, or the reverse). An equal transaction index says only
+that two transfers share a transaction, not which came first; before 2.23 the inflow
+was taken as first, so an outflow could spend traced funds that arrived later in the
+same transaction. Now each event keeps its position inside the transaction: the
+top-level value of a normal transaction (it moves before every internal call of that
+transaction), the `traceId` of an internal transfer (a path such as `0_1_2`, compared
+component by component as integers, so a call's value moves before its sub-calls;
+without a `traceId`, Blockscout's flat trace `index` of the call, compared as a number
+and never against a `traceId` path: a transaction whose internal rows are placed in
+more than one way (paths, flat indexes, or neither) has all its internal places unknown), the `logIndex` of a token transfer. Routescan rows are read
+the same way (a `traceId` when present); their field set was not checked against a
+saved response. An outflow takes a traced lot of its own
+transaction only when both positions are known and comparable and the inflow's is
+smaller (a top-level inflow before any internal outflow, a smaller `traceId` path, a
+smaller `logIndex`); the replay sorts the transaction's events by these positions, so
+an outflow known to come first is replayed on the balance before the inflow and
+carries none of it. When a position is missing or the two are not comparable (an
+internal transfer without a readable `traceId`, a token transfer without a
+`logIndex`, a native position against a token one, an output paid back by a swap or
+fill whose place is not read), the outflow does not take that lot under FIFO: the
+amount stays at the address and the part such an outflow can hold ends as
+`order_unknown` with the reason "order inside one transaction unknown" (`order_note`
+on the end point, `same_tx` on each listed transfer), shown in the CLI, the report
+(stops table and page 1), the JSON and the web UI. The bounds `[lower, upper]` stay
+sound: with an unknown order the inflow is counted first, which can only widen
+`upper`, and can only lower `lower` of that outflow (it is the same when the inflow is
+fully traced; the untraced part of a partly traced inflow counts as other funds that
+may have paid the outflow); only the FIFO edge is withheld.
+
+Etherscan's `tokentx` rows carry no `logIndex`, so on a token trace every token
+transfer into and out of one address inside one transaction has no known order and
+ends as `order_unknown` (in practice contracts only: smart accounts, forwarders, batch
+calls; an EOA does not receive and pay in one transaction). Many `order_unknown` ends
+on a token trace through such contracts are therefore expected; the order can only be
+recovered from the transaction's receipt logs, which the trace does not read for this.
+Likewise a swap or same-chain fill output that lands at an address paying out again in
+the same transaction (a smart-account or contract batch) ends as `order_unknown`: the
+place of the output inside the transaction is not read.
+
+**Several inflows of the traced transaction.** When the address receives more than one
+inflow in the transaction that carries the traced funds, the traced one is singled out
+by the sender of the previous hop's edge, then by its place inside the transaction (the
+same explorer row as that edge's outflow), then, at the start address, by the traced
+amount. When more than one still qualifies, which inflow is traced is not known: the
+funds are credited at the earliest of them with their place inside the transaction
+unknown (so no outflow of that transaction takes them under FIFO; the part one can hold
+ends as `order_unknown`) and the address's history is marked incomplete, so `lower` is
+0 and nothing on it reads as certain. At the start address `arrival_matched` is then
+`ambiguous_in_tx`, and the CLI, page 1 (a warning) and the web UI say that the arrival
+transaction holds several inflows that can carry the traced amount.
 
 **Downstream bounds.** The next address is credited with the FIFO amount for FIFO,
 but with the edge's bounds `[lower, upper]` for its own bounds (`t_lo += lower`,
@@ -821,6 +1010,29 @@ reasons above:
 - `tornado_redeposit`: a transfer into a Tornado pool or router of that chain (from
   the networks registry), whatever its amount; it is checked before labels and the
   threshold.
+- `order_unknown` (2.23): traced funds still at an address under FIFO that an outgoing
+  transfer in the same block may have taken, because the order of that transfer against
+  their arrival is not known (an internal transfer without a transaction index of its
+  own, see above; or, inside the arrival's own transaction, a position missing or not
+  comparable: "order inside one transaction unknown", see "Order inside one
+  transaction"). FIFO cannot give them to it, so before 2.23 they read as "not moved
+  on"; now the part such transfers can hold (at most their value) ends as
+  `order_unknown`, the transfers listed with it (recipient, transaction, value), and only
+  the rest as not moved on. The end amounts still add up to the start amount.
+
+**Possible outflows (2.23).** On an incomplete history (overdraft, cut-off list,
+same-block order unknown) an outgoing transfer that FIFO gives none of the traced funds
+can still hold some: up to the traced funds credited to the address up to its block.
+A transfer known to come before every traced arrival at the address (an earlier block,
+or the same block with both transaction indexes known and smaller, or the same
+transaction with comparable positions and a smaller one) is left out, and so
+is one that FIFO did give traced funds to (an amount under the threshold ends as
+`below_threshold` without an edge). Such transfers are listed in `possible` (lower 0, that
+upper, attributed 0, status "possible (history incomplete)", kind `possible`), in time
+order, the first 25 listed
+and the rest counted in `possible_more` (`count`, `value`). They are not followed and
+carry no end amount; the report lists them under "Possible outflows (history
+incomplete)", page 1 counts them, and the CLI and the web CSV list them too.
 
 A replay whose bounds have not settled at its cap (one replay per address plus three)
 is used as it is and recorded in `errors` with kind `replay_unsettled`.
@@ -829,11 +1041,20 @@ is used as it is and recorded in `errors` with kind `replay_unsettled`.
 checked before the swap rule, so a listed bridge is always named. A listed bridge
 whose deposits are not decoded ends the branch as "bridge <protocol> (not followed)"
 (edge kind `bridge`, state `not_followed`). Only a row of kind `aggregator` (LI.FI,
-Socket, Rango, Squid) can be a same-chain swap: when it pays something back to the
-sender in the same transaction and no bridge contract of the table (kind `contract`)
-logged an event in that transaction, the trace goes on with the output. With a bridge
-event in the receipt the payment back is taken as a refund of unused fees or dust and
-the aggregator is named as a bridge. A bridge row (kind `contract` or `maker_eoa`) is
+Socket, Rango, Squid) can be a same-chain swap: when it pays something of material
+size back to the sender in the same transaction and no bridge contract of the table
+(kind `contract`) logged an event in that transaction, the trace goes on with the
+output. Material means a payment in another token than the one sent (any amount), or
+native coin above the native value the sender attached to the transaction it sent (the
+transaction object's `value`; 0 when the traced address did not send the transaction,
+for example a contract wallet). Known limit: a payment in another token has no size
+rule (without prices it cannot be compared with the transfer), so a dust refund of a
+third token still reads as a swap. A native payment back within that value is a refund of
+unused bridge fees: the aggregator may have bridged through a bridge that is not in the
+table, so unless an Across deposit is tied the branch ends as "aggregator <protocol>
+(bridge or swap unknown)" (state `bridge_or_swap_unknown`, a bridge badge). With a
+bridge event in the receipt the payment back is taken as a refund of unused fees or
+dust and the aggregator is named as a bridge. A bridge row (kind `contract` or `maker_eoa`) is
 never read as a swap: bridges such as Stargate refund unused messaging fees in the
 native coin, and without a price feed a refund cannot be told from a swap output by its
 size. Only Across contracts and aggregators are checked for an Across deposit; a
@@ -844,15 +1065,20 @@ depositor is the traced address and the deposit's input amount equals the transf
 through a periphery, router, aggregator or unlisted contract the input amount is at
 most the transfer and at least 90 % of it (`TIE_FEE` = 10 %; the stored fixtures show a
 1.0 % LI.FI fee and none for the periphery), and the depositor is the traced address or
-the contract it paid, with the traced address as the sender of the transaction. A
-deposit in the name of a third address is never taken (the sender may be a relayer or
+the contract it paid. A contract that deposits in its own name is taken only on a
+stronger tie: the traced address called it directly (it sent the transaction and the
+contract is the transaction's `to`, or the deposit lies in a successful ERC-4337 user
+operation of the traced address, see below) and no other inflow of the same token into
+the contract is logged in that call (the traced transfer's own Transfer log is allowed
+once). A deposit in the name of a third address is never taken (the sender may be a relayer or
 batcher), and each deposit is taken by one transfer at most. A deposit of the traced
 address that is not tied (a tip or fee in the same transaction, a second transfer, an
 amount off by more than the bound) ends the branch as "bridge across (deposit not tied
 to this transfer)" at an Across contract or a listed aggregator; at an unlisted contract
-it keeps the plain end "contract without a payment back". Known gap: a router that
-deposits in its own name for someone else, in a transaction the traced address sent,
-with an input within 10 % below the traced transfer of the same token, would be taken. This covers direct SpokePool calls, the SpokePoolPeriphery
+it keeps the plain end "contract without a payment back". A router depositing in its
+own name for someone else in a transaction the traced address sent is therefore taken
+only when nothing else of that token reached it in the transaction (a router pooling
+several users' funds in one call is not tied). This covers direct SpokePool calls, the SpokePoolPeriphery
 (`0x97ccdbea4632140639ad5ea9b944aa034eb15fd4`), aggregators such as LI.FI that deposit
 into Across, and any unlisted contract that paid nothing back (its receipt is read
 before the branch ends as "contract without a payment back"); the edge records the
@@ -892,9 +1118,9 @@ bridges are listed in `tornado_demix/data/bridges.csv` (columns chain_id, addres
 protocol, role, kind, source_url; kind is contract, aggregator or maker_eoa), each row
 with the public page it came from; any other contract is treated as before. Other
 bridges and aggregators are listed but not decoded, except the two canonical
-bridges below. Maker-based bridges (Orbiter,
-Layerswap, Owlto, Rhino.fi) pay out of EOAs; no maker address has an official or
-public-label source here, so none is listed. The join is by on-chain id; it identifies
+bridges and the named bridges below. Maker-based bridges (Orbiter, Owlto, Rhino.fi)
+pay out of EOAs; no maker address of theirs has an official or public-label source
+here, so none is listed (Layerswap's maker has a public name tag, see below). The join is by on-chain id; it identifies
 where the bridged amount
 arrived, not who controls the recipient.
 
@@ -921,7 +1147,11 @@ so it stays "bridge arbitrum (not followed)". The L2 credit is confirmed on Arbi
 among the recipient's normal transactions from the L1 time, the earliest one from the
 aliased L1 sender to the recipient with exactly the credited value that no earlier
 message has claimed (two identical deposits a few minutes apart take two different
-credits, or the second ends as not found). The first read covers 2 hours after the L1
+credits, or the second ends as not found). "Earlier" is by message number, whatever
+order the trace reaches the messages in: when message 40 is reached only after message 41
+took the credit 40 would have taken, 40 takes it back, 41 is looked up again without it
+and the replay runs once more (the same for token gateway deposits). The first read
+covers 2 hours after the L1
 time; only when nothing matches is the rest of the 7-day retryable lifetime read. On the
 three fixtures that is the auto-redeem or deposit transaction, 7 to 12 minutes after the
 L1 block. The walk then continues on Arbitrum from the L2 recipient with
@@ -935,9 +1165,53 @@ retry failed so that `l2CallValue` went to `callValueRefundAddress` instead, whi
 not followed, or one the explorer does not return) the branch ends as "bridge arbitrum, l2 credit not found"
 (state `l2_credit_not_found`) with the L2 recipient shown; a failed receipt or L2
 lookup ends as `lookup_failed`; without a reader for Arbitrum it ends as "bridge
-arbitrum (recipient <address>, chain not supported)". Token deposits through the
-gateway router, and messages not tied to the transfer, keep "bridge arbitrum (not
-followed)". A native call to the ZKsync L1Bridgehub
+arbitrum (recipient <address>, chain not supported)". Messages not tied to the
+transfer keep "bridge arbitrum (not followed)".
+
+*Arbitrum token gateways.* An ERC-20 deposit (`outboundTransfer` or
+`outboundTransferCustomRefund` on the L1GatewayRouter
+`0x72ce9c846789fdb6fc1f34ac4ad25dd9ef7031ef`) moves the tokens from the caller into
+the token's L1 gateway (listed: the standard L1ERC20Gateway
+`0xa3a7b6f88361f48403514059f1f16c8e78d60eec`, L1CustomGateway
+`0xcee284f754e854890e311e3280b767f80797180d`, L1WethGateway
+`0xd92023e9d9911199a6711321d1277285e6d4e2db`, from the Arbitrum docs' contract
+address page). The gateway emits `DepositInitiated(l1Token, from, to, sequenceNumber,
+amount)` and sends a fee-only retryable through the Inbox (`to` = the L2 gateway,
+`l2CallValue` 0) whose L2 calldata is `finalizeInboundTransfer(l1Token, from, to, amount,
+data)`; the sequence number is the message number. A deposit is read from the receipt
+and counts only when the Inbox message with that number was sent by the contract that
+emitted the event (the un-aliased sender of the Bridge log) and its L2 calldata names
+the same token, sender, recipient and amount. A token with its own gateway that is not
+listed (DAI uses one) is recognised too, but only when the router's `getGateway(l1Token)`
+names that contract: any contract can emit the event and send a matching retryable
+itself, so without the router's word an unlisted emitter is an ordinary contract (and a
+failed router read ends as `lookup_failed`). It is tied to the traced transfer when the traced token went from the
+traced address to that gateway, the event's token and sender are the traced ones and
+the amount is equal (gateways keep no fee in the token; the L2 fees are paid in ETH),
+and each message is taken once per replay. The L2 token is the router's
+`calculateL2TokenAddress(l1Token)` (an `eth_call`, cached). Both router reads are made
+at the latest block, not at the deposit's block (the explorer's `eth_call` takes no
+block number): a token whose gateway or L2 token changed since the deposit is mapped as
+it is now, and a gateway that is no longer the token's gateway is not confirmed. The
+credit on Arbitrum One
+is the earliest transfer of that L2 token to the recipient of exactly the amount, minted
+(from the zero address) or paid by the L2 gateway (a WETH-style gateway), at or after the
+L1 time, in the same 2-hour then 7-day windows, not claimed by an earlier deposit; the
+walk continues from the recipient in the L2 token, and the edge records the L1 and L2
+token, the gateway, the message number and the L2 transaction. The credit is matched by
+recipient, token and amount, not by the retryable ticket id: when another deposit of the
+same token and amount to the same recipient lands in the window, the credit taken may
+be the other one's, so the L2 transaction and landing time are then off by that much
+(the amount and recipient are the same either way). Edges, end points and the result
+keep the token contract next to its symbol (`asset_address`, with `chain_id`), and the
+totals are per (chain, token contract), so a token that only shares a symbol with
+another is never merged with it. A failed mapping or L2
+read ends as `lookup_failed`, no credit as "bridge arbitrum, l2 credit not found". The
+fee-only retryable on its own (a native transfer of the fee to the router) stays "bridge
+arbitrum (not followed)"; a deposit made by another contract on the traced address's
+behalf (an aggregator) is not tied, since the event's sender is that contract.
+
+A native call to the ZKsync L1Bridgehub
 (`0x303a465b659cbb0ab36ee643ea362c509eeb5213`) is decoded from the calldata of the
 traced address's own transaction: `requestL2TransactionDirect` gives `l2Contract` (the
 L2 recipient), `l2Value`, `mintValue` and `refundRecipient`;
@@ -948,10 +1222,195 @@ calldata (legacy `abi.encode(l1Token, amount, l2Receiver)`, or version byte 0x01
 separately, labelled so (zero means the sender). The call must carry exactly the traced
 transfer (`mintValue`, plus `secondBridgeValue` for two bridges). ZKsync chains are not
 in the networks registry, so the branch ends as "bridge zksync (recipient <address>,
-chain not supported)" with the ZKsync chain id on the edge. Reports print the L2
+chain not supported)" with the ZKsync chain id on the edge. An ERC-20 deposit
+(`requestL2TransactionTwoBridges` with the L1AssetRouter
+`0x8829ad80e425c646dab305381ff105169feece56` as second bridge; the tokens go to the
+L1NativeTokenVault `0xbed1eb542f9a5aa6419ff3deb921a372681111f6`; both from the ZKsync
+docs' chain address page) is a token transfer, whose calldata the explorer does not
+return, so the transaction is read: it must be the traced address's own call through a
+listed ZKsync second bridge, and the decoded token and amount must be the traced token
+and the transfer; the end then also shows the token. A legacy ZKsync Era request
+(`requestL2Transaction(_contractL2, _l2Value, ...)` on the Era DiamondProxy
+`0x32400084c286cf3e17e7b677ea9583e60a000324`, from before the Bridgehub) gives the L2
+recipient `_contractL2` with `_l2Value`; msg.value also pays the L2 base cost, so it is
+tied when `_l2Value` is above zero and at most the traced transfer, and ends the same
+way (chain 324). Reports print the L2
 recipient in full and link it (Arbitrum through the networks registry, ZKsync Era at
 explorer.zksync.io; other ZKsync chains have no link). Selectors and event topics are
-re-derived from the ABI signature strings in `tests/test_bridges_canonical.py`.
+re-derived from the ABI signature strings in `tests/test_bridges_canonical.py` and
+`tests/test_bridges_canonical_tokens.py`.
+
+**Bridge table.** Every row of `tornado_demix/data/bridges.csv` and every decoder is in the
+table below: how the bridge is recognised, whether the trace follows it to the other side
+and, when not, the end state (`state` on the edge and the end point; the end reason is
+the text in quotation marks). Without destination readers (`destinations` not given to
+`trace_funds`) no bridge is followed and each one is named. The named bridges
+(`tornado_demix/bridges_named.py`) are the ones a measured sample of Tornado ETH-pool exits
+reached besides Across and Arbitrum. Each deposit is tied to the traced transfer like an
+Across deposit: the
+log is emitted by the listed contract the transfer went to, the traced address sent the
+transaction (or is the Relay depositor), the token and the amount are the transfer's
+(a native `forwardEth` call or a Relay receiver payment carries no amount in its log:
+the payment is the transfer itself), and each log is taken by one transfer per replay.
+A deposit that is not tied ends as "bridge <protocol> (not followed)" (`not_followed`); a
+receipt that cannot be read as `lookup_failed`. The named bridges are not followed to the
+other chain, for the reason in the table: the trace never guesses a payout. Each end keeps
+the decoded details on the edge (`bridge`: request id, memo, destination chain, recipient,
+token out, vault) and reports print the recipient in full (linked only on a chain of the
+networks registry). The sample behind the choice and the share the code follows are in
+[Evaluation](EVALUATION.md#bridge-coverage-of-tornado-eth-pool-exits-exploratory).
+
+| Bridge | Recognised how (source of the address) | Followed? | Why not / end state |
+|---|---|---|---|
+| Across | SpokePools of the registry chains, the SpokePoolPeriphery and listed aggregators (Across hub contract `crossChainContracts`, Etherscan-verified names); a `V3FundsDeposited` / `FundsDeposited` log tied by token, amount and depositor | yes, to the fill on the destination chain (`filled`); the walk goes on from the fill recipient | `fill_not_found`; `deposit_expired_possible_refund`; `destination_chain_not_supported`; `destination_pool_not_listed`; `lookup_failed`; `deposit_not_tied` ("bridge across (deposit not tied to this transfer)"); `deposit_not_decoded` ("bridge across, deposit event not decoded", "(v2 not decoded)" for the v2 pool); a deposit after a swap whose payout row is not listed ("bridge across (swapped before the deposit, fill amount not read)"); a fill to the MulticallHandler without a tied onward payment ("bridge across (multicall handler, onward transfer not tied)") or the part it kept ("bridge across (multicall handler, rest not paid on)") |
+| Arbitrum | Inbox `MessageDelivered` kind 9 (retryable) or 12 (`depositEth`), and the token gateways' `DepositInitiated` confirmed by the Inbox message; gateways listed or confirmed by the L1GatewayRouter (Arbitrum docs) | yes: native and ERC-20 deposits, on Arbitrum from the L2 recipient once the credit is found (`l2_credited`) | `l2_credit_not_found` (recipient shown); a fee-only retryable, a deposit not tied to the transfer or an unlisted gateway stays "bridge arbitrum (not followed)"; `lookup_failed` |
+| ZKsync | Bridgehub `requestL2TransactionDirect` / `TwoBridges` (native and ERC-20 through the listed L1AssetRouter), legacy Era `requestL2Transaction` on the DiamondProxy (ZKsync docs) | no | ZKsync chains are not in the networks registry: `destination_chain_not_supported`, "bridge zksync (recipient <address>, chain not supported)"; a call that is not a deposit: `not_followed` |
+| Circle CCTP | TokenMessenger / TokenMinter of v1 and v2 (Circle docs): `DepositForBurn` tied by depositor, token and exact amount | yes, on an EVM destination of the registry, from the mint (`minted`) | `mint_not_found`; `destination_chain_not_supported` ("..., chain not supported)"); `minted_off_evm` for Solana, Noble and other domains without an EVM chain id (recipient shown); a burn through another contract is `not_followed`; `lookup_failed` |
+| CoW Protocol | GPv2Settlement (CoW docs); the owner's `Trade` tied by token and exact sell amount | yes, as a swap from the payout (`settled`) | `trade_not_tied` ("swap cow (trade not tied to this transfer)"); `payout_not_found` ("swap cow (order <uid>, payout not found)") |
+| LI.FI, Socket, Rango, Squid | listed aggregator addresses (Etherscan-verified names, `kind` aggregator) | a swap when a material payment comes back (another token, or native coin above the value attached); an Across deposit in the receipt is followed | a native payment back within the value attached, with no tied deposit and no bridge event: `bridge_or_swap_unknown` ("aggregator <protocol> (bridge or swap unknown)"); a deposit of the traced address that is not tied: `deposit_not_tied`; with a bridge contract's event in the receipt the payment back is a refund and the branch ends as that bridge, `not_followed` |
+| Hop, Synapse, Stargate, Multichain, Wormhole, Celer, deBridge, Polygon PoS, Optimism, Base, Scroll, Linea, Starknet, Polygon zkEVM, Blast, Mantle, Gnosis Omnibridge, Connext, Hyphen | listed contract addresses with a `source_url` (Etherscan-verified names) | no | no decoder: `not_followed`, "bridge <protocol> (not followed)", the address is named; a call that brings funds in (Polygon `exit`, Wormhole redeem) is an arrival, not an exit |
+| Not in the table | an unlisted contract | no | "contract without a payment back" (an Across deposit made through it is still found); Maker-based bridges that pay out of EOAs (Orbiter, Owlto, Rhino.fi) are not listed |
+| Relay | `RelayNativeDeposit` / `RelayErc20Deposit` of the RelayDepository, `FundsForwardedWithData` of the RelayReceiver (verified contracts on Etherscan) | no | the request id is all the chain shows; destination and recipient are in the off-chain quote: "bridge relay (request <id>, destination not on chain)", `destination_not_on_chain` |
+| Mayan | `ForwardedEth`, `ForwardedERC20`, `SwapAndForwardedEth`, `SwapAndForwardedERC20` of MayanForwarder2 (Mayan docs, same address on every EVM chain); the forwarded call decoded for SwiftSource, FastMCTP, MayanCircle (verified contracts) | no (yes for a same-chain MonoChainSwap payout) | the destination fulfil is keyed by an order hash or a CCTP nonce that is not computed here: "bridge mayan (to <chain>, recipient <address>)", `fulfil_not_followed`; destination from the Wormhole chain id or CCTP domain; a Solana recipient in base58; another forwarded call: "bridge mayan (via <contract>, order not decoded)", `order_not_decoded`. MonoChainSwap pays out on the same chain in the same receipt (`TokenTransferred` / `EthTransferred`): followed from the payee like a swap (`same_chain_payout`); the payout taken is the nearest one logged before the forward and after the forward logged before it in the same receipt (the forwarder logs right after its call: observed on ten real MonoChainSwap receipts after Ethereum block 26,300,000, five token and five ETH payouts, each payout log directly before its forward log; the test receipts are synthetic), so a forward whose own payout is missing takes no other one; each payout pays one forward; none readable: "payout not found", `payout_not_found`. The forwarded call is decoded by selector, not by looking the Mayan contract up: MayanForwarder2 forwards only to protocols it whitelists. Forwarders are listed on the registry chains of the docs page (Ethereum, Arbitrum, Base, Optimism, Polygon, BNB Chain, Avalanche); Unichain, Linea, HyperEVM and Monad are not in the networks registry |
+| THORChain, Maya | router `Deposit(to, asset, amount, memo)` (THORChain_Router verified on Etherscan; Maya routers from MAYANode `inbound_addresses`) | no | the outbound is a vault payout not tied on-chain to the memo: "bridge thorchain (to <chain>, recipient <address>)" for a swap memo (`SWAP`, `s`, `=`, limit swaps `=<` and `=>`; THORChain short asset names expanded); a synth (`/`), trade (`~`) or secured (`-`) asset, or a thor1 / maya1 recipient, stays on the protocol's chain: "to THORChain (BTC~BTC, ...)"; an empty destination: "pays the originator"; ADD / WITHDRAW / DONATE name the liquidity pool (short pool names expanded: `wd:e:100` is a WITHDRAW from ETH.ETH; ADD also its paired address) and show no destination or recipient, as nothing is paid out to one; TRADE+ / SECURE+ the account address; any other action shows only the action and the memo (nothing read from its other fields); `vault_payout_not_followed` |
+| Layerswap | plain transfer to the maker EOA (Etherscan public name tag "Layerswap 1") | no | matched off chain; call data sent with the transfer shown as the reference: "bridge layerswap (maker <address>, matched off chain)", `off_chain_matching` |
+| NEAR Intents | plain transfer to the NEAR Intents wallet (Etherscan public name tag); per-quote deposit addresses are ordinary EOAs that sweep there, so the trace reaches it one hop later | no | matched off chain: "bridge near-intents (deposit to <address>, matched off chain)", `off_chain_matching` |
+| Unit | plain transfer to a Unit native-chain treasury (Unit docs, key addresses: Ethereum, Base, Avalanche) | no | the Hyperliquid recipient is assigned off chain: "bridge unit (to Hyperliquid, recipient assigned off chain)", `off_chain_matching` |
+| Hyperliquid | native USDC sent to Bridge2 on Arbitrum (Hyperliquid docs, which call it the legacy bridge; CCTP is preferred, see below) | no | credited to the sender on HyperCore, not an EVM chain: "bridge hyperliquid (recipient <sender>, credited on HyperCore)", `credited_off_evm`; under 5 USDC is flagged `below_minimum` (not credited) |
+
+Selectors and topics are re-derived in `tests/test_bridges_named.py`; fixtures are the
+first matching transaction at or after a fixed block, picked as stated there.
+
+**Circle CCTP: followed to the mint** (`tornado_demix/bridges_cctp.py`). CCTP burns USDC
+on one chain and mints it on another. `depositForBurn` / `depositForBurnWithCaller` (v1)
+and `depositForBurn` / `depositForBurnWithHook` (v2) pull the USDC from the caller into
+the TokenMinter (the transfer the trace sees) and burn it; the TokenMessenger logs
+`DepositForBurn` (v1: nonce, burn token, amount, depositor, mint recipient as bytes32,
+destination domain, destination TokenMessenger, destination caller; v2 adds maxFee and
+minFinalityThreshold and has no nonce, which the attestation service assigns). The
+TokenMessenger, MessageTransmitter and TokenMinter of v1 and v2 are listed for every
+registry chain with a CCTP domain (Ethereum, Avalanche, OP Mainnet, Arbitrum, Base,
+Polygon PoS), from Circle's EVM contracts pages
+(https://developers.circle.com/cctp/evm-smart-contracts and
+https://developers.circle.com/cctp/v1/evm-smart-contracts); domains come from the same
+table the Mayan decoder uses. A burn is tied when the transfer went to a listed
+TokenMinter and the receipt holds a `DepositForBurn` of a listed TokenMessenger of the
+same version whose depositor is the traced address, whose burn token is the traced token
+and whose amount is exactly the transfer; each burn is taken by one transfer. A burn
+made through another contract (an aggregator calling `depositForBurn` in its own name) is
+not tied and ends as "bridge cctp (not followed)".
+
+On an EVM destination of the networks registry the mint is searched for: the
+recipient's `MintAndWithdraw` logs of the destination TokenMessenger the burn names, from
+the burn up to 7 days later. A log counts when the minted amount plus the fee collected
+is the burned amount (the fee at most maxFee) and its transaction holds a
+`MessageReceived` of a listed MessageTransmitter from the burn's source domain whose
+burn message repeats the burn token, recipient, amount and sender (and the nonce for
+v1; for v2 the fee executed is the fee collected). Each mint is given to one burn per
+trace. The trace goes on from the recipient in the minted token, with the minted amount
+(a v2 fast-transfer fee is kept by Circle: on the real fast transfer of the fixtures
+`MintAndWithdraw`'s amount is the burn less the fee and its feeCollected is the fee). End
+states: `minted` (followed, "mint tx"
+linked), "bridge cctp (to <chain>, recipient <address>, mint not found)"
+(`mint_not_found`), "..., chain not supported)" for an EVM chain outside the registry,
+`lookup_failed`, and "bridge cctp (to <domain>, recipient <address>)" (`minted_off_evm`)
+for a domain without an EVM chain id in the domain table (Solana, Noble, Sui, Aptos,
+Starknet, Stellar, and the newer Circle domains whose chain id is not taken from a
+Circle page: they are named, not followed), the recipient decoded (base58 on Solana,
+bytes32 hex otherwise). Selectors and topics are re-derived in `tests/test_bridges_cctp.py`; its
+fixtures are the first matching burns at or after Ethereum block 26,300,000, as stated
+there.
+
+**CoW Protocol settlements** (`tornado_demix/swaps_cow.py`). GPv2Settlement
+(`0x9008d19f58aabd9ed0d60971565aa8510560ab41`, the same address on every registry chain
+per https://docs.cow.fi/cow-protocol/reference/contracts/core) settles a batch of signed
+orders in one transaction: it pulls each order's sell tokens from the owner into the
+settlement, logs `Trade(owner, sellToken, buyToken, sellAmount, buyAmount, feeAmount,
+orderUid)` and pays the buy tokens to the order's receiver. A transfer into the settlement
+is the traced address's order when a `Trade` of the settlement in the same receipt has
+the traced address as owner, the traced token as sell token and exactly the transfer as
+sell amount (each Trade taken once). The receiver is in the signed order, not in the
+event, so the payout is read from the receipt: a `Transfer` of the buy token from the
+settlement of exactly `buyAmount` (each payout taken once), confirmed in the receiver's
+history. Payouts to the owner are taken only when there are as many as the owner has
+trades of that buy token and amount in the receipt; with none to the owner, the only
+such payout is taken only when no other trade of the receipt has the same buy token and
+amount (it could be another order's receiver). The trace goes on from
+the receiver as a swap into the buy token; a receiver other than the owner is shown as
+"paid out by cow to <address>". A native buy token is paid by an internal transaction
+that the receipt does not show, so only a payment to the owner sent by the settlement
+is read, each such payment paying one trade. A partial fill is a Trade of its own in
+each settlement and is tied there by its own amount. Otherwise the
+branch ends at the settlement as "swap cow (trade not tied to this transfer)" or "swap
+cow (order <uid>, payout not found)" (no payout, or equal payouts to several other
+addresses). A transfer into the settlement that no Trade ties (a manual transfer, an
+ETH-flow or pre-signed order owned by another contract) ends at the settlement by name:
+the general "payment back in the same transaction" swap rule is not applied to it.
+Batch caveat: other users' orders and the solver's liquidity share the
+transaction, and the buy tokens of an order can come from another user's sell (a
+coincidence of wants) rather than from a pool; the payout is the order's output, not a
+path through the batch. Native-ETH sell orders go through CoW's ETH-flow contract, which
+is the order owner; they are not tied to the user. Fixture: `tests/test_swaps_cow.py`.
+
+**Across edge cases.** *Swap before the deposit.* A periphery, router or aggregator may
+swap the traced token and deposit the token it bought (`swapAndBridge`). Such a deposit
+of another token than the traced one is tied when it is the only one of its kind in the
+transaction not yet taken, it is in the traced address's name (or in the contract's own
+name with the stronger tie above), the traced transfer is the only inflow of the
+traced token into the contract in that call (the swap can only have spent this
+transfer), and that contract paid the deposit: a Transfer of the deposited token from it
+to the SpokePool of exactly the input amount in the same call. A native-coin deposit
+(no such Transfer) is accepted only when the contract is known to have made it: the
+traced address sent the transaction to it, or, inside the traced address's user
+operation, the deposit is in the contract's name or the contract paid the SpokePool exactly
+the input amount by an internal transfer in that transaction (internal transfers carry no
+log index, so this is checked per transaction, not per user operation). 2.23: a smart
+account's batch that pays the contract and makes its own native deposit no longer ties the
+two; a native swap-and-bridge whose deposit names the account and whose internal transfer
+cannot be read ends as not tied (named, not followed). A deposit the
+address made itself beside an unrelated payment in one batch transaction is therefore not
+taken. Amounts in two tokens cannot be compared without prices, so there is no fee
+bound; the whole transfer is taken as the deposit and the trace goes on from the fill
+recipient as the amount the fill paid, in the filled token (its decimals read from the
+recipient's payout row; the native coin has 18). The edge records `swapped_before`
+(sold token, deposited token and amount). When the payout row is not listed the branch
+ends as "bridge across (swapped before the deposit, fill amount not read)"; two such
+deposits, another inflow of the sold token, a third depositor or a deposit the contract
+did not pay end it as "bridge across (deposit not tied to this transfer)". *MulticallHandler fills.* A deposit with a
+message is filled to an Across MulticallHandler, which runs the message's calls in the
+fill transaction. Two deployments are listed, each address with its own source: the
+MulticallHandler of Across's deployed-addresses list
+(`0x0f7ae28de1c8532170ad4ee566b5801485c13a0e` on Ethereum, Optimism, BNB Chain,
+Polygon, Base and Arbitrum; `0x9610954acdca5ff7905f051a040ce33fe613c60e` on Avalanche),
+and `0x924a9f036260ddd5808007e1aa95f08ed08aa569`, a verified "MulticallHandler" on the
+Ethereum, Optimism, Polygon, Base and Arbitrum explorers that Across fills also pay. The trace goes on from the handler's payments in that transaction: the
+fill token's Transfer logs from the handler after the fill log (a burn to the zero
+address, which unwraps, is left out) and, when the fill is in the wrapped native coin,
+the handler's native payments (internal transactions of the fill block); each payee
+gets its share of the fill. No payment, payments above the fill, or a transaction with
+several fills to the handler end the branch at the handler on the destination chain as
+"bridge across (multicall handler, onward transfer not tied)"; what the handler did not
+pay on in these assets ends there as "bridge across (multicall handler, rest not paid
+on)" (it may have been swapped by the message's calls, which are not followed). When
+the client cannot list internal transactions, a native fill's handler payments are a
+failed lookup (`lookup_failed`, with that reason in `errors`) unless the handler also
+paid on in the token. Fixture: a real fill whose handler unwraps and pays 99.75 % back
+to the depositor (`tests/test_trace_across_edges.py`). The relayer and the fee
+recipient are replaced by synthetic addresses wherever they occur (in the fill
+transaction and inside the deposit's message calldata); the transaction hashes and the
+fill's message hash are the original ones and no longer match the edited content. *ERC-4337.* A smart account's call arrives through an EntryPoint (v0.6
+`0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789`, v0.7
+`0x0000000071727de22e5e9d8baf0edac6f37da032`, v0.8
+`0x4337084d9e255ff0702461cf8895ce9e3b5ff108`) in a transaction a bundler sent. The
+EntryPoint logs `UserOperationEvent` (indexed sender, success flag) after each
+operation, so the logs of one operation lie between the previous operation's event and
+its own; the smart account counts as the sender of a deposit in that span of a
+successful operation (for the "made by" checks and the stronger tie, whose inflow check
+is then limited to that span; the traced token transfer must itself be logged in the
+same operation as the deposit). A failed operation, or an event of another contract,
+does not count. The swap-before-deposit and ERC-4337 tests use synthetic receipts: the
+real swap-and-bridge receipts picked by the fixture rule held swap-path contracts or
+relayers that appear in the project's private data.
 
 Only the first matching deposit of a transaction is followed (one deposit per transaction: the depositor and the traced token must match); a transaction with several Across deposits from the same address is not split. Labels end a trace on the start chain, where the attribution labels and, with `--labels-blockscout`, the cached Blockscout labels apply; the addresses reached on a destination chain after a bridge are checked against the attribution labels only, never against Blockscout labels.
 
@@ -976,7 +1435,9 @@ decimals), so rounding never gives `lower > upper`. `lower`
 above 0 means "certainly at least that much"; `lower` 0 means the transfer is only
 possible. Events are ordered by block, then by transaction index when the explorer
 row has one (internal transfers do not: an unindexed inflow counts as first in its
-block, an unindexed outflow as last). Native and token assets are separate
+block, an unindexed outflow as last), then by the position inside the transaction
+(top-level value, `traceId`, `logIndex`; an unknown position sorts an inflow first and
+an outflow last, see "Order inside one transaction"). Native and token assets are separate
 histories. An outflow larger than the balance the history explains (an overdraft)
 sets `history_incomplete` (internal transfers or pages missing); nothing is
 clamped. From that outflow on `lower` is 0, since the outflow and every later one

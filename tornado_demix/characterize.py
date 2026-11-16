@@ -32,6 +32,7 @@ pool withdrawals are token transfers and are out of scope for the inflow list.
 from .deposit_addresses import classify_address
 from .incomplete import attach, mark, truncated_since
 from .rpc import make_contract_check
+from .txstatus import failed as tx_failed
 
 # Classification thresholds (judgement calls).
 SERVICE_MIN_TXS = 500  # above this an address is a service/exchange, not personal
@@ -60,7 +61,12 @@ def run_classify(client, address, network, labels=None, is_contract=None):
     if is_contract is None:
         is_contract = make_contract_check(network.rpc_url)
     info, errors = classify_address(
-        client, address, labels, is_contract, gas_fund_wei=network.gas_fund_wei
+        client,
+        address,
+        labels,
+        is_contract,
+        gas_fund_wei=network.gas_fund_wei,
+        floors=network.sender_floors,
     )
     info = dict(info, network=network.name)
     errors += getattr(is_contract, "errors", [])
@@ -115,7 +121,7 @@ def characterize_address(
         src = (t.get("from") or "").lower()
         dst = (t.get("to") or "").lower()
         pool = native_pools.get(src)
-        if pool is None or dst != address:
+        if pool is None or dst != address or tx_failed(t):
             continue
         value = _to_int(t.get("value")) / (10**pool.decimals)
         if value < pool.denom * INFLOW_MIN_FRACTION:
@@ -137,7 +143,7 @@ def characterize_address(
     # Next hops: normal transactions sent by this address.
     hop_count, hop_value = {}, {}
     for t in normal:
-        if (t.get("from") or "").lower() != address:
+        if (t.get("from") or "").lower() != address or tx_failed(t):
             continue
         dst = (t.get("to") or "").lower()
         if not dst:
@@ -183,7 +189,12 @@ def characterize_address(
         listed = [(info, address)] + [(h, h["address"]) for h in top_next_hops]
         for holder, addr in listed:
             found, failed = classify_address(
-                client, addr, labels, is_contract, gas_fund_wei=network.gas_fund_wei
+                client,
+                addr,
+                labels,
+                is_contract,
+                gas_fund_wei=network.gas_fund_wei,
+                floors=network.sender_floors,
             )
             holder["deposit_check"] = found
             errors += failed

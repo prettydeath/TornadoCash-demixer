@@ -556,7 +556,7 @@ def test_a_negative_wait_is_refused(flag):
         cli.build_parser().parse_args(["demix", ADDR, flag, "-1"])
 
 
-# --- fix round 1 ---------------------------------------------------------------------------------
+# --- throttled proxy module ----------------------------------------------------------------------
 
 
 def _proxy_throttled(account_answer):
@@ -846,7 +846,7 @@ def test_cache_temp_names_are_unique_per_write(tmp_path, monkeypatch):
     assert len(set(names)) == 2
 
 
-# --- fix round 2 ---------------------------------------------------------------------------------
+# --- first block learned from node walks ---------------------------------------------------------
 
 
 def test_a_walk_from_a_later_block_does_not_teach_a_wrong_first_block(monkeypatch):
@@ -875,3 +875,197 @@ def test_an_attempt_that_has_started_keeps_its_full_timeout(monkeypatch):
     client.session.get = slow
     assert client.call(dict(QUERY)) == []
     assert seen == [40]
+
+
+# --- real provider errors of the JSON-RPC fallback ---------------------------------------
+
+DRPC_LIMIT = "ranges over 10000 blocks are not supported on free plan"
+ARCHIVE_ERR = "Archive requests require a personal token"
+
+
+class _ProviderNode:
+    """A node that answers the way the free providers do: HTTP 400 with a JSON-RPC error
+    body for a range above ``limit``, or an archive refusal for blocks below ``archive_from``."""
+
+    def __init__(self, limit=None, archive_from=None, archive_status=200, head=1_000_000):
+        self.limit, self.archive_from, self.archive_status = limit, archive_from, archive_status
+        self.head = head
+        self.spans = []
+        self.getlogs = 0
+
+    def __call__(self, request, timeout=None):
+        import io
+        import urllib.error
+
+        body = json.loads(request.data.decode())
+        if body["method"] == "eth_blockNumber":
+            return _RpcResponse({"result": hex(self.head)})
+        if body["method"] == "eth_getBlockByNumber":
+            return _RpcResponse({"result": {"timestamp": "0x10"}})
+        self.getlogs += 1
+        flt = body["params"][0]
+        lo, hi = int(flt["fromBlock"], 16), int(flt["toBlock"], 16)
+        if self.archive_from is not None and lo < self.archive_from:
+            err = {"code": -32000, "message": ARCHIVE_ERR}
+            if self.archive_status != 200:
+                raise urllib.error.HTTPError(
+                    "u",
+                    self.archive_status,
+                    "x",
+                    {},
+                    io.BytesIO(json.dumps({"error": err}).encode()),
+                )
+            return _RpcResponse({"jsonrpc": "2.0", "id": 1, "error": err})
+        if self.limit and hi - lo + 1 > self.limit:
+            err = {"code": 35, "message": DRPC_LIMIT}
+            raise urllib.error.HTTPError(
+                "u", 400, "Bad Request", {}, io.BytesIO(json.dumps({"error": err}).encode())
+            )
+        self.spans.append(hi - lo + 1)
+        return _RpcResponse({"result": []})
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        DRPC_LIMIT,
+        "{'code': 35, 'message': '" + DRPC_LIMIT + "'}",
+        "exceed maximum block range: 50000",
+    ],
+)
+def test_real_provider_range_texts_are_range_limits(text):
+    assert es._range_limit(text) is True
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        (ARCHIVE_ERR, True),
+        ("{'code': -32000, 'message': 'Archive requests require a personal token'}", True),
+        ("missing trie node", False),
+        ("rate limit exceeded", False),
+        (DRPC_LIMIT, False),
+    ],
+)
+def test_archive_unavailable_is_recognised_apart_from_range_and_throttling(text, expected):
+    assert es._archive_unavailable(text) is expected
+    assert es._node_rate_limited(ARCHIVE_ERR) is False
+
+
+def test_an_http_400_range_error_from_the_node_halves_the_span(monkeypatch):
+    node = _ProviderNode(limit=10_000)
+    monkeypatch.setattr(es, "_fetch", node)
+    client = EtherscanClient("K", rpc_url="http://node/x")
+    client._rpc_logs(ADDR, TOPIC0, None, 0, 100_000)
+    assert node.spans and max(node.spans) <= 10_000
+    assert client._rpc_span_ceiling <= 10_000
+
+
+def test_an_archive_refusal_fails_loudly_on_the_first_request(monkeypatch):
+    node = _ProviderNode(archive_from=900_000)
+    monkeypatch.setattr(es, "_fetch", node)
+    client = EtherscanClient("K", rpc_url="http://node/SECRET-PATH")
+    with pytest.raises(PermanentApiError) as exc:
+        client._rpc_logs(ADDR, TOPIC0, None, 0, 1_000_000)
+    assert node.getlogs == 1  # not retried, not halved
+    msg = str(exc.value)
+    assert "historical" in msg and "archive" in msg.lower()
+    assert "SECRET-PATH" not in msg
+
+
+def test_an_http_403_archive_refusal_is_read_from_the_body(monkeypatch):
+    node = _ProviderNode(archive_from=900_000, archive_status=403)
+    monkeypatch.setattr(es, "_fetch", node)
+    client = EtherscanClient("K", rpc_url="http://node/x")
+    with pytest.raises(PermanentApiError):
+        client._rpc_logs(ADDR, TOPIC0, None, 0, 1_000_000)
+    assert node.getlogs == 1
+
+
+def test_the_explorer_failure_and_the_archive_refusal_are_both_in_the_error(monkeypatch):
+    node = _ProviderNode(archive_from=900_000)
+    monkeypatch.setattr(es, "_fetch", node)
+    client, _ = _client([_err("Max rate limit reached")], retries=1, rpc_url="http://node/x")
+    with pytest.raises(ApiError) as exc:
+        client.get_logs(ADDR, TOPIC0, 0, 1_000_000)
+    msg = str(exc.value)
+    assert "rate limit" in msg.lower() and "historical" in msg
+    assert client.rpc_fallbacks == 0
+
+
+@pytest.mark.parametrize("chain_id,cap", [(137, 10_000), (100, 50_000), (8453, 50_000)])
+def test_the_first_span_respects_the_network_default_cap(monkeypatch, chain_id, cap):
+    node = _ProviderNode()
+    monkeypatch.setattr(es, "_fetch", node)
+    client = EtherscanClient("K", chain_id=chain_id, rpc_url="http://node/x")
+    client._rpc_logs(ADDR, TOPIC0, None, 0, 500_000)
+    assert node.getlogs and max(node.spans) <= cap
+    assert node.getlogs <= 500_000 // cap + 3
+
+
+def test_a_network_without_a_cap_keeps_the_default_span(monkeypatch):
+    node = _ProviderNode()
+    monkeypatch.setattr(es, "_fetch", node)
+    client = EtherscanClient("K", chain_id=1, rpc_url="http://node/x")
+    client._rpc_logs(ADDR, TOPIC0, None, 0, 250_000)
+    assert node.spans[0] == es.RPC_LOG_SPAN
+
+
+# --- Base: the keyless Blockscout sits behind Cloudflare ---------------------------------
+
+CF_HTML = (
+    '<!DOCTYPE html><html lang="en-US"><head><title>Just a moment...</title>'
+    '<meta http-equiv="refresh" content="360"></head><body>'
+    "<noscript>Enable JavaScript and cookies to continue</noscript>"
+    '<script src="/cdn-cgi/challenge-platform/h/b/orchestrate/chl_page/v1"></script>'
+    "</body></html>"
+)
+
+
+class _HtmlResp:
+    def __init__(self, status_code=403, text=CF_HTML, headers=None):
+        self.status_code = status_code
+        self.text = text
+        self.headers = headers or {"cf-mitigated": "challenge", "Server": "cloudflare"}
+
+    def json(self):
+        raise ValueError("Expecting value: line 1 column 1 (char 0)")
+
+
+def test_a_cloudflare_challenge_is_provider_blocked_not_retried(monkeypatch):
+    sleeps = []
+    monkeypatch.setattr("time.sleep", sleeps.append)
+    client, transport = _client([_HtmlResp()], retries=6)
+    with pytest.raises(es.ProviderBlockedError) as exc:
+        client.call(dict(QUERY))
+    assert len(transport.queries) == 1  # one request: no backoff, no bypass attempt
+    assert sleeps == []
+    msg = str(exc.value)
+    assert msg.startswith("provider_blocked")
+    assert "Cloudflare" in msg and "paid Etherscan plan" in msg
+    assert isinstance(exc.value, PermanentApiError)
+
+
+def test_a_plain_html_403_without_the_challenge_is_still_loud(monkeypatch):
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    client, _ = _client([_HtmlResp(403, "<html><body>Forbidden</body></html>", {})], retries=2)
+    with pytest.raises(ApiError):
+        client.call(dict(QUERY))
+
+
+def test_base_switches_to_blockscout_then_reports_the_block(monkeypatch):
+    client, transport = _client(
+        [_err("Free API access is not supported for this chain"), _HtmlResp()],
+        fallback_url="https://base.blockscout.com/api",
+    )
+    with pytest.raises(es.ProviderBlockedError):
+        client.call(dict(QUERY))
+    assert len(transport.queries) == 2
+
+
+def test_base_logs_may_still_come_from_the_rpc_node_when_blockscout_is_blocked(monkeypatch):
+    node = _ProviderNode()
+    monkeypatch.setattr(es, "_fetch", node)
+    client, _ = _client([_HtmlResp()], retries=1, chain_id=8453, rpc_url="http://node/x")
+    assert client.get_logs(ADDR, TOPIC0, 0, 100_000) == []
+    assert client.rpc_fallbacks == 1

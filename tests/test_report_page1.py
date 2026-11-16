@@ -1,6 +1,7 @@
 """The first page of every HTML report: header, verdict, key figures, flow diagram,
 address table, checks and the list of what follows (report_page1.py)."""
 
+import os
 import re
 import shutil
 import subprocess
@@ -157,7 +158,7 @@ def test_one_address_in_two_pools_is_one_address_with_two_table_rows():
     assert len(alice) == 2  # the fixture's ALICE withdrew from both pools
     p1 = _page1(build_html_report(data, fx.network()))
     assert _count(p1, "candidates") == "2"
-    assert "<b>2</b>addresses, 4 withdrawals" in p1
+    assert "<b>2</b>addresses; received 4 withdrawals" in p1
     assert f"({len(cands)} address-pool candidates; band counts are per candidate)" in p1
     table = p1[p1.index('class="p1-tab"') :]
     assert table.count(f'<td class="mono">{fx.ALICE}</td>') == 2
@@ -172,8 +173,17 @@ def test_figure_three_names_addresses_withdrawals_and_value():
     p1 = _page1(build_html_report(_alice_in_two_pools(), fx.network()))
     figs = p1[p1.index('class="p1-figs"') : p1.index("</div></div>", p1.index('class="p1-figs"'))]
     assert "<b>2.1 ETH</b>deposited, 3 notes" in figs
-    assert "addresses, 4 withdrawals, 3.059 ETH" in figs
-    assert "addresses, 4 withdrawals, " in figs and "Strongest band" not in figs
+    assert "addresses; received 4 withdrawals, 3.059 ETH from all sources" in figs
+    assert "not attributed to the depositor, who deposited 2.1 ETH" in figs
+    assert "Strongest band" not in figs
+
+
+def test_figure_three_says_so_when_there_is_no_deposit():
+    data = _alice_in_two_pools()
+    data["vouchers"] = []
+    p1 = _page1(build_html_report(data, fx.network()))
+    assert "who deposited )" not in p1
+    assert "who deposited)" not in p1
 
 
 def test_network_display_names_on_the_first_page():
@@ -277,10 +287,33 @@ def test_the_old_verdict_card_is_gone():
 # --- layout in a real browser ---------------------------------------------------------
 
 
+def _skip_or_fail(message):
+    """Skip when Playwright is missing; fail instead when REQUIRE_PLAYWRIGHT is set (CI)."""
+    if os.environ.get("REQUIRE_PLAYWRIGHT"):
+        pytest.fail("REQUIRE_PLAYWRIGHT is set but the layout check cannot run: " + message)
+    pytest.skip(message)
+
+
+def _need_playwright():
+    try:
+        import playwright.sync_api  # noqa: F401
+    except ImportError:
+        _skip_or_fail("playwright is not installed")
+
+
+def test_require_playwright_turns_a_skip_into_a_failure(monkeypatch):
+    monkeypatch.delenv("REQUIRE_PLAYWRIGHT", raising=False)
+    with pytest.raises(pytest.skip.Exception):
+        _skip_or_fail("no browser")
+    monkeypatch.setenv("REQUIRE_PLAYWRIGHT", "1")
+    with pytest.raises(pytest.fail.Exception, match="no browser"):
+        _skip_or_fail("no browser")
+
+
 def test_reports_have_no_overflow_or_overlapping_text(tmp_path):
     """Run tools/report_layout_check.py (Playwright + Chromium) on one report per type;
     skipped when Playwright or its browser is not installed."""
-    pytest.importorskip("playwright.sync_api")
+    _need_playwright()
     from tests.test_report import _char_info, _multi_corr
     from tests.test_report_layout import START, _trace
 
@@ -331,8 +364,117 @@ def test_reports_have_no_overflow_or_overlapping_text(tmp_path):
         timeout=600,
     )
     if run.returncode == 77:
-        pytest.skip(run.stderr.strip() or "playwright browser not available")
+        _skip_or_fail(run.stderr.strip() or "playwright browser not available")
     assert run.returncode == 0, run.stdout[-4000:] + run.stderr[-2000:]
+
+
+def test_dense_trace_report_fits_the_first_page_and_its_cells(tmp_path):
+    """Many stops with every end state (hop limit, trace budget, bridges, labels): no badge
+    sticks out of its cell and the first page stays within A4."""
+    _need_playwright()
+    from tests.test_report_layout import _trace
+
+    trace = _trace()
+    reasons = [
+        "hop limit",
+        "trace budget",
+        "bridge across (not followed)",
+        "below_threshold",
+        "lookup_failed",
+        "labelled address",
+        "tornado re-deposit",
+        "fill_not_found",
+        "end",
+    ]
+    trace["terminals"] = [
+        {
+            "address": "0x%040x" % (i + 1000),
+            "asset": "ETH" if i % 2 else "USDC",
+            "amount": 100.123456 + i,
+            "hop": 1 + i % 4,
+            "reason": reasons[i % len(reasons)],
+            "label": {"label": "Some Exchange Hot Wallet %d" % i, "kind": "exchange"}
+            if i % 3 == 0
+            else None,
+        }
+        for i in range(12)
+    ]
+    path = tmp_path / "dense_trace.html"
+    path.write_text(build_trace_report(trace, fx.network()), encoding="utf-8")
+    run = subprocess.run(
+        [sys.executable, str(ROOT / "tools" / "report_layout_check.py"), str(path)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=600,
+    )
+    if run.returncode == 77:
+        _skip_or_fail(run.stderr.strip() or "playwright browser not available")
+    assert run.returncode == 0, run.stdout[-4000:] + run.stderr[-2000:]
+
+
+# End-state reasons in the formats the 2.23 bridges and swaps write (synthetic ids).
+_B58 = "Hx7aBcDeFgHjKmNpQrStUvWxYz123456789abcdefghJ"  # a Solana-style base58 recipient
+LONG_REASONS = [
+    f"bridge cctp (to Solana, recipient {_B58}, chain not supported)",
+    "swap cow (order 0x" + "ab" * 56 + ", payout not found)",
+    "bridge thorchain (to BTC.BTC, recipient bc1q" + "x" * 38 + ")",
+    "bridge zksync (recipient 0x" + "7" * 40 + ", chain not supported)",
+    f"bridge mayan (to solana, recipient {_B58})",
+    "bridge relay (request 0x" + "c" * 64 + ", destination not on chain)",
+    "order_unknown",
+    "bridge layerswap (maker 0x" + "2" * 40 + ", matched off chain)",
+]
+
+
+@pytest.mark.parametrize("n", [5, 6, 8])
+def test_dense_trace_page1_with_long_bridge_and_swap_reasons_fits_a4(tmp_path, n):
+    """CCTP to Solana, a CoW order uid, THORChain, ZKsync, Mayan, Relay, order_unknown and
+    Layerswap reasons: page 1 stays within A4 and keeps every full reason (cell title and
+    the stops section)."""
+    _need_playwright()
+    from tests.test_report_layout import _trace
+
+    trace = _trace()
+    trace["terminals"] = [
+        {
+            "address": "0x%040x" % (i + 1000),
+            "asset": "ETH" if i % 2 else "USDC",
+            "amount": 100.123456 + i,
+            "hop": 1 + i % 4,
+            "reason": LONG_REASONS[i % len(LONG_REASONS)],
+            "label": {"label": "Some Exchange Hot Wallet %d" % i, "kind": "exchange"}
+            if i % 3 == 0
+            else None,
+        }
+        for i in range(n)
+    ]
+    html = build_trace_report(trace, fx.network())
+    for t in trace["terminals"]:
+        if t["reason"] != "order_unknown":
+            assert f'title="{t["reason"]}"' in html
+    path = tmp_path / "long_reasons.html"
+    path.write_text(html, encoding="utf-8")
+    run = subprocess.run(
+        [sys.executable, str(ROOT / "tools" / "report_layout_check.py"), str(path)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=600,
+    )
+    if run.returncode == 77:
+        _skip_or_fail(run.stderr.strip() or "playwright browser not available")
+    assert run.returncode == 0, run.stdout[-4000:] + run.stderr[-2000:]
+
+
+def test_compact_reason_shortens_long_ids_and_caps_the_length():
+    from tornado_demix.report_page1 import REASON_PAGE1_CHARS, compact_reason
+
+    for reason in LONG_REASONS:
+        short = compact_reason(reason)
+        assert len(short) <= REASON_PAGE1_CHARS
+        assert "ab" * 20 not in short and _B58 not in short
+    assert compact_reason("order_unknown") == "order_unknown"
 
 
 # --- one classification and an open section that holds rows (A/B findings U-1, U-2) ---
@@ -475,3 +617,117 @@ def test_classify_first_page_does_not_repeat_the_kind_and_starts_upper_case():
     assert "<b>Exchange deposit</b>" in p1 and "xchange deposit" not in figs
     answer = re.search(r'<p class="answer">([^<]*)</p>', p1).group(1)
     assert answer[0].isupper()
+
+
+def _parallel_trace():
+    """Two identical bridge transfers HOP1 -> HOP2, plus a transfer and a swap between the
+    same pair START -> HOP1, a possible outflow and an order_unknown stop."""
+    from tests.test_report_layout import HOP1, HOP2, START, TX2, TX3, _trace
+
+    trace = _trace()
+    bridge = trace["edges"][1]
+    second = {**bridge, "tx_hash": "0x" + "4" * 64, "value": 6.0, "attributed": 6.0}
+    swap = {
+        **trace["edges"][0],
+        "tx_hash": "0x" + "5" * 64,
+        "attributed": 0.5,
+        "value": 0.5,
+        "kind": "swap",
+        "swapped_to": "DAI",
+    }
+    trace["edges"] = [trace["edges"][0], swap, bridge, second]
+    trace["possible"] = [
+        {
+            **trace["edges"][0],
+            "kind": "possible",
+            "from": HOP1,
+            "to": HOP2,
+            "tx_hash": TX3,
+            "attributed": 0.0,
+            "lower": 0.0,
+            "upper": 2.0,
+            "history_incomplete": True,
+            "status": "possible (history incomplete)",
+        }
+    ]
+    trace["possible_more"] = {"count": 3, "value": 7.5}
+    trace["terminals"].append(
+        {
+            "address": START,
+            "asset": "ETH",
+            "amount": 0.0,
+            "hop": 0,
+            "reason": "order_unknown",
+            "label": None,
+            "outflows": [{"to": HOP1, "tx_hash": TX2, "value": 9.95}],
+        }
+    )
+    return trace
+
+
+def test_parallel_identical_edges_share_one_label_with_a_count():
+    from tornado_demix.report_html import _trace_svg
+
+    svg = _trace_svg(_parallel_trace(), fx.network())
+    labels = re.findall(r"<text[^>]*>([^<]*ETH[^<]*)</text>", svg)
+    assert "bridge across, 2 × 6 ETH" in labels
+    assert sum("bridge across" in t for t in labels) == 1
+    # a transfer and a swap between the same pair keep their own, offset labels
+    assert "9.95 ETH" in labels and "swap, 0.5 ETH" in labels
+
+
+def test_parallel_edges_report_has_no_overlapping_text(tmp_path):
+    _need_playwright()
+    path = tmp_path / "parallel_trace.html"
+    path.write_text(build_trace_report(_parallel_trace(), fx.network()), encoding="utf-8")
+    run = subprocess.run(
+        [sys.executable, str(ROOT / "tools" / "report_layout_check.py"), str(path)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=600,
+    )
+    if run.returncode == 77:
+        _skip_or_fail(run.stderr.strip() or "playwright browser not available")
+    assert run.returncode == 0, run.stdout[-4000:] + run.stderr[-2000:]
+
+
+def _crowded_trace():
+    """Between HOP1 and HOP2: Across ETH twice (one filled, one not followed), CCTP twice
+    and Across DAI: four distinct labels on one pair of boxes."""
+    trace = _parallel_trace()
+    bridge = trace["edges"][2]
+    filled = {
+        **bridge,
+        "tx_hash": "0x" + "6" * 64,
+        "bridge": {"protocol": "across", "dest_chain_id": 42161, "state": "filled"},
+    }
+    cctp = {**bridge, "bridge": {"protocol": "cctp", "dest_chain_id": None, "state": "x"}}
+    dai = {**bridge, "tx_hash": "0x" + "7" * 64, "asset": "DAI"}
+    trace["edges"] += [filled, cctp, {**cctp, "tx_hash": "0x" + "8" * 64}, dai]
+    return trace
+
+
+def test_bridge_edges_with_different_states_keep_their_own_labels():
+    from tornado_demix.report_html import _trace_svg
+
+    svg = _trace_svg(_crowded_trace(), fx.network())
+    labels = re.findall(r"<text[^>]*>([^<]*(?:ETH|DAI)[^<]*)</text>", svg)
+    across_eth = [t for t in labels if t.startswith("bridge across") and "ETH" in t]
+    assert len(across_eth) == 2 and len(set(across_eth)) == 2, labels
+
+
+def test_crowded_parallel_edges_report_has_no_overlapping_text(tmp_path):
+    _need_playwright()
+    path = tmp_path / "crowded_trace.html"
+    path.write_text(build_trace_report(_crowded_trace(), fx.network()), encoding="utf-8")
+    run = subprocess.run(
+        [sys.executable, str(ROOT / "tools" / "report_layout_check.py"), str(path)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=600,
+    )
+    if run.returncode == 77:
+        _skip_or_fail(run.stderr.strip() or "playwright browser not available")
+    assert run.returncode == 0, run.stdout[-4000:] + run.stderr[-2000:]

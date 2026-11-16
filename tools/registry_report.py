@@ -9,6 +9,20 @@
 The register is .cache/registry/tests.jsonl (or $TORNADO_DEMIX_REGISTRY). Exit status 1 when
 the chain is broken. The witness must be written outside the register directory, otherwise it
 would not survive tampering with that directory.
+
+What the chain can and cannot show: an edited, deleted or reordered line is detected from the
+file alone; a cut-off tail or a full rewrite from the genesis line (every hash recomputed) is
+not. Only an external anchor detects a full rewrite: write a witness after each evaluation
+and publish it where the writer of the register cannot change it, then check against it:
+
+    python tools/registry_report.py --witness ../witness-2026-11-14.json
+    ots stamp ../witness-2026-11-14.json        # OpenTimestamps proof (optional, external)
+    # attach the witness (and its .ots proof) to a release or a Zenodo record
+    python tools/registry_report.py --check-witness ../witness-2026-11-14.json ../older.json
+
+The protocol lock lists the scripts and, tagged ``[module]``, every library module of the
+package: a record is confirmatory only when its script and all the library modules it ran
+with are locked. The lock is a plain file and needs the same external anchor.
 """
 
 from __future__ import annotations
@@ -49,9 +63,14 @@ def summarize(path, witness=None):
 
 
 def write_lock(scripts, out):
+    """Lock ``scripts`` and every library module of the package (tagged ``[module]``)."""
     lines = ["# sha256  script (tools/registry_report.py --lock)"]
     for s in scripts:
         lines.append(f"{registry.sha256_file(s)}  {registry._rel(s)}")
+    root = os.path.dirname(os.path.dirname(os.path.abspath(registry.__file__)))
+    for f in registry.package_files():
+        rel = os.path.relpath(f, root).replace(os.sep, "/")
+        lines.append(f"{registry.sha256_file(f)}  {rel}  {registry.MODULE_TAG}")
     os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
     with open(out, "w", encoding="utf-8", newline="\n") as fh:
         fh.write("\n".join(lines) + "\n")
@@ -70,7 +89,10 @@ def main(argv=None):
     ap.add_argument("path", nargs="?", default=None, help="register file")
     ap.add_argument("--witness", metavar="OUT", help="write {seq, hash} of the last record to OUT")
     ap.add_argument(
-        "--check-witness", metavar="FILE", help="verify the register against a stored witness"
+        "--check-witness",
+        metavar="FILE",
+        nargs="+",
+        help="verify the register against stored witness files (published elsewhere)",
     )
     ap.add_argument("--lock", nargs="+", metavar="SCRIPT", help="write a protocol lock for these")
     ap.add_argument("--out", default=registry.PROTOCOL_LOCK_DEFAULT, help="lock file to write")
@@ -89,9 +111,19 @@ def main(argv=None):
             json.dump(registry.witness(path), fh)
     stored = None
     if args.check_witness:
-        with open(args.check_witness, encoding="utf-8") as fh:
-            stored = json.load(fh)
-    s = summarize(path, stored)
+        stored = []
+        for name in args.check_witness:
+            try:
+                with open(name, encoding="utf-8") as fh:
+                    stored.append(json.load(fh))
+            except (OSError, ValueError) as exc:
+                print(f"witness {name} not usable: {exc}", file=sys.stderr)
+                return 2
+    try:
+        s = summarize(path, stored)
+    except ValueError as exc:
+        print(f"witness not usable: {exc}", file=sys.stderr)
+        return 2
     print(f"register: {s['path']}\nrecords: {s['total']}")
     print("chain: " + ("intact" if not s["broken"] else f"BROKEN at seq {s['broken']}"))
     if s["unlisted"]:

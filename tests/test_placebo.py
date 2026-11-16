@@ -93,7 +93,7 @@ def test_summarize_counts_rates_and_verdicts():
     assert out["decoy"] == {"strong": 1, "moderate": 2, "weak": 1}
     assert (out["target_withdrawals"], out["decoy_withdrawals"]) == (1000, 500)
     assert out["target_per_1000"]["moderate"] == 2.0 and out["decoy_per_1000"]["moderate"] == 4.0
-    assert "indistinguishable from chance" in out["verdicts"]["moderate"]
+    assert "target rate not above the decoy rate" in out["verdicts"]["moderate"]
     assert "more than the decoy" in out["verdicts"]["weak"]
     assert [lead["address"] for lead in out["decoy_leads"]] == ["0xb", "0xc", "0xd"]
     assert "tiny sample" in out["note"] and out["caveats"] == []

@@ -9,6 +9,7 @@ import random
 import re
 import sys
 import time
+import urllib.error
 import urllib.request
 import uuid
 from collections import Counter
@@ -17,7 +18,16 @@ from typing import Any
 import requests
 
 from .constants import CHAIN_ID, ETHERSCAN_API_URL, TOPIC_DEPOSIT, WEI
-from .errors import ApiError, ApiKeyError, BlockLookupError, PermanentApiError
+from .errors import (
+    ApiError,
+    ApiKeyError,
+    ArchiveUnavailableError,
+    BlockLookupError,
+    PermanentApiError,
+    ProviderBlockedError,
+)
+from .txstatus import PARTIAL_INDEXING
+from .txstatus import failed as _failed
 
 _fetch = urllib.request.urlopen  # module-level so tests can replace it
 
@@ -62,6 +72,11 @@ CACHE_SAFE_DEPTH = 64
 # spend, and how long the node is preferred after the explorer failed (seconds).
 RPC_LOG_SPAN = 100_000  # first span of a client; the span that last worked is remembered
 RPC_MAX_SPAN = 1_000_000
+# Block spans the free public nodes of a chain accept, by chain id: the first request is
+# already within them, so the walk does not open with a refusal. Polygon (drpc) answers
+# "ranges over 10000 blocks are not supported on free plan"; Gnosis and Base (publicnode)
+# "exceed maximum block range: 50000". A chain not listed starts at ``RPC_LOG_SPAN``.
+RPC_SPAN_CAPS = {137: 10_000, 100: 50_000, 8453: 50_000}
 RPC_MAX_REQUESTS = 10_000
 # A failed head lookup that only serves the cache is not repeated for this long (seconds).
 HEAD_RETRY_SECONDS = 60
@@ -176,12 +191,14 @@ class EtherscanClient:
         self.cache_hits = 0
         self.waited = 0.0  # seconds spent in backoff
         self.rpc_fallbacks = 0  # getLogs lookups served by the node instead of the explorer
+        self.partial_lookups = 0  # lookups answered while the range was still indexed
         self._logs_rpc_until = 0.0  # monotonic time until which getLogs goes to the node first
         self._block_ts: dict[int, int] = {}
         self.rpc_calls = 0  # JSON-RPC requests to rpc_url
         self._head_failed_until = 0.0  # monotonic: no head lookup for the cache before this
-        self._rpc_span = RPC_LOG_SPAN  # block span that last worked on the node
-        self._rpc_span_ceiling = RPC_MAX_SPAN  # lowered when the node reports a limit
+        cap = RPC_SPAN_CAPS.get(chain_id)
+        self._rpc_span = min(RPC_LOG_SPAN, cap) if cap else RPC_LOG_SPAN  # span that last worked
+        self._rpc_span_ceiling = cap or RPC_MAX_SPAN  # lowered when the node reports a limit
         # (address, topic0) -> first block with a log, learned only from unfiltered node walks that began at block 0;
         # a caller that knows a pool's deploy block may set it here.
         self.first_blocks: dict[tuple[str, str], int] = {}
@@ -253,6 +270,16 @@ class EtherscanClient:
             try:
                 resp = self.session.get(self.base_url, params=query, timeout=40)
                 code = getattr(resp, "status_code", 200)
+                if _cloudflare_challenge(resp, code):
+                    raise ProviderBlockedError(
+                        _redact(
+                            "provider_blocked: {} answered {} with a Cloudflare challenge page, "
+                            "not data; the challenge is not bypassed. This chain needs a paid "
+                            "Etherscan plan, or an RPC node with archive access for log "
+                            "lookups".format(self.base_url, code),
+                            self.api_key,
+                        )
+                    )
                 if code == 429 or (isinstance(code, int) and code >= 500):
                     last_error = "HTTP {}".format(code)
                     if budget.wait(attempt, _retry_after(resp)):
@@ -300,8 +327,10 @@ class EtherscanClient:
             # range is still being indexed ("Some internal transactions within this
             # block range have not yet been processed"). The rows are valid; the
             # list may lack the newest internal transactions. Not cached: the list
-            # can grow.
+            # can grow. Recorded in ``truncated`` (reason PARTIAL_INDEXING), so the run
+            # says its results may be incomplete and no ledger built on it is certain.
             if status == "2" and isinstance(result, list) and "not yet been processed" in message:
+                self._note_partial(query)
                 return result
             text = result if isinstance(result, str) else ""
             blob = (text + " " + message).lower()
@@ -385,13 +414,15 @@ class EtherscanClient:
                 )
 
     def stats(self) -> dict:
-        """Counters of this client: calls, cache hits, seconds waited, RPC fallbacks."""
+        """Counters of this client: calls, cache hits, seconds waited, RPC fallbacks,
+        lookups answered with a partly indexed range (``partial_indexing``)."""
         return {
             "calls": self.calls,
             "cache_hits": self.cache_hits,
             "rpc_calls": self.rpc_calls,
             "waited": round(self.waited, 1),
             "rpc_fallbacks": self.rpc_fallbacks,
+            "partial_indexing": self.partial_lookups,
         }
 
     def _cache_file(self, query):
@@ -542,6 +573,8 @@ class EtherscanClient:
                 raise
             try:
                 rows = self._rpc_logs(address, topic0, topics, start_block, end_block)
+            except ArchiveUnavailableError as node_error:
+                raise ApiError("{}; {}".format(explorer_error, node_error)) from None
             except ApiError:
                 raise explorer_error from None
             self._logs_rpc_until = time.monotonic() + RPC_PREFER_SECONDS
@@ -552,6 +585,31 @@ class EtherscanClient:
                 )
             )
             return rows
+
+    def _note_partial(self, query):
+        """Record a lookup answered while part of its range was still being indexed.
+        Every first page records an entry, so each run (``incomplete.mark``) on a shared
+        client sees its own; a later page of the same lookup, right after its entry,
+        adds nothing."""
+        entry = {
+            "action": query.get("action", ""),
+            "address": query.get("address", ""),
+            "block": None,
+            "limit": None,
+            "reason": PARTIAL_INDEXING,
+        }
+        try:
+            page = int(query.get("page") or 1)
+        except (TypeError, ValueError):
+            page = 1
+        if page > 1 and self.truncated and self.truncated[-1] == entry:
+            return
+        self.partial_lookups += 1
+        self.truncated.append(entry)
+        _log(
+            "[!] {} of {} is still being indexed by the explorer; the list may be "
+            "incomplete".format(entry["action"] or "list", entry["address"] or "?")
+        )
 
     def _note_rpc_fallback(self, address):
         """Count a list read from the node and record the notice."""
@@ -628,6 +686,12 @@ class EtherscanClient:
                     span, clean = min(span * 2, self._rpc_span_ceiling), 0
                 continue
             clean = 0
+            if not ok and _archive_unavailable(err):
+                raise ArchiveUnavailableError(
+                    "JSON-RPC fallback unavailable for historical blocks: the node serves "
+                    "recent blocks only (archive requests need a personal token or an "
+                    "archive endpoint); blocks {}-{} were refused ({})".format(low, high, err[:120])
+                )
             if not ok and _node_rate_limited(err):
                 if budget.wait(failures):
                     failures += 1
@@ -887,6 +951,13 @@ class EtherscanClient:
         try:
             with _fetch(request, timeout=30) as resp:
                 payload = json.loads(resp.read().decode())
+        except urllib.error.HTTPError as exc:
+            # Free providers refuse with HTTP 400/403 and put the reason in the body
+            # (a range limit, an archive refusal): read it, or it would be lost.
+            payload = _http_error_payload(exc)
+            if payload is None or not payload.get("error"):
+                text = "{}: {}".format(type(exc).__name__, exc)
+                return False, None, text.replace(self.rpc_url, "<rpc>")[:200]
         except (OSError, ValueError) as exc:
             text = "{}: {}".format(type(exc).__name__, exc)
             return False, None, text.replace(self.rpc_url, "<rpc>")[:200]
@@ -1026,7 +1097,7 @@ class EtherscanClient:
             for tx in self.fetch_all(action, address):
                 if (tx.get("from") or "").lower() != address:
                     continue
-                if tx.get("isError") == "1":
+                if _failed(tx):
                     continue
                 ts = int(tx.get("timeStamp", 0))
                 if ts < start_ts or ts > end_ts:
@@ -1126,6 +1197,20 @@ def _permanent_hint(blob):
     return ""
 
 
+def _cloudflare_challenge(resp, code):
+    """True for the Cloudflare bot-protection page (HTTP 403/503 with its markers)."""
+    if code not in (403, 503):
+        return False
+    headers = getattr(resp, "headers", None) or {}
+    try:
+        mitigated = str(headers.get("cf-mitigated", "")).lower() == "challenge"
+    except AttributeError:
+        mitigated = False
+    text = getattr(resp, "text", "")
+    body = text.lower() if isinstance(text, str) else ""
+    return mitigated or "just a moment..." in body or "/cdn-cgi/challenge-platform" in body
+
+
 def _retry_after(resp):
     """Seconds named by a Retry-After header (capped), or None."""
     try:
@@ -1175,6 +1260,8 @@ def _topics_match(row, wanted):
 # "rate limit exceeded" is throttling and is checked first (_node_rate_limited).
 _RANGE_LIMITS = (
     "block range",
+    "ranges over",
+    "blocks are not supported",
     "range is too",
     "range too",
     "too wide",
@@ -1194,6 +1281,25 @@ def _range_limit(error):
     """True when a node's error says the block range or result set was too big."""
     lowered = str(error).lower()
     return any(word in lowered for word in _RANGE_LIMITS)
+
+
+# A node that serves recent blocks only (publicnode on Arbitrum and Optimism).
+_ARCHIVE_REFUSALS = ("archive requests require", "archive node", "requires an archive")
+
+
+def _archive_unavailable(error):
+    """True when a node says it cannot serve historical blocks without an archive plan."""
+    lowered = str(error).lower()
+    return any(word in lowered for word in _ARCHIVE_REFUSALS)
+
+
+def _http_error_payload(exc):
+    """The JSON body of an HTTP error answer from a node, or None."""
+    try:
+        payload = json.loads(exc.read().decode())
+    except (OSError, ValueError, AttributeError):
+        return None
+    return payload if isinstance(payload, dict) else None
 
 
 def _hex_int(value):

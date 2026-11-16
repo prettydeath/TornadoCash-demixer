@@ -4,6 +4,7 @@ import os
 import re
 import sys
 import threading
+import time
 
 import pytest
 
@@ -282,3 +283,76 @@ def test_the_synchronous_path_cannot_overlap_a_background_job():
         _Client.gate.set()
     webapp._JOBS[job_id]["thread"].join(5)
     assert client.post("/", data={"csrf": CSRF, "wallets": WALLET}).status_code == 200
+
+
+def _wait_slot(held=True, timeout=5):
+    deadline = time.time() + timeout
+    while webapp._RUN_SLOT.locked() != held and time.time() < deadline:
+        time.sleep(0.01)
+    assert webapp._RUN_SLOT.locked() == held
+
+
+def _sync_in_thread(out, form):
+    def run():
+        out.append(_session_client().post("/", data=form))
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    return t
+
+
+def test_a_synchronous_run_holds_the_slot_against_a_second_synchronous_run():
+    _Client.gate = threading.Event()
+    done = []
+    t = _sync_in_thread(done, {"csrf": CSRF, "wallets": WALLET})
+    try:
+        _wait_slot(True)
+        second = _session_client().post("/", data={"csrf": CSRF, "wallets": WALLET})
+        assert second.status_code == 409
+        assert "still running" in second.get_data(as_text=True)
+    finally:
+        _Client.gate.set()
+    t.join(5)
+    assert done[0].status_code == 200
+    _wait_slot(False)
+
+
+def test_a_synchronous_run_holds_the_slot_against_a_background_run():
+    _Client.gate = threading.Event()
+    done = []
+    t = _sync_in_thread(done, {"csrf": CSRF, "wallets": WALLET})
+    try:
+        _wait_slot(True)
+        second = _session_client().post("/", data={"csrf": CSRF, "wallets": WALLET, "async": "1"})
+        assert second.status_code == 409
+        assert not webapp._JOBS
+    finally:
+        _Client.gate.set()
+    t.join(5)
+    _wait_slot(False)
+
+
+def test_a_background_run_holds_the_slot_against_a_synchronous_run_until_it_ends():
+    client = _session_client()
+    _Client.gate = threading.Event()
+    try:
+        first = client.post("/", data={"csrf": CSRF, "wallets": WALLET, "async": "1"})
+        job_id = first.headers["Location"].split("=", 1)[1]
+        assert webapp._RUN_SLOT.locked()
+        assert client.post("/", data={"csrf": CSRF, "wallets": WALLET}).status_code == 409
+    finally:
+        _Client.gate.set()
+    webapp._JOBS[job_id]["thread"].join(5)
+    _wait_slot(False)
+
+
+def test_the_slot_is_released_when_a_synchronous_run_fails(monkeypatch):
+    monkeypatch.setattr(webapp, "EtherscanClient", _Boom)
+    client = _session_client()
+    client.post("/", data={"csrf": CSRF, "wallets": WALLET})
+    assert not webapp._RUN_SLOT.locked()
+
+
+class _Boom(_Client):
+    def outgoing_txs(self, wallet):
+        raise RuntimeError("explorer down")

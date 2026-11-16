@@ -31,10 +31,13 @@ the incoming transfers of that asset received in the window and after the previo
 outgoing transfer of that asset (to anyone) covers the outgoing value with the same
 tolerance.
 
-Which rows are counted. The same transfer is listed by ``txlist`` (the call to the
-token contract, value 0) and by ``tokentx`` (the token movement); only the second
-is counted, so one token transfer is one transfer: ``txlist`` rows with value 0 are
-dropped, ETH-value rows are kept. Address poisoning is filtered in a limited,
+Which rows are counted. A failed transaction (``isError`` 1 or ``txreceipt_status`` 0,
+see :mod:`tornado_demix.txstatus`) moved nothing: its rows never count as a transfer, in
+either direction. The failed transactions an examined address sent are counted apart
+(``failed_sends`` on its result), never as movement. The same transfer is listed by
+``txlist`` (the call to the token contract, value 0) and by ``tokentx`` (the token
+movement); only the second is counted, so one token transfer is one transfer:
+``txlist`` rows with value 0 are dropped, ETH-value rows are kept. Address poisoning is filtered in a limited,
 offline way: zero-value transfers (of ETH or of any token) are dropped, and a
 ``tokentx`` transfer out of ``X`` is kept only when its transaction is one of ``X``'s
 own ``txlist`` rows: sent by ``X``, or sent TO ``X`` (an EIP-7702 account whose sponsor
@@ -46,19 +49,29 @@ their transaction target (``to`` = ``X``) and the sweep test is run again with t
 so spoofed "from the depositor" transfers to look-alike addresses never take one of
 the ``MAX_CANDIDATES`` slots.
 
-Senders. An incoming transfer makes its "from" a sender only when it is non-zero and
-``X`` later sweeps the same asset. A fake token is never swept, so the "from" it forges
-(any address, even an exchange hot wallet) is not a sender, and neither is a dust
-spoof or a gas top-up. Up to ``FEW_SENDERS`` (50) senders the usual sweep share
-applies; a per-customer address can have a few hundred one-off senders (observed
-exchange deposit addresses with 56-142), so up to ``MAX_DEPOSIT_SENDERS`` (300) are
-admitted when at least ``HUB_SWEEP_SHARE`` (95 %) of the outgoing transfers are sweeps:
-a deposit address forwards what it receives, a busy hub pays out to many
-destinations. Judgement calls, not measured on a labelled set. Limit: a spoof routed
-through a contract that ``X`` itself called is not detected.
+Senders. An incoming transfer makes its "from" a sender only when it reaches the dust
+floor of its asset (``Network.sender_floors``: the native coin at the network's floor, a
+listed real token at its floor; an unlisted token needs a non-zero amount) and ``X``
+later sweeps the same asset. A fake token is never swept, so the "from" it forges (any
+address, even an exchange hot wallet) is not a sender, and a dust spoof or a small
+top-up is below the floor, so it is not one either, even when ``X`` sweeps that asset.
+Up to ``FEW_SENDERS`` (50) senders the usual sweep share applies; a per-customer address
+can have a few hundred one-off senders (observed exchange deposit addresses with
+56-142), so up to ``MAX_DEPOSIT_SENDERS`` (300) are admitted when at least
+``HUB_SWEEP_SHARE`` (95 %) of the outgoing transfers are sweeps: a deposit address
+forwards what it receives, a busy hub pays out to many destinations. An address with
+more senders is not classified (taken as a hub). Judgement calls, not measured on a
+labelled set. Limit: a spoof routed through a contract that ``X`` itself called is not
+detected.
 
 Kinds. A result carries ``kind``: ``exchange_deposit`` (a sweep target is labelled
-as an exchange and none has another category), ``service_deposit`` (a labelled sweep
+as an exchange, receives a swept balance (``sweeps_balance_to``: at least 90 % of what
+arrived since the previous outgoing transfer of the asset, within 30 days) and none has
+another category, or receives forwarded amounts (``forwards_to``); a label names the
+exchange, it is not evidence of a sweep; unlabelled targets need ``forwards_to``), ``paid_exchange`` (it reaches the sweep share only by
+payments to labelled exchange wallets that do not sweep what it received:
+a customer paying an exchange, not a deposit address; no senders, no sweep target, never
+scored, never linking; context), ``service_deposit`` (a labelled sweep
 target has another category, e.g. gambling or bridge; never scored, ``service`` names
 it), ``deposit_like`` (swept only to unlabelled busy addresses: whose deposit address it
 is, is not known, ``service`` is "unknown"; context) or ``forwarder`` (a per-account
@@ -90,6 +103,8 @@ from typing import Callable
 from .config import PACKAGE_DATA
 from .errors import ApiError, ApiKeyError
 from .incomplete import lookup_failed
+from .networks import sender_floors
+from .txstatus import failed
 
 MAX_CANDIDATES = 25  # depositor counterparties examined, busiest first
 MAX_DEPOSIT_TXS = 1000  # a deposit address is quiet; more rows: not one
@@ -111,6 +126,16 @@ FORWARD_SECONDS = 38400
 _FALLBACK_BLOCKS = 3200  # the same window in blocks, only for rows without timeStamp
 FORWARD_ETH_WEI = 10**16  # ...and forwards it less at most 0.01 ETH (Victor, FC 2020)
 FORWARD_TOKEN_SHARE = 0.01  # tokens: forwards at least 99 % of the incoming amount
+# A labelled exchange wallet: exchanges batch their sweeps (daily or less often) and may
+# leave a fee or dust behind, so a transfer to a target labelled as an exchange counts as a
+# sweep when it moves at least LABELLED_SWEEP_SHARE of what the address received in that
+# asset since its previous outgoing transfer of that asset, within LABELLED_SWEEP_SECONDS
+# of the latest of those receipts (see ``sweeps_balance_to``); a transfer that passes the
+# forwarding test (``forwards_to``) counts as well. Exploratory judgement calls, not
+# measured on a labelled set. Unlabelled targets keep the forwarding test only.
+LABELLED_SWEEP_SHARE = 0.9
+LABELLED_SWEEP_SECONDS = 30 * 24 * 3600
+_LABELLED_FALLBACK_BLOCKS = LABELLED_SWEEP_SECONDS // 12  # rows without timeStamp
 # A native transfer below this before the first sweep funds gas. Default 0.01 coin; the
 # per-network values live in ``networks.GAS_FUND_WEI`` (a top-up on Polygon is 0.01-2 POL).
 GAS_FUND_WEI = 10**16
@@ -250,22 +275,25 @@ def own_hashes(address: str, txs: list[dict]) -> set[str]:
     return {
         _addr(r, "hash")
         for r in txs
-        if (_addr(r, "from") == address or _addr(r, "to") == address) and _addr(r, "hash")
+        if (_addr(r, "from") == address or _addr(r, "to") == address)
+        and _addr(r, "hash")
+        and not failed(r)
     }
 
 
 def transfers(
     address: str, txs: list[dict], tokens: list[dict], extra_own: set[str] = frozenset()
 ) -> list[dict]:
-    """The real, non-zero transfers of ``address``: ``txlist`` rows with value (the
-    value-0 calls to token contracts are the same movement as the ``tokentx`` row and
-    are not counted twice) plus ``tokentx`` rows with value, minus outgoing token
-    transfers whose transaction is not one of ``address``'s own (:func:`own_hashes`,
-    plus ``extra_own``): address poisoning, see the module docstring for the limits."""
+    """The real, non-zero transfers of ``address``: successful ``txlist`` rows with value
+    (the value-0 calls to token contracts are the same movement as the ``tokentx`` row
+    and are not counted twice; a failed transaction moved nothing) plus ``tokentx`` rows
+    with value, minus outgoing token transfers whose transaction is not one of
+    ``address``'s own (:func:`own_hashes`, plus ``extra_own``): address poisoning, see
+    the module docstring for the limits."""
     own = own_hashes(address, txs) | set(extra_own)
-    rows = [r for r in txs if _value(r) > 0]
+    rows = [r for r in txs if _value(r) > 0 and not failed(r)]
     for r in tokens:
-        if _value(r) <= 0:
+        if _value(r) <= 0 or failed(r):
             continue
         if _addr(r, "from") == address and _addr(r, "hash") not in own:
             continue
@@ -314,11 +342,16 @@ def own_token_transfers(address: str, txs: list[dict], tokens: list[dict]) -> li
     return kept
 
 
-def swept_senders(address: str, rows: list[dict]) -> set[str]:
-    """Senders whose asset ``address`` later sweeps: an incoming non-zero transfer counts
-    only when an outgoing transfer of the same asset follows it (or is in the same
-    block). A fake token, a dust spoof or a gas top-up is never swept, so its "from"
-    (which a fake token can forge freely) is not a sender."""
+def swept_senders(address: str, rows: list[dict], floors: dict[str, int] | None = None) -> set[str]:
+    """Senders whose asset ``address`` later sweeps: an incoming transfer counts only when
+    it is at least the asset's dust floor and an outgoing transfer of the same asset
+    follows it (or is in the same block). ``floors`` maps ``"eth"`` (the native coin) and
+    listed real tokens to their smallest raw amount (``Network.sender_floors``; default
+    the Ethereum floors); a token without a floor needs a non-zero amount. A fake token is
+    never swept and dust (a 1-wei spoof, a small top-up) is below the floor, so neither
+    makes its "from" (which a fake token can forge freely) a sender, even when ``address``
+    later sweeps that asset."""
+    floors = sender_floors(1) if floors is None else floors
     last_out: dict[str, tuple[int, int]] = {}
     for r in rows:
         if _addr(r, "from") == address and _addr(r, "to") and _value(r) > 0:
@@ -328,6 +361,8 @@ def swept_senders(address: str, rows: list[dict]) -> set[str]:
     for r in rows:
         frm = _addr(r, "from")
         if _addr(r, "to") != address or not frm or frm == address or _value(r) <= 0:
+            continue
+        if _value(r) < floors.get(_asset(r), 1):
             continue
         last = last_out.get(_asset(r))
         if last is not None and _order(r) <= last:
@@ -391,6 +426,45 @@ def forwards_to(rows: list[dict], address: str, target: str) -> bool:
     return False
 
 
+def _gap_ok(later: dict, earlier: dict, seconds: int, blocks: int) -> bool:
+    """``earlier`` is not after ``later`` and at most ``seconds`` before it (by
+    timeStamp; by ``blocks`` when a timestamp is missing)."""
+    lt, et = _num(later.get("timeStamp")), _num(earlier.get("timeStamp"))
+    if lt is not None and et is not None:
+        return 0 <= lt - et <= seconds
+    lb, eb = _num(later.get("blockNumber")), _num(earlier.get("blockNumber"))
+    return lb is not None and eb is not None and 0 <= lb - eb <= blocks
+
+
+def sweeps_balance_to(rows: list[dict], address: str, target: str) -> bool:
+    """True when ``address`` swept a balance to ``target`` (the rule for a target labelled
+    as an exchange): an outgoing transfer to ``target`` that moves at least
+    LABELLED_SWEEP_SHARE of the value of that asset received since the previous outgoing
+    transfer of that asset (to anyone), at most LABELLED_SWEEP_SECONDS after the latest
+    of those receipts. Several deposits swept together and a fee or dust leftover pass;
+    a small payment, or one long after the funds arrived, does not."""
+    events = sorted(enumerate(rows), key=lambda e: (_order(e[1]), e[0]))
+    received: dict[str, list[dict]] = {}
+    for _i, r in events:
+        frm, to, v = _addr(r, "from"), _addr(r, "to"), _value(r)
+        if v <= 0:
+            continue
+        a = _asset(r)
+        if to == address and frm != address:
+            received.setdefault(a, []).append(r)
+        elif frm == address and to:
+            since = received.pop(a, [])
+            if to != target or not since:
+                continue
+            total = sum(_value(x) for x in since)
+            latest = since[-1]
+            if v >= total * LABELLED_SWEEP_SHARE and _gap_ok(
+                r, latest, LABELLED_SWEEP_SECONDS, _LABELLED_FALLBACK_BLOCKS
+            ):
+                return True
+    return False
+
+
 def kind_label(info: dict) -> str:
     """Short text for the kind of a result, for the reports."""
     kind = info.get("kind", "exchange_deposit")
@@ -406,6 +480,8 @@ def kind_label(info: dict) -> str:
         return "unknown (a lookup failed)"
     if kind == NOT_DEPOSIT:
         return "not a deposit address"
+    if kind == PAID_EXCHANGE:
+        return f"paid an exchange ({info.get('exchange') or 'exchange'}), not a deposit address"
     return f"exchange deposit{cut}"
 
 
@@ -420,6 +496,10 @@ def target_label(info: dict) -> str:
         return "an unlabelled busy address (context, not scored)"
     if kind in (UNKNOWN_KIND, NOT_DEPOSIT):
         return info.get("error") or "-"
+    if kind == PAID_EXCHANGE:
+        return (
+            "nothing; paid a labelled exchange, did not forward or sweep what it received (context)"
+        )
     if info.get("evidence", True):
         return info.get("exchange") or "a hot wallet"
     return "an unlabelled busy address (context, not scored)"
@@ -429,10 +509,19 @@ def check_text(info: dict) -> str:
     """One line for a deposit-address check result (CLI, HTML report, web UI)."""
     kind = info.get("kind", "exchange_deposit")
     text = kind_label(info)
+    n = info.get("failed_sends") or 0
+    failed_note = f"{n} failed transaction(s) sent, moved nothing, not counted" if n else ""
     if kind == NOT_DEPOSIT:
-        return text
+        return f"{text}; {failed_note}" if failed_note else text
     if kind == UNKNOWN_KIND:
-        return f"{text}: {info.get('error') or ''}".rstrip(": ")
+        text = f"{text}: {info.get('error') or ''}".rstrip(": ")
+        return f"{text}; {failed_note}" if failed_note else text
+    if kind == PAID_EXCHANGE:
+        text += (
+            "; it paid the labelled exchange but did not forward or sweep the value it received"
+            " (context, not scored)"
+        )
+        return f"{text}; {failed_note}" if failed_note else text
     where = target_label(info)
     parts = [text, where if kind in ("forwarder", "smart_account") else f"swept to {where}"]
     parts.append(f"{len(info.get('senders') or [])} sender(s)")
@@ -440,6 +529,8 @@ def check_text(info: dict) -> str:
         parts.append(f"gas funder {info['gas_funder']}")
     if info.get("sponsored"):
         parts.append("sweeps sent by a sponsor (EIP-7702)")
+    if failed_note:
+        parts.append(failed_note)
     return "; ".join(parts)
 
 
@@ -561,6 +652,7 @@ def _forwarder(client, address: str, txs: list[dict], tokens: list[dict]) -> dic
 UNKNOWN_KIND = "unknown"  # a lookup the outcome depends on failed
 DEPOSIT_LIKE = "deposit_like"  # swept to an unlabelled busy address: service unknown
 NOT_DEPOSIT = "not_deposit"  # classify_address only: the tests found no deposit address
+PAID_EXCHANGE = "paid_exchange"  # paid a labelled exchange, swept nothing: context
 
 
 def _unknown(address: str, why) -> dict:
@@ -581,6 +673,7 @@ def classify_deposit_address(
     labels: dict | None = None,
     busy: Callable[[str], bool | None] | None = None,
     gas_fund_wei: int = GAS_FUND_WEI,
+    floors: dict[str, int] | None = None,
 ) -> dict | None:
     """Return {address, kind, sweep_target, exchange, senders, ...} if ``address`` looks
     like an exchange or service deposit address or a forwarder (see the module
@@ -589,24 +682,42 @@ def classify_deposit_address(
     None), a contract check (``is_contract`` returns None and lists the address in its
     ``failed`` set) or a transaction read. An unknown is never "not a deposit
     address". An ``ApiKeyError`` is raised. ``gas_fund_wei`` is the network's
-    gas-funder threshold (``Network.gas_fund_wei``). A result whose token history hit
+    gas-funder threshold (``Network.gas_fund_wei``), ``floors`` its sender dust floors
+    (``Network.sender_floors``, see :func:`swept_senders`). A result whose token history hit
     the MAX_DEPOSIT_TXS cap carries ``incomplete: True``; one that needed sponsored
-    EIP-7702 calls found by their transaction target carries ``sponsored: True``."""
-    address = address.lower()
+    EIP-7702 calls found by their transaction target carries ``sponsored: True``; one
+    whose address sent failed transactions carries their number as ``failed_sends`` (they
+    moved nothing and are not counted as transfers), an unknown result as well."""
+    info, failed_sends = _classify(
+        client, address.lower(), is_contract, labels, busy, gas_fund_wei, floors
+    )
+    if info is not None and failed_sends:
+        info["failed_sends"] = failed_sends
+    return info
+
+
+def _classify(client, address, is_contract, labels, busy, gas_fund_wei, floors):
+    """(result of :func:`classify_deposit_address` without ``failed_sends``, the number
+    of failed transactions ``address`` sent)."""
     try:
         txs = _rows(client, "txlist", address)
         if len(txs) >= MAX_DEPOSIT_TXS:
-            return None
+            return None, 0
         tokens = _rows(client, "tokentx", address)
     except ApiKeyError:
         raise
     except ApiError as exc:
-        return _unknown(address, f"history not read: {exc}")
+        return _unknown(address, f"history not read: {exc}"), 0
     cut = len(tokens) >= MAX_DEPOSIT_TXS
+    # A failed transaction moved nothing: dropped from every test below (sweep, senders,
+    # forwarding, gas funder, forwarder), only counted when ``address`` sent it.
+    failed_sends = sum(1 for r in txs if failed(r) and _addr(r, "from") == address)
+    txs = [r for r in txs if not failed(r)]
+    tokens = [r for r in tokens if not failed(r)]
 
     def sweep(extra_own=frozenset()) -> dict | None:
         rows = transfers(address, txs, tokens, extra_own)
-        senders = swept_senders(address, rows)
+        senders = swept_senders(address, rows, floors)
         if not senders or len(senders) > MAX_DEPOSIT_SENDERS:
             return None
         # A contract can only be a smart account or a forwarder (an ERC-4337 account is
@@ -617,6 +728,10 @@ def classify_deposit_address(
         share = MIN_SWEEP_SHARE if len(senders) <= FEW_SENDERS else HUB_SWEEP_SHARE
         found = _sweep(address, rows, is_contract, labels, busy, share)
         if found is None or found.get("kind") == UNKNOWN_KIND:
+            return found
+        if found.get("kind") == PAID_EXCHANGE:
+            # nothing was swept: no senders whose asset it sweeps, no gas funder
+            found["senders"] = []
             return found
         if _check_failed(is_contract, address):
             # a contract is never an exchange deposit address, and this one's status
@@ -629,15 +744,16 @@ def classify_deposit_address(
         return found
 
     swept = sweep()
-    if swept is not None and swept.get("kind") != UNKNOWN_KIND:
-        return swept
+    if swept is not None and swept.get("kind") not in (UNKNOWN_KIND, PAID_EXCHANGE):
+        return swept, failed_sends
+    # an operator-executed forwarder outranks "paid an exchange" and "unknown"
     found = _forwarder(client, address, txs, tokens)
     if found is not None and found.get("kind") == _SELF_CALLED:
         again = sweep(found["hashes"])
-        if again is not None and again.get("kind") != UNKNOWN_KIND:
+        if again is not None and again.get("kind") not in (UNKNOWN_KIND, PAID_EXCHANGE):
             again["sponsored"] = True
-        return again if again is not None else swept
-    return found if found is not None else swept
+        return (again if again is not None else swept), failed_sends
+    return (found if found is not None else swept), failed_sends
 
 
 def _sweep(address, rows, is_contract, labels, busy, min_share=MIN_SWEEP_SHARE) -> dict | None:
@@ -647,10 +763,17 @@ def _sweep(address, rows, is_contract, labels, busy, min_share=MIN_SWEEP_SHARE) 
     if not outgoing:
         return None
     total = sum(outgoing.values())
-    hot, unsure = [], []
+    hot, unsure, paid = [], [], []
     for target, n in outgoing.most_common(MAX_SWEEP_TARGETS):
         if _is_exchange(labels, target):
-            hot.append((target, n))
+            # A label names the exchange; it is not evidence of a sweep. The target
+            # counts only when the address sweeps its balance there (most of what it
+            # received, within 30 days) or forwards amounts as to an unlabelled hot
+            # wallet (a label never makes the test harder); merely paying it is context.
+            if sweeps_balance_to(rows, address, target) or forwards_to(rows, address, target):
+                hot.append((target, n))
+            else:
+                paid.append((target, n))
             continue
         if busy is None or not forwards_to(rows, address, target):
             continue
@@ -675,6 +798,16 @@ def _sweep(address, rows, is_contract, labels, busy, min_share=MIN_SWEEP_SHARE) 
         if unsure and share + sum(n for _t, n, _w in unsure) / total >= min_share:
             what = "; ".join(f"{w} of {t} failed" for t, _n, w in unsure)
             return _unknown(address, what)
+        if paid and share + sum(n for _t, n in paid) / total >= min_share:
+            # It pays a labelled exchange but does not forward or sweep the value it received: a
+            # customer paying an exchange, not an address the exchange controls.
+            return {
+                "address": address,
+                "kind": PAID_EXCHANGE,
+                "exchange": _names(_label(labels, t).get("entity", "") for t, _n in paid),
+                "paid_targets": [t for t, _n in paid],
+                "evidence": False,
+            }
         return None
     base = {
         "address": address,
@@ -747,6 +880,7 @@ def depositor_deposit_addresses(
     exclude: set[str] | frozenset[str] = frozenset(),
     errors: list | None = None,
     gas_fund_wei: int = GAS_FUND_WEI,
+    floors: dict[str, int] | None = None,
 ) -> list[dict]:
     """Deposit addresses the wallet sent funds to (see the module docstring).
 
@@ -789,10 +923,15 @@ def depositor_deposit_addresses(
         if lab and not _says_deposit(lab):
             continue
         examined += 1
-        info = classify_deposit_address(client, addr, is_contract, labels, busy, gas_fund_wei)
+        info = classify_deposit_address(
+            client, addr, is_contract, labels, busy, gas_fund_wei, floors
+        )
         if info and info.get("kind") == UNKNOWN_KIND:
             if errors is not None:
-                errors.append(lookup_failed("deposit address check", info["error"], address=addr))
+                why = info["error"]
+                if info.get("failed_sends"):
+                    why += f"; {info['failed_sends']} failed transaction(s) sent, not counted"
+                errors.append(lookup_failed("deposit address check", why, address=addr))
             continue
         if info:
             found.append(info)
@@ -805,6 +944,7 @@ def classify_address(
     labels: dict | None = None,
     is_contract: Callable[[str], bool | None] | None = None,
     gas_fund_wei: int = GAS_FUND_WEI,
+    floors: dict[str, int] | None = None,
 ) -> tuple[dict, list[dict]]:
     """Classify one given address (``classify-address``, the web UI, ``characterize``).
 
@@ -816,13 +956,21 @@ def classify_address(
     """
     address = address.lower()
     errors: list[dict] = []
-    info = classify_deposit_address(
-        client, address, is_contract, labels, make_busy_check(client, errors), gas_fund_wei
+    info, failed_sends = _classify(
+        client,
+        address,
+        is_contract,
+        labels,
+        make_busy_check(client, errors),
+        gas_fund_wei,
+        floors,
     )
     if info is None:
         info = {"address": address, "kind": NOT_DEPOSIT, "evidence": False}
-    elif info.get("kind") == UNKNOWN_KIND:
+    if info.get("kind") == UNKNOWN_KIND:
         errors.append(lookup_failed("deposit address check", info["error"], address=address))
+    if failed_sends:
+        info["failed_sends"] = failed_sends
     return info, errors
 
 

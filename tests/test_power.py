@@ -123,3 +123,13 @@ def test_self_plant_is_not_tried_when_a_counterparty_exists_or_wallet_is_a_contr
         _data(), WALLET, counterparties={COUNTERPARTY}, is_contract=lambda a: True
     )
     assert got["self_detectable"] is False
+
+
+def test_plant_hash_is_a_valid_transaction_hash():
+    import re
+
+    from tornado_demix.power import PLANT_HASH
+
+    assert re.fullmatch(r"0x[0-9a-f]{64}", PLANT_HASH)
+    data = plant_early_link(_data(), WALLET, POOL, COUNTERPARTY, T + HOUR)
+    assert PLANT_HASH in [r["hash"] for r in data["denoms"][POOL]["detail"][COUNTERPARTY]]

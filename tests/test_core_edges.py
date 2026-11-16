@@ -192,7 +192,7 @@ def test_a_busy_counterparty_is_not_read_for_withdrawal_senders():
 
     exchange, friend = "0x" + "e" * 40, "0x" + "f" * 40
     results = {"1 ETH": {"detail": {"0xr": [{"hash": "0xw"}]}, "window_blocks": [10, 20]}}
-    txs = [{"from": fx.WALLET, "to": exchange}, {"from": friend, "to": fx.WALLET}]
+    txs = [{"from": fx.WALLET, "to": exchange}, {"from": friend, "to": fx.WALLET, "value": "1"}]
 
     class Client:
         def __init__(self):
@@ -221,7 +221,7 @@ def test_an_explorer_error_on_a_counterparty_skips_it_without_failing_the_run():
     txs = [
         {"from": fx.WALLET, "to": broken},
         {"from": fx.WALLET, "to": broken},
-        {"from": friend, "to": fx.WALLET},
+        {"from": friend, "to": fx.WALLET, "value": "1"},
     ]
 
     class Client:
@@ -235,6 +235,34 @@ def test_an_explorer_error_on_a_counterparty_skips_it_without_failing_the_run():
 
     found = withdrawal_senders(Client(), fx.WALLET, txs, results, fx.network(), lambda a: False)
     assert found == {"0xw": friend}
+
+
+def test_zero_value_and_failed_incoming_rows_do_not_take_sender_slots():
+    """Spam (0-value or failed incoming rows) cannot fill the counterparty cap: the real
+    counterparty is still read."""
+    from tornado_demix.demix import MAX_SENDER_COUNTERPARTIES, withdrawal_senders
+
+    friend = "0x" + "f" * 40
+    spam = ["0x" + format(i, "040x") for i in range(1, 3 * MAX_SENDER_COUNTERPARTIES)]
+    txs = [{"from": p, "to": fx.WALLET, "value": "0"} for p in spam for _ in range(3)]
+    txs += [
+        {"from": p, "to": fx.WALLET, "value": "5", "isError": "1"} for p in spam for _ in range(3)
+    ]
+    txs += [{"from": friend, "to": fx.WALLET, "value": "1"}]
+    results = {"1 ETH": {"detail": {"0xr": [{"hash": "0xw"}]}, "window_blocks": [10, 20]}}
+    checked = []
+
+    def is_contract(addr):
+        checked.append(addr)
+        return False
+
+    class Client:
+        def fetch_all(self, action, addr, lo, hi):
+            return [{"from": friend, "hash": "0xw"}] if addr == friend else []
+
+    found = withdrawal_senders(Client(), fx.WALLET, txs, results, fx.network(), is_contract)
+    assert found == {"0xw": friend}
+    assert checked == [friend]
 
 
 def test_withdrawal_senders_stop_checking_counterparties_at_the_cap():

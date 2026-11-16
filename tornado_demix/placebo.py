@@ -29,8 +29,9 @@ MAX_DECOY_LEADS = 10
 
 NOTE = (
     "A single wallet is a tiny sample: a few leads either way say little. The "
-    "check shows what chance alone produces for this wallet, not how accurate "
-    "the real leads are."
+    "decoy rate is what the same rule finds in a window before the deposits, which "
+    "may hold the depositor's own earlier activity; it is not a false-discovery "
+    "rate and not a measure of how accurate the real leads are."
 )
 
 
@@ -70,7 +71,7 @@ def _verdict(band: str, t: int, d: int, t_rate, d_rate) -> str:
     counts += f" ({t_rate:g} vs {d_rate:g} per 1000 withdrawals searched)"
     if t_rate > d_rate and t > d:
         return f"{counts}: the real window shows more than the decoy"
-    return f"{counts}: indistinguishable from chance"
+    return f"{counts}: target rate not above the decoy rate (no equivalence test)"
 
 
 def _decoy_window(decoy: dict) -> list[int] | None:
@@ -87,6 +88,9 @@ BLIND_VERDICT = (
     "observed and does occur; early-profile leads are reported normally."
 )
 BLIND_SUFFIX = " (no direct link to a third-party address can be observed for this wallet)"
+# Power-check reasons for a wallet whose decoy window cannot show a planted link to a
+# third-party address: no non-contract counterparty, or none with a qualifying link.
+BLIND_REASONS = frozenset({"no_counterparty", "no_qualifying_link"})
 MISSED_VERDICT = (
     "decoy window cannot show a planted lead; no chance estimate for this wallet's direct "
     "links (a link planted at a counterparty was not rated moderate). "
@@ -101,9 +105,17 @@ UNKNOWN_CONTRACT_VERDICT = (
     "links (contract status unknown: no network to tell a contract counterparty from an "
     "ordinary address). Early-profile leads are reported normally."
 )
+NO_QUALIFYING_LINK_VERDICT = (
+    "decoy window cannot show a planted lead; no chance estimate for this wallet's direct "
+    "links to third-party addresses (it has non-contract counterparties, but none whose "
+    "link moved real value before the planted withdrawal, at the same timing relative to "
+    "the deposits as in the real window, so a planted link would not count). A withdrawal "
+    "back to the depositor itself can be observed; early-profile leads are reported normally."
+)
 VERDICTS = {
     "contract_unknown": UNKNOWN_CONTRACT_VERDICT,
     "no_counterparty": BLIND_VERDICT,
+    "no_qualifying_link": NO_QUALIFYING_LINK_VERDICT,
     "no_voucher": NO_VOUCHER_VERDICT,
     "missed": MISSED_VERDICT,
 }
@@ -197,11 +209,7 @@ def summarize(target: dict, decoy: dict, direct_link: dict | None = None) -> dic
                 per_1000["target_per_1000"][b],
                 per_1000["decoy_per_1000"][b],
             )
-            + (
-                BLIND_SUFFIX
-                if flags["direct_link_reason"] == "no_counterparty" and b != "weak"
-                else ""
-            )
+            + (BLIND_SUFFIX if flags["direct_link_reason"] in BLIND_REASONS and b != "weak" else "")
             for b in BANDS
         },
         "decoy_leads": [

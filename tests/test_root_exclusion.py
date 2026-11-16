@@ -2,6 +2,7 @@
 
 import pytest
 
+from tests import test_withdraw_root as wr
 from tests.fixtures import demix_result as fx
 from tornado_demix import root_exclusion
 from tornado_demix.constants import TOPIC_DEPOSIT, TOPIC_WITHDRAWAL, ZERO_ADDRESS
@@ -113,7 +114,7 @@ class RootClient:
         nullifier = tx_hash[2:]
         k = int(nullifier, 16) - 9000
         root = self.roots.get(k, 999)
-        return {"input": _input(root, nullifier)}
+        return {"input": _input(root, nullifier), "to": fx.POOL_01_ETH}
 
 
 def _index(monkeypatch, mapping, history=100, leaves=41):
@@ -269,7 +270,9 @@ def test_decoy_mode_uses_the_emulated_leaf_not_the_real_one(monkeypatch):
     assert data["root_check"]["wallet_leaves"]["0.1 ETH"] == [5, 13, 16]
 
 
-def test_root_check_off_adds_nothing_to_the_result():
+def test_root_check_off_adds_nothing_to_the_result(monkeypatch):
+    # a working contract check that says "not a contract" (an unknown status is no lead)
+    monkeypatch.setattr("tornado_demix.demix.make_contract_check", lambda url: lambda a: False)
     data = run_demix(_linked_client({}), fx.WALLET, network=fx.network(), root_check=False)
     assert "root_check" not in data and "root_check_incomplete" not in data
     assert set(data["heuristics"]) == {
@@ -278,6 +281,8 @@ def test_root_check_off_adds_nothing_to_the_result():
         "linked_addresses",
         "linked_late",
         "linked_contracts",
+        "linked_unknown_contracts",
+        "linked_context",
         "linked_senders",
         "shared_deposits",
         "early_profiles",
@@ -455,24 +460,28 @@ def test_partly_excluded_candidate_that_loses_its_count_match_is_listed(monkeypa
     assert "Dropped after recount" in build_html_report(data, fx.network())
 
 
-def _multicall_input(first_root, real_root, nullifier):
-    """A wrapper call: a no-op first call carrying [root][nullifier], then the withdrawal."""
-    decoy = "00000000" + format(first_root, "064x") + nullifier
-    real = SEL + _word("e0") + format(real_root, "064x") + nullifier + _word("0") * 3
-    return "0x" + "82ad56cb" + _word("20") + _word("2") + decoy + real
+MULTICALL = "0xca11bde05977b3631167028862be2a173976ca11"  # Multicall3
+
+
+def _multicall_input(first_root, real_root, nullifier, first_target=MULTICALL, first_call=None):
+    """aggregate3: a first call (by default a no-op carrying [root][nullifier]), then the
+    real withdrawal to the pool."""
+    first = first_call or ("00000000" + format(first_root, "064x") + nullifier)
+    real = wr._pool_call(format(real_root, "064x"), nullifier)
+    return "0x" + wr._aggregate3([(first_target, first), (fx.POOL_01_ETH, real)])
 
 
 class MulticallClient(RootClient):
     """Every winner withdrawal is wrapped; first call carries ``first``, the real one 999."""
 
-    def __init__(self, first, **kwargs):
+    def __init__(self, first, make=None, **kwargs):
         super().__init__({}, **kwargs)
         self.first = first
+        self.make = make or (lambda nullifier: _multicall_input(self.first, 999, nullifier))
 
     def tx_info(self, tx_hash):
         self.tx_info_calls.append(tx_hash)
-        nullifier = tx_hash[2:]
-        return {"input": _multicall_input(self.first, 999, nullifier)}
+        return {"input": self.make(tx_hash[2:]), "to": MULTICALL}
 
 
 def test_multicall_forged_old_root_does_not_exclude(monkeypatch):
@@ -486,15 +495,70 @@ def test_multicall_forged_old_root_does_not_exclude(monkeypatch):
     assert data["root_check"]["roots_found"] == 3
 
 
-def test_two_valid_candidates_leave_the_root_unknown(monkeypatch):
-    # both roots are inside a history of 100: which one proved the withdrawal is unknown
+def test_multicall_decoy_inside_the_history_still_reads_the_real_root(monkeypatch):
+    # the old root 501 would be accepted (history 100) and would exclude; the decoded
+    # withdraw call names 999, so nothing is excluded and nothing is ambiguous
     _index(monkeypatch, {501: 5, 999: 40}, history=100)
     client = MulticallClient(501, extra_txs=[_tx(WINNER, 0.5, 1050, 15, "0xfund")])
     data = run_demix(client, fx.WALLET, network=fx.network(), root_check=True)
     assert WINNER in _addresses(data)
     rc = data["root_check"]
+    assert rc["roots_found"] == 3 and rc["roots_ambiguous"] == 0
+    assert data["heuristics"]["root_excluded"] == []
+
+
+def test_two_decoded_withdraw_calls_leave_the_root_unknown(monkeypatch):
+    _index(monkeypatch, {501: 5, 999: 40}, history=100)
+
+    def make(nullifier):
+        both = wr._pool_call(format(501, "064x"), nullifier)
+        return _multicall_input(0, 999, nullifier, fx.POOL_01_ETH, both)
+
+    client = MulticallClient(0, make=make, extra_txs=[_tx(WINNER, 0.5, 1050, 15, "0xfund")])
+    data = run_demix(client, fx.WALLET, network=fx.network(), root_check=True)
+    assert WINNER in _addresses(data)
+    rc = data["root_check"]
     assert rc["roots_ambiguous"] == 3 and rc["roots_found"] == 0
     assert data["heuristics"]["root_excluded"] == []
+
+
+def _custom_wrapper(nullifier):
+    """Unknown selector, old root 501 right before the nullifier, no withdraw call."""
+    return "0x" + "deadbeef" + wr._w(fx.POOL_01_ETH) + format(501, "064x") + nullifier
+
+
+def test_single_adjacent_old_root_without_a_withdraw_call_is_unknown(monkeypatch):
+    # a decoy wrapper: one adjacency candidate, valid in the history, that would
+    # exclude; without a decoded withdraw call the root stays unknown
+    _index(monkeypatch, {501: 5, 999: 40}, history=100)
+    client = MulticallClient(
+        0, make=_custom_wrapper, extra_txs=[_tx(WINNER, 0.5, 1050, 15, "0xfund")]
+    )
+    data = run_demix(client, fx.WALLET, network=fx.network(), root_check=True)
+    assert WINNER in _addresses(data)
+    rc = data["root_check"]
+    assert rc["roots_found"] == 0 and rc["roots_not_found"] == 3
+    assert rc["roots_undecoded"] == 3
+    assert data["heuristics"]["root_excluded"] == []
+
+
+def test_undecoded_count_is_shown_in_every_view(monkeypatch, capsys):
+    from tornado_demix import cli
+    from tornado_demix.report_html import build_html_report
+    from webui import app as webapp
+
+    _index(monkeypatch, {501: 5, 999: 40}, history=100)
+    client = MulticallClient(
+        0, make=_custom_wrapper, extra_txs=[_tx(WINNER, 0.5, 1050, 15, "0xfund")]
+    )
+    data = run_demix(client, fx.WALLET, network=fx.network(), root_check=True)
+    assert "no withdraw call decoded 3" in build_html_report(data, fx.network())
+    assert webapp._root_check_view(data, fx.network())["undecoded"] == 3
+    monkeypatch.setattr(cli.config, "load_api_key", lambda path: "stub-key")
+    monkeypatch.setattr(cli, "EtherscanClient", lambda *a, **kw: object())
+    monkeypatch.setattr(cli, "run_demix", lambda *a, **kw: data)
+    cli.cmd_demix(cli.build_parser().parse_args(["demix", fx.WALLET, "--root-check"]))
+    assert "no withdraw call decoded 3" in capsys.readouterr().out
 
 
 def test_root_older_than_the_history_is_unknown_not_excluded(monkeypatch):
@@ -594,3 +658,33 @@ def test_history_sizes_and_unknown_causes_are_shown_in_every_view(monkeypatch, c
     cli.cmd_demix(cli.build_parser().parse_args(["demix", fx.WALLET, "--root-check"]))
     out = capsys.readouterr().out
     assert "[0.1 ETH] ROOT_HISTORY_SIZE 30" in out and "outside the pool's root history 3" in out
+
+
+def test_old_root_in_a_call_allowed_to_fail_does_not_exclude(monkeypatch, capsys):
+    # the old-root withdraw (501, inside the history, would exclude) may revert silently
+    # while the real withdrawal runs through an opaque contract
+    from tornado_demix import cli
+    from tornado_demix.report_html import build_html_report
+    from webui import app as webapp
+
+    _index(monkeypatch, {501: 5, 999: 40}, history=100)
+
+    def make(nullifier):
+        decoy = wr._pool_call(format(501, "064x"), nullifier)
+        return "0x" + wr._aggregate3_flags(
+            [(fx.POOL_01_ETH, True, decoy), ("0x" + "66" * 20, False, "deadbeef")]
+        )
+
+    client = MulticallClient(0, make=make, extra_txs=[_tx(WINNER, 0.5, 1050, 15, "0xfund")])
+    data = run_demix(client, fx.WALLET, network=fx.network(), root_check=True)
+    assert WINNER in _addresses(data)
+    rc = data["root_check"]
+    assert rc["roots_unverified"] == 3 and rc["roots_found"] == 0
+    assert data["heuristics"]["root_excluded"] == []
+    assert "call may have failed 3" in build_html_report(data, fx.network())
+    assert webapp._root_check_view(data, fx.network())["unverified"] == 3
+    monkeypatch.setattr(cli.config, "load_api_key", lambda path: "stub-key")
+    monkeypatch.setattr(cli, "EtherscanClient", lambda *a, **kw: object())
+    monkeypatch.setattr(cli, "run_demix", lambda *a, **kw: data)
+    cli.cmd_demix(cli.build_parser().parse_args(["demix", fx.WALLET, "--root-check"]))
+    assert "call may have failed 3" in capsys.readouterr().out

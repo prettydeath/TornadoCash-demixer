@@ -9,11 +9,20 @@ from datetime import datetime, timezone
 
 from .attribution import format_label
 from .bridges_canonical import recipient_links
-from .deposit_addresses import NOT_DEPOSIT, UNKNOWN_KIND, check_text, kind_label, target_label
+from .deposit_addresses import (
+    NOT_DEPOSIT,
+    PAID_EXCHANGE,
+    UNKNOWN_KIND,
+    check_text,
+    kind_label,
+    target_label,
+)
 from .heuristics import (
     BAND_ORDER,
     CONTEXT_SIGNALS,
+    EVIDENCE_LABEL,
     LEAD_SIGNALS,
+    LINK_CONTEXT_SIGNALS,
     NOTE_SIGNALS,
     _last_deposit_before,
     _numbers_text,
@@ -22,6 +31,8 @@ from .heuristics import (
     candidate_reason,
     conclusion,
     cross_method,
+    link_description,
+    link_shift,
     method_breakdown,
     numbered_deposits,
     profile_match_kind,
@@ -42,7 +53,9 @@ from .honest import (
 )
 from .honest import provenance as _provenance
 from .incomplete import NOTICE_REASONS
+from .incomplete import is_partial as _is_partial
 from .incomplete import lines as _incomplete_lines
+from .incomplete import notice_lines as _notice_lines
 from .incomplete import notice_only as _notice_only
 from .incomplete import summary as _incomplete_summary
 from .multi import SYNC_MAX_SPAN_HOURS, exact_k_skips, exact_k_tail_text
@@ -69,6 +82,7 @@ from .report_json import (
 )
 from .report_page1 import (
     PAGE1_CSS,
+    asset_label,
     characterize_page1,
     classify_page1,
     cluster_page1,
@@ -80,9 +94,12 @@ from .trace import (
     BELOW_THRESHOLD,
     END_STATES_NOTE,
     LOOKUP_FAILED,
+    ORDER_UNKNOWN,
+    POSSIBLE_ROWS,
     TORNADO_REDEPOSIT,
     bridge_text,
     bridge_tx_label,
+    outflow_groups,
     recipient_text,
     share_status,
     share_text,
@@ -601,21 +618,37 @@ def _n(count: int, noun: str) -> str:
 
 
 def failed_parts(result: dict) -> tuple[int, int]:
-    """``(failed lookups, lists cut off by the explorer)``; notices are not counted."""
+    """``(failed lookups, lists cut off or partly indexed by the explorer)``; notices are
+    not counted."""
     errors = result.get("errors") or []
     failed = sum(1 for e in errors if e.get("kind", "lookup_failed") == "lookup_failed")
     cut = [t for t in result.get("truncated") or [] if t.get("reason") not in NOTICE_REASONS]
     return failed, len(cut)
 
 
+def ambiguous_count(result: dict) -> int:
+    """Deposits whose twin pool could not be settled (listed, not searched)."""
+    return sum(1 for e in result.get("errors") or [] if e.get("kind") == "pool_ambiguous")
+
+
 def incomplete_phrase(result: dict) -> str:
     """E.g. "3 lookups failed and 1 list cut off by the explorer" (proper plurals), or ""."""
     failed, cut = failed_parts(result)
+    partial = sum(1 for t in result.get("truncated") or [] if _is_partial(t))
+    cut -= partial
     parts = []
     if failed:
         parts.append(f"{failed} {'lookup' if failed == 1 else 'lookups'} failed")
     if cut:
         parts.append(f"{cut} {'list' if cut == 1 else 'lists'} cut off by the explorer")
+    if partial:
+        parts.append(
+            f"{partial} {'list' if partial == 1 else 'lists'} still being indexed by the "
+            "explorer (partial indexing)"
+        )
+    amb = ambiguous_count(result)
+    if amb:
+        parts.append(f"{amb} {'deposit' if amb == 1 else 'deposits'} with an uncertain pool")
     return " and ".join(parts)
 
 
@@ -718,11 +751,9 @@ def _incomplete_html(result: dict) -> str:
         return ""
     items = "".join(f'<li class="mono">{_e(line)}</li>' for line in _incomplete_lines(result))
     if _notice_only(result):
-        return (
-            f'<div class="callout"><b>{_e(text)}</b>. Nothing is missing: the lists are '
-            "complete, but a node log has no gas price, so the unique-gas-price signal "
-            f"is off for them.<ul>{items}</ul></div>"
-        )
+        why = " ".join(_e(s) for s in _notice_lines(result))
+        listed = f"<ul>{items}</ul>" if items else ""
+        return f'<div class="callout"><b>{_e(text)}</b>. {why}{listed}</div>'
     return (
         f'<div class="callout"><b>{_e(text)}</b>. A lookup that failed is not '
         '"nothing found": what it would have shown is missing from this report. '
@@ -748,14 +779,16 @@ def _groups_html(groups: list[dict], network: Network) -> str:
         f"scored. {len(groups) - len(anchored)} group(s) without an anchor are not listed.</div>",
     ]
     for g in anchored:
-        anchors = ", ".join(f"{_short(a['address'])} ({a['why']})" for a in g["anchors"])
+        anchors = ", ".join(
+            f"{_addr_link(network, a['address'])} ({_e(a['why'])})" for a in g["anchors"]
+        )
         members = "".join(f'<li class="mono">{_addr_link(network, a)}</li>' for a in g["members"])
         parts.append(
             '<div class="lead-card">'
             f'<div class="top"><span class="pill">{_e(g["pool_key"])}</span>'
             f"<b>{len(g['members'])} addresses · {g['notes']} notes</b>"
             f'<span class="conf pct">{_e(_ts(g["first_ts"]))} – {_e(_ts(g["last_ts"]))}</span></div>'
-            f'<div class="why">Anchor: {_e(anchors)}</div>'
+            f'<div class="why">Anchor: {anchors}</div>'
             f'<ul class="evidence">{members}</ul></div>'
         )
     return "".join(parts)
@@ -767,6 +800,14 @@ def _kind_cell(d: dict) -> str:
     label = kind_label(d)
     cls = "pill long" if len(label) > 28 else "pill"
     return f'<span class="{cls}">{_e(label)}</span>'
+
+
+def _failed_sends_html(d: dict) -> str:
+    """Failed transactions the address sent (they moved nothing and are not counted)."""
+    n = d.get("failed_sends") or 0
+    if not n:
+        return ""
+    return f'<div class="meta">{n} failed transaction(s) sent, moved nothing, not counted</div>'
 
 
 def _deposit_addresses_html(data: dict, network: Network) -> str:
@@ -788,7 +829,9 @@ def _deposit_addresses_html(data: dict, network: Network) -> str:
         "chance, so it never raises the band. An exchange address can be shared by mistake or "
         "by a service. A <i>service deposit</i> sweeps to a labelled non-exchange wallet and a "
         "<i>forwarder</i> moves tokens through an operator; neither is ever linked to a "
-        "candidate.</div>",
+        "candidate. A counterparty that <i>paid an exchange</i> sent a labelled exchange "
+        "wallet funds without forwarding or sweeping the value it had received: it is not a deposit address, "
+        "is shown as context and never links two addresses.</div>",
         '<table><colgroup><col style="width:30%"><col style="width:18%"><col style="width:22%">'
         '<col style="width:8%"><col></colgroup>'
         "<tr><th>Deposit address</th><th>Kind</th><th>Swept to</th><th>Senders</th>"
@@ -808,7 +851,7 @@ def _deposit_addresses_html(data: dict, network: Network) -> str:
             )
         parts.append(
             f'<tr><td class="mono wrap">{_addr_link(network, d["address"])}</td>'
-            f"<td>{_kind_cell(d)}</td>"
+            f"<td>{_kind_cell(d)}{_failed_sends_html(d)}</td>"
             f"<td>{_e(target_label(d))}</td>"
             f'<td class="num">{len(d.get("senders", []))}</td>'
             f"<td>{who or '-'}</td></tr>"
@@ -833,10 +876,15 @@ def _root_check_html(data: dict, network: Network) -> str:
         f"and is not scored. Read: {rc['withdrawals_checked']} withdrawal(s), "
         f"roots found {rc['roots_found']}, not found {rc['roots_not_found']} "
         f"(outside the pool's root history {rc.get('roots_outside_history', 0)}, "
-        f"ambiguous {rc.get('roots_ambiguous', 0)}), "
-        f"{rc['tx_info_calls']} transaction lookup(s). A root counts only when the pool "
-        "still accepted it at the withdrawal block (within its ROOT_HISTORY_SIZE); a "
-        "calldata with several such candidate roots leaves the root unknown.</div>",
+        f"ambiguous {rc.get('roots_ambiguous', 0)}, "
+        f"no withdraw call decoded {rc.get('roots_undecoded', 0)}, "
+        f"call may have failed {rc.get('roots_unverified', 0)}), "
+        f"{rc['tx_info_calls']} transaction lookup(s). The root is the argument of the "
+        "decoded withdraw call to the pool (directly, through a router or inside a "
+        "Multicall) and counts only when the pool still accepted it at the withdrawal "
+        "block (within its ROOT_HISTORY_SIZE); no decoded call, a call inside a batch that "
+        "lets it fail silently, or several different decoded roots leave the root "
+        "unknown.</div>",
     ]
     sizes = rc.get("history_sizes") or {}
     if sizes:
@@ -852,6 +900,8 @@ def _root_check_html(data: dict, network: Network) -> str:
             + (f": {_e(', '.join(rc['unchecked_pools']))}" if rc.get("unchecked_pools") else "")
             + "): some candidates were not checked.</div>"
         )
+    for pool_key, why in sorted((rc.get("unchecked_reasons") or {}).items()):
+        parts.append(f'<div class="meta flag">{_e(pool_key)} not checked: {_e(why)}.</div>')
     dropped = rc.get("dropped_after_recount") or []
     if not rc["excluded_candidates"]:
         parts.append('<div class="meta">No candidate was excluded in full.</div>')
@@ -982,6 +1032,14 @@ def _gwei(wei) -> str:
     return f"{wei / 1e9:.3f}" if wei else ""
 
 
+def _pool_cell(deposit: dict) -> str:
+    """The Pool cell of a deposit: its pool, or "uncertain: A / B" for a twin deposit
+    whose pool the receipt could not settle."""
+    if deposit.get("pool_ambiguous"):
+        return "uncertain: " + " / ".join(deposit["pool_ambiguous"])
+    return deposit.get("pool_key", "")
+
+
 def deposits_table_html(data: dict, network: Network, uid: str = "r") -> str:
     """The depositor's Tornado deposits, listed once near the top of the report and
     numbered D1, D2, ... (:func:`numbered_deposits`); the evidence of every candidate
@@ -989,6 +1047,7 @@ def deposits_table_html(data: dict, network: Network, uid: str = "r") -> str:
     nums = numbered_deposits(data)
     if not nums:
         return ""
+    amb = sum(1 for _, d in nums if d.get("pool_ambiguous"))
     vno = {}
     for i, v in enumerate(data.get("vouchers") or [], 1):
         for n in voucher_deposit_numbers(data, v):
@@ -996,7 +1055,7 @@ def deposits_table_html(data: dict, network: Network, uid: str = "r") -> str:
     rows = "".join(
         f'<tr><td class="num">D{n}</td>'
         f'<td class="num">{_e(_ts(d["ts"])) if d.get("ts") is not None else "time unknown"}</td>'
-        f'<td class="num">{_e(d.get("pool_key", ""))}</td><td class="num">{_e(vno.get(n, ""))}</td>'
+        f'<td class="num">{_e(_pool_cell(d))}</td><td class="num">{_e(vno.get(n, ""))}</td>'
         f'<td class="num">{_gwei(d.get("gas_price"))}</td>'
         f"<td>{_tx_link(network, d['hash']) if d.get('hash') else 'hash not recorded'}</td></tr>"
         for n, d in nums
@@ -1005,7 +1064,14 @@ def deposits_table_html(data: dict, network: Network, uid: str = "r") -> str:
         f'<section class="deps" id="{_e(uid)}-deps" aria-label="Deposits">'
         f'<h2>Tornado.Cash deposits<span class="rule"></span></h2>'
         f'<div class="meta">{_n(len(nums), "deposit")} by the depositor, oldest first. The '
-        "evidence of each candidate refers to them by number (D1, D2, ...).</div>"
+        "evidence of each candidate refers to them by number (D1, D2, ...)."
+        + (
+            f" {_n(amb, 'deposit')} with an uncertain pool (twin pools, receipt not "
+            "conclusive): not searched, in no voucher."
+            if amb
+            else ""
+        )
+        + "</div>"
         '<table class="dtab"><colgroup><col style="width:5%"><col style="width:19%">'
         '<col style="width:8%"><col style="width:12%"><col style="width:7%"><col></colgroup>'
         "<thead><tr><th>#</th><th>Time (UTC)</th><th>Pool</th><th>Voucher</th>"
@@ -1067,6 +1133,8 @@ def _timeline_html(data: dict, r: dict, network: Network) -> str:
                 feeds.append("linked address (lead: first withdrawal within 72 h)")
             elif "linked_late" in signals:
                 feeds.append("late direct link (context: first withdrawal after 72 h)")
+            for kind in sorted(signals & LINK_CONTEXT_SIGNALS):
+                feeds.append(EVIDENCE_LABEL[kind])
         sender = senders.get(rec.get("hash"))
         if sender:
             # its feed (linked withdrawal sender) is said once, above the list
@@ -1125,6 +1193,7 @@ def _timeline_html(data: dict, r: dict, network: Network) -> str:
             )
     links = data.get("counterparty_links") or {}
     cited = []
+    link_ctx = sorted(signals & LINK_CONTEXT_SIGNALS)
     if signals & {"linked", "linked_late"} and addr != wallet:
         cited.append(
             (
@@ -1133,6 +1202,8 @@ def _timeline_html(data: dict, r: dict, network: Network) -> str:
                 "linked address" if "linked" in signals else "late direct link (context)",
             )
         )
+    elif link_ctx and addr != wallet:
+        cited.append((addr, "this address", EVIDENCE_LABEL[link_ctx[0]]))
     for sender, lab in label.items():
         cited.append(
             (
@@ -1143,7 +1214,21 @@ def _timeline_html(data: dict, r: dict, network: Network) -> str:
         )
     for who_addr, who, feeds in cited:
         link = links.get(who_addr)
-        if link and link.get("tx"):
+        if link and link.get("tx") and "direction" in link:
+            # value, asset, direction, block, time and position against the first withdrawal
+            # (for a sender: against the withdrawals it sent to this address)
+            sent = [rec.get("ts") for rec in recs if senders.get(rec.get("hash")) == who_addr]
+            text = link_description(dict(link, tx="@@TX@@"), sent, link_shift(data))
+            timed.append(
+                (
+                    link.get("ts") or 0,
+                    0,
+                    f"{who[0].upper() + who[1:]}, a direct counterparty of the depositor: "
+                    + _e(text).replace("@@TX@@", _tx_link(network, link["tx"])),
+                    feeds,
+                )
+            )
+        elif link and link.get("tx"):
             timed.append(
                 (
                     link.get("ts") or 0,
@@ -1237,7 +1322,7 @@ def _cand_table(
     head = (
         _filter_bar(scope)
         + f'<table class="cands ft" data-scope="{_e(scope)}"><colgroup><col style="width:4%">'
-        '<col style="width:8%"><col style="width:6%">'
+        '<col style="width:10%"><col style="width:6%">'
         + (
             '<col style="width:22%"><col style="width:10%">'
             if show_attr
@@ -1562,11 +1647,20 @@ def build_html_report(
 
     if not data.get("vouchers"):
         p.append(_incomplete_html(data))
-        p.append(
-            '<h2>No Tornado.Cash deposits found<span class="rule"></span></h2>'
-            '<div class="meta">This address made no deposits into the configured '
-            "Tornado pools on this network.</div>"
-        )
+        n_dep = len(data.get("deposits") or [])
+        if n_dep:
+            p.append(
+                '<h2>Deposits found, pool not settled<span class="rule"></span></h2>'
+                f'<div class="meta">{_n(n_dep, "deposit")} found, pool could not be settled '
+                "(twin pools); none searched.</div>"
+            )
+            p.append(deposits_table_html(data, network, uid))
+        else:
+            p.append(
+                '<h2>No Tornado.Cash deposits found<span class="rule"></span></h2>'
+                '<div class="meta">This address made no deposits into the configured '
+                "Tornado pools on this network.</div>"
+            )
         p.append(
             _sections_html(
                 uid,
@@ -1595,8 +1689,8 @@ def build_html_report(
         '<div class="meta">These are <b>probabilistic leads for '
         "corroboration, not proof</b>. A lead needs a linked address (a direct link only "
         "when its first withdrawal came within 72 h of the last deposit) or an early "
-        "multi-pool profile match; the band rises to strong only when two independent lead "
-        "sources agree. Amount+timing and gas price never raise the band and alone are "
+        "multi-pool profile match; the band rises to strong only when two different lead-signal "
+        "families agree (their independence is not established). Amount+timing and gas price never raise the band and alone are "
         "chance-level on real depositors and stay weak. Open a row's evidence timeline to "
         "see what was checked. The score only orders leads within a band.</div>",
     ]
@@ -1647,7 +1741,7 @@ def build_html_report(
         "context": (kinds["context"], ctx_body),
         "chance": (kinds["chance"], chance_body),
         "deposits": (
-            len(dep_rows),
+            sum(1 for d in dep_rows if d.get("kind") != PAID_EXCHANGE),
             _deposit_addresses_html(data, network)
             or '<div class="meta">No deposit address found (or the search was off).</div>',
         ),
@@ -2427,7 +2521,11 @@ def build_classify_report(
     )
     targets = []
     if kind not in (NOT_DEPOSIT, UNKNOWN_KIND):
-        targets = [info["operator"]] if info.get("operator") else info.get("sweep_targets") or []
+        targets = (
+            [info["operator"]]
+            if info.get("operator")
+            else info.get("sweep_targets") or info.get("paid_targets") or []
+        )
     answer = f"{check_text(info)}; behaviour, not identity."
     if failed:
         answer = answer[:-1] + f", and {incomplete_phrase(info)}, so results may be incomplete."
@@ -2446,7 +2544,8 @@ def build_classify_report(
     ]
     dep = []
     if targets:
-        dep.append('<h2>Swept to / operator<span class="rule"></span></h2><table>')
+        head = "Paid, not swept" if kind == PAID_EXCHANGE else "Swept to / operator"
+        dep.append(f'<h2>{head}<span class="rule"></span></h2><table>')
         for t in targets:
             tag = format_label(labels.get(t)) if labels and labels.get(t) else ""
             tag_cell = f'<span class="flag">{_e(tag)}</span>' if tag else "—"
@@ -2529,6 +2628,57 @@ def _terminal_bridge_note(terminal, destinations):
     return f'<div class="meta">{" · ".join(parts)}</div>' if parts else ""
 
 
+def _outflows_note(terminal, net):
+    """Under an order_unknown end point: the same-block transfers that may have taken it,
+    those in the arrival's own transaction apart (order inside one transaction unknown)."""
+    out = []
+    for text, group in outflow_groups(terminal):
+        items = "; ".join(
+            f"{_e(o['value'])} to {_addr_link(net, o['to'])} in {_tx_link(net, o['tx_hash'])}"
+            for o in group
+        )
+        out.append(f'<div class="meta">{_e(text)}: {items}</div>')
+    return "".join(out)
+
+
+def possible_html(result: dict, network, destinations=None) -> str:
+    """The possible outflows of incomplete histories (``result["possible"]``) as a table,
+    plus a line for the ones beyond the list. "" when there are none."""
+    rows = result.get("possible") or []
+    more = result.get("possible_more") or {}
+    if not rows and not more:
+        return ""
+    out = [
+        '<div class="meta">Outgoing transfers that FIFO gives none of the traced funds but '
+        "that may still hold some, because the sender's history is incomplete (an "
+        "overdraft, a cut-off list, or a same-block transfer of unknown order). They are "
+        "not followed. [lower – upper] is what each can hold.</div>",
+        '<table><colgroup><col style="width:6%"><col style="width:11%">'
+        '<col style="width:20%"><col style="width:20%"><col style="width:17%"><col>'
+        "</colgroup><tr><th>Hop</th><th>Time (UTC)</th><th>From</th><th>To</th>"
+        "<th>[lower – upper] / sent</th><th>Transaction</th></tr>",
+    ]
+    for r in rows:
+        net = _chain_net(network, destinations, r.get("chain_id"))
+        when = _ts(r["ts"]) if r.get("ts") else ""
+        out.append(
+            f'<tr><td class="num">{r["hop"]}{_chain_tag(network, destinations, r.get("chain_id"))}</td>'
+            f'<td class="num">{_e(when)}</td>'
+            f"<td>{_addr_link(net, r['from'])}</td>"
+            f"<td>{_addr_link(net, r['to'])}</td>"
+            f'<td class="num">[{_e(r["lower"])} – {_e(r["upper"])}] / {_e(r["value"])} '
+            f'{_e(r["asset"])}<div class="meta">{_e(r["status"])}</div></td>'
+            f"<td>{_tx_link(net, r['tx_hash'])}</td></tr>"
+        )
+    out.append("</table>")
+    if more:
+        out.append(
+            f'<div class="meta">The first {POSSIBLE_ROWS} are listed; {more["count"]} more '
+            f"(sent {more['value']:g} in total) are counted, not listed.</div>"
+        )
+    return "".join(out)
+
+
 def _bridge_infos(terminal):
     return terminal.get("bridges") or ([terminal["bridge"]] if terminal.get("bridge") else [])
 
@@ -2582,9 +2732,10 @@ def _chain_tag(network, destinations, chain_id):
 def end_state(reason: str) -> tuple[str, str]:
     """``(tone, short label)`` of a trace end reason, for its badge.
 
-    tone is ``fail`` (a lookup failed), ``chance`` (below threshold or stopped by a
-    limit), ``warn`` (sent into Tornado again), ``bridge`` (any bridge end state),
-    ``ok`` (a labelled address) or ``ctx`` (any other end)."""
+    tone is ``fail`` (a lookup failed), ``chance`` (below threshold, stopped by a
+    limit, or a same-block transfer of unknown order), ``warn`` (sent into Tornado again), ``bridge`` (any bridge end state),
+    ``ok`` (a labelled address) or ``ctx`` (any other end; a swap end is labelled
+    "swap")."""
     r = reason or ""
     if r == LOOKUP_FAILED or "lookup_failed" in r or "lookup failed" in r:
         return "fail", "lookup failed"
@@ -2592,12 +2743,18 @@ def end_state(reason: str) -> tuple[str, str]:
         return "chance", "below threshold"
     if r == TORNADO_REDEPOSIT:
         return "warn", "Tornado re-deposit"
+    if r == ORDER_UNKNOWN:
+        return "chance", "order unknown"
     if r.startswith("bridge") or r in BRIDGE_END_STATES:
         return "bridge", "bridge"
+    if r.startswith("aggregator") and r.endswith("(bridge or swap unknown)"):
+        return "bridge", "bridge or swap unknown"
     if r == "labelled address":
         return "ok", "labelled address"
     if r in ("hop limit", "trace budget"):
         return "chance", "stopped: " + r
+    if r.startswith("swap "):
+        return "ctx", "swap"  # a swap end (CoW order): an end point with its own label
     return "ctx", "end point"
 
 
@@ -2617,27 +2774,55 @@ def _end_badge(reason: str) -> str:
     return f'<span class="badge {tone}">{_e(label)}</span>'
 
 
+def _asset_key(item: dict):
+    """(chain, token address) of a terminal or result; the name for an older result
+    that carries no address."""
+    if "asset_address" in item:
+        return (item.get("chain_id"), item["asset_address"])
+    return (None, item.get("asset"))
+
+
 def trace_totals(result: dict) -> list[dict]:
     """Per asset: what reached end points, what stayed below the threshold, what stopped
     at a failed lookup, and their sum (it equals the start amount unless a swap or a
-    bridge changed the asset)."""
+    bridge changed the asset).
+
+    An asset is a (chain, token address) pair, so a token that only shares its symbol
+    with another is never merged with it; rows whose names would read the same get the
+    full token address (or "native, chain N") added.
+    """
     out = {}
     for t in result.get("terminals") or []:
         tone, _label = end_state(t["reason"])
+        key = _asset_key(t)
         row = out.setdefault(
-            t["asset"], {"asset": t["asset"], "endpoints": 0.0, "below": 0.0, "failed": 0.0}
+            key,
+            {
+                "asset": t["asset"],
+                "name": t["asset"],
+                "chain_id": key[0],
+                "asset_address": t.get("asset_address"),
+                "endpoints": 0.0,
+                "below": 0.0,
+                "failed": 0.0,
+            },
         )
-        key = (
+        kind = (
             "failed"
             if tone == "fail"
             else ("below" if t["reason"] == BELOW_THRESHOLD else "endpoints")
         )
-        row[key] += t["amount"]
+        row[kind] += t["amount"]
     rows = []
+    names = Counter(row["asset"] for row in out.values())
     for row in out.values():
         for k in ("endpoints", "below", "failed"):
             row[k] = round(row[k], 6)
         row["total"] = round(row["endpoints"] + row["below"] + row["failed"], 6)
+        if names[row["asset"]] > 1:
+            addr = row["asset_address"]
+            tag = addr if addr else f"native, chain {row['chain_id']}"
+            row["asset"] = f"{row['asset']} ({tag})"
         rows.append(row)
     return rows
 
@@ -2652,13 +2837,51 @@ def _totals_html(result: dict) -> str:
         for r in rows
     ]
     start = f"{result['amount']:g} {_e(result['asset'])}"
-    tail = (
-        f" (start amount {start})"
-        if len(rows) == 1 and rows[0]["asset"] == result["asset"]
-        else f". Start amount {start}; a swap or bridge changed the asset, so the totals are "
-        "per asset and do not add up to it."
-    )
+    same = [
+        r
+        for r in rows
+        if r["name"] == result["asset"] and r["asset_address"] == result.get("asset_address")
+    ]
+    if len(rows) == 1 and same:
+        tail = f" (start amount {start})"
+    elif len(same) == len(rows):
+        total = round(sum(r["total"] for r in rows), 6)
+        tail = (
+            f". Start amount {start}; the rows are the same asset on different chains and "
+            f"add up to <b>{total:g} {_e(result['asset'])}</b>."
+        )
+    else:
+        tail = (
+            f". Start amount {start}; a swap or bridge changed the asset, so rows of "
+            "different assets are shown per asset and are not summed."
+        )
     return f'<div class="totals">{"<br>".join(lines)}{tail}</div>'
+
+
+def _edge_labels(kinds: dict) -> list[str]:
+    """One label per group of edges between two boxes (``kinds``: (kind, protocol, asset,
+    state, destination chain) -> edges): the amount, with a count for identical edges; a
+    bridge state and destination are named only where they tell two labels apart."""
+    named = Counter(k[:3] for k in kinds)
+    out = []
+    for (kind, protocol, asset, state, dest), group in kinds.items():
+        amounts = {g["attributed"] for g in group}
+        if len(group) == 1:
+            label = f"{group[0]['attributed']:g} {asset_label(asset)}"
+        elif len(amounts) == 1:
+            label = f"{len(group)} × {group[0]['attributed']:g} {asset_label(asset)}"
+        else:
+            total = round(sum(g["attributed"] for g in group), 6)
+            label = f"{len(group)} transfers, {total:g} {asset_label(asset)}"
+        if kind == "bridge":
+            if named[(kind, protocol, asset)] > 1:
+                where = f" to chain {dest}" if dest is not None else ""
+                label = f"{label} ({state or 'no state'}{where})"
+            label = f"bridge {protocol}, {label}"
+        elif kind == "swap":
+            label = "swap, " + label
+        out.append(label)
+    return out
 
 
 def _trace_svg(result: dict, network: Network, destinations=None, limit: int = 40) -> str:
@@ -2686,38 +2909,55 @@ def _trace_svg(result: dict, network: Network, destinations=None, limit: int = 4
         by_col.setdefault(c, []).append(key)
     n_cols = max(by_col) + 1
     rows = max(len(v) for v in by_col.values())
-    col_w, row_h, box_w = 310, 56, 160
-    width, height = max(760, n_cols * col_w + 20), rows * row_h + 20
+    # Edges between the same two boxes: identical ones (same kind, bridge protocol and
+    # state, destination chain and asset) are drawn once with a count; different ones are
+    # spread apart, each with its own label, so no two labels sit on top of each other.
+    pairs = {}
+    for e in edges:
+        chain = e.get("chain_id", network.chain_id)
+        info = e.get("bridge") or {}
+        same = (e["kind"], info.get("protocol") or "", e["asset"], info.get("state"))
+        same += (info.get("dest_chain_id"),)
+        pairs.setdefault((chain, e["from"], e["to"]), {}).setdefault(same, []).append(e)
+    labels = {pair: _edge_labels(kinds) for pair, kinds in pairs.items()}
+    longest = max((len(t) for texts in labels.values() for t in texts), default=0)
+    # room for the spread labels: a line per extra kind, above the first row and between
+    # rows; columns wide enough for the longest label between two boxes (about 6.3 px a
+    # character at 11 px)
+    spread = max((len(kinds) for kinds in pairs.values()), default=1) - 1
+    box_w = 160
+    col_w, row_h = max(310, box_w + round(6.3 * longest) + 30), 56 + 14 * max(spread - 1, 0)
+    top = 10 + 7 * spread
+    width, height = max(760, n_cols * col_w + 20), rows * row_h + 2 * top
     pos = {}
     for c, keys in by_col.items():
         for i, key in enumerate(keys):
-            pos[key] = (10 + c * col_w, 10 + i * row_h)
+            pos[key] = (10 + c * col_w, top + i * row_h)
     parts = [
         f'<svg class="flow" viewBox="0 0 {width} {height}" style="min-width:{width * 0.75:.0f}px" '
         'role="img" aria-label="Hops of the traced funds from the start address to the end points" '
         'xmlns="http://www.w3.org/2000/svg" font-family="inherit" font-size="11">'
     ]
-    for e in edges:
-        chain = e.get("chain_id", network.chain_id)
-        a, b = pos.get((chain, e["from"])), pos.get((chain, e["to"]))
+    for (chain, frm, to), kinds in pairs.items():
+        a, b = pos.get((chain, frm)), pos.get((chain, to))
         if not a or not b:
             continue
-        x1, y1, x2, y2 = a[0] + box_w, a[1] + 18, b[0], b[1] + 18
-        cls = "e-bridge" if e["kind"] == "bridge" else "e-pool"
-        mid = (x1 + x2) / 2
-        parts.append(
-            f'<path class="{cls}" d="M{x1} {y1} C{mid} {y1} {mid} {y2} {x2} {y2}" fill="none" '
-            'stroke-width="1.5"/>'
-        )
-        label = f"{e['attributed']:g} {e['asset']}"
-        if e["kind"] == "bridge":
-            label = "bridge " + ((e.get("bridge") or {}).get("protocol") or "") + ", " + label
-        elif e["kind"] == "swap":
-            label = "swap, " + label
-        parts.append(
-            f'<text class="{"b-bridge" if e["kind"] == "bridge" else "m"}" x="{mid:.0f}" '
-            f'y="{(y1 + y2) / 2 - 4:.0f}" text-anchor="middle">{_e(label)}</text>'
-        )
+        for n, ((kind, *_rest), group) in enumerate(kinds.items()):
+            label = labels[(chain, frm, to)][n]
+            shift = (n - (len(kinds) - 1) / 2) * 16
+            x1, y1, x2, y2 = a[0] + box_w, a[1] + 18, b[0], b[1] + 18
+            cls = "e-bridge" if kind == "bridge" else "e-pool"
+            mid = (x1 + x2) / 2
+            parts.append(
+                f'<path class="{cls}" d="M{x1} {y1} C{mid} {y1 + shift} {mid} {y2 + shift} '
+                f'{x2} {y2}" fill="none" stroke-width="{1.5 + min(len(group) - 1, 3) * 0.5}"/>'
+            )
+            # the label sits above the curve's middle; spread labels a line apart
+            y = (y1 + y2) / 2 - 4 + (n - (len(kinds) - 1) / 2) * 14
+            parts.append(
+                f'<text class="{"b-bridge" if kind == "bridge" else "m"}" x="{mid:.0f}" '
+                f'y="{y:.0f}" text-anchor="middle">{_e(label)}</text>'
+            )
     for key, (x, y) in pos.items():
         chain, addr = key
         cls = "n dep" if key == start_key else "n"
@@ -2805,7 +3045,7 @@ def build_trace_report(
     if terminals:
         stop.append(
             f'<table class="ft" data-scope="{_e(uid)}-leads"><colgroup><col style="width:34%">'
-            '<col style="width:14%"><col style="width:6%"><col style="width:13%"><col>'
+            '<col style="width:14%"><col style="width:6%"><col style="width:19%"><col>'
             "</colgroup><thead><tr><th>Address</th><th>Amount</th><th>Hop</th><th>End state</th>"
             "<th>Reason</th></tr></thead>"
         )
@@ -2814,7 +3054,7 @@ def build_trace_report(
             tag = f' <span class="pill flag">{_e(label)}</span>' if label else ""
             tag += _chain_tag(network, destinations, t.get("chain_id"))
             net = _chain_net(network, destinations, t.get("chain_id"))
-            note = _terminal_bridge_note(t, destinations)
+            note = _terminal_bridge_note(t, destinations) + _outflows_note(t, net)
             tone, short = end_state(t["reason"])
             stop.append(
                 f'<tbody data-f="1" data-state="{_e(short)}" data-net="{_e(net.name)}">'
@@ -2845,6 +3085,13 @@ def build_trace_report(
             )
             if e["kind"] == "bridge":
                 swap += _bridge_note(e["bridge"], network, destinations)
+            if e.get("paid_to"):
+                # a same-chain payout to another address (Mayan MonoChainSwap)
+                via = (e.get("bridge") or e.get("swap") or {}).get("protocol") or "contract"
+                swap += '<div class="meta">paid out by {} to {}</div>'.format(
+                    _e(via),
+                    _addr_link(_chain_net(network, destinations, e.get("chain_id")), e["paid_to"]),
+                )
             net = _chain_net(network, destinations, e.get("chain_id"))
             when = _ts(e["ts"]) if e.get("ts") else ""
             hops.append(
@@ -2875,6 +3122,12 @@ def build_trace_report(
         "leads": (len(terminals), "".join(stop), "Where the traced funds stop"),
         "context": (len(edges), "".join(hops), "Hops"),
     }
+    possible = possible_html(result, network, destinations)
+    if possible:
+        count = len(result.get("possible") or []) + (result.get("possible_more") or {}).get(
+            "count", 0
+        )
+        sections["chance"] = (count, possible, "Possible outflows (history incomplete)")
     if diagram:
         sections["groups"] = (None, diagram, "Flow diagram")
     sections["method"] = (None, method)

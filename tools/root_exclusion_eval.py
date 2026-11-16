@@ -6,8 +6,13 @@ For every cached target (real window) and decoy run of a directory under
 the root they prove against, exactly as ``tornado_demix.root_exclusion`` does in
 ``run_demix(root_check=True)``: the wallet's leaves come from ``wallet_leaves`` (the real
 leaf of each deposit in a target run; the emulated leaf, insertions up to the shifted
-deposit's block, in a decoy run), the root from the withdrawal's calldata and its leaf
-count from the pool's cached root index.
+deposit's block, in a decoy run), the root with the shipped validated read: the ``_root``
+argument of the decoded ``withdraw`` call to the pool (``withdraw_root.read_root``; no
+decoded call or several different roots leave it unknown), accepted only when the pool
+still accepted it at the withdrawal block (``root_exclusion._accepted_root`` with the
+cached root index, its insertion blocks and the pool's ``ROOT_HISTORY_SIZE`` read from the
+contract). Results published before v2.23 used an unvalidated adjacency read; see the
+errata in docs/EVALUATION.md.
 
 The runs are NOT re-run and NOT re-scored: a candidate counts as *fully excluded* when
 every one of its withdrawals in the pool is excluded, *partly excluded* when some are.
@@ -23,8 +28,9 @@ Usage
     python tools/root_exclusion_eval.py --network ethereum --dir holdout2 --weak-depositors 40
     python tools/root_exclusion_eval.py --network polygon --dir polygon2 --weak-depositors 40
 
-Root indexes must be cached in .cache/merkle (built by ``cached_root_index``, about 30
-minutes for a large pool); a pool without one is skipped and counted.
+Root indexes must be cached in .cache/merkle with insertion blocks (built by
+``cached_root_index``, about 30 minutes for a large pool); a pool without one, or whose
+ROOT_HISTORY_SIZE cannot be read, is skipped and counted.
 """
 
 from __future__ import annotations
@@ -41,18 +47,49 @@ from concurrent.futures import ThreadPoolExecutor
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from tornado_demix.errors import ApiError, ApiKeyError  # noqa: E402
 from tornado_demix.heuristics import ranked_candidates  # noqa: E402
+from tornado_demix.merkle import root_history_size  # noqa: E402
 from tornado_demix.registry import record_safe as record  # noqa: E402
 from tornado_demix.root_exclusion import (  # noqa: E402
+    _accepted_root,
     _hex,
     _own_withdrawals,
     classify,
     wallet_leaves,
     wallet_notes,
 )
-from tornado_demix.withdraw_root import root_from_input  # noqa: E402
+from tornado_demix.withdraw_root import known_multicalls, read_root  # noqa: E402
 
 BANDS = ("strong", "moderate", "weak")
+
+
+def validated_n_root(entry, index, blocks, block, history, stats):
+    """Leaf count of a withdrawal's root under the shipped read, else None (root unknown).
+
+    ``entry`` is the cached read ``{"root": hex or "", "source": ...}``. A root that was not
+    decoded counts in ``roots_undecoded`` or ``roots_ambiguous``; a decoded root the pool no
+    longer accepted at ``block`` counts in ``roots_outside_history``.
+    """
+    if not entry or not entry.get("root"):
+        source = (entry or {}).get("source")
+        key = {"ambiguous": "roots_ambiguous", "unverified": "roots_unverified"}.get(
+            source, "roots_undecoded"
+        )
+        stats[key] += 1
+        return None
+    return _accepted_root([int(entry["root"], 16)], index, blocks, block, history, stats)
+
+
+def _read_entry(info, nullifier, pool_address, routers, multicalls=None):
+    """Cache entry ``{"root", "source"}`` of one transaction object; None when the
+    transaction was not read (not cached, so the next run asks again)."""
+    if not isinstance(info, dict):
+        return None
+    got = read_root(
+        info.get("input") or "", nullifier, info.get("to"), pool_address, routers, multicalls
+    )
+    return {"root": "" if got["root"] is None else _hex(got["root"]), "source": got["source"]}
 
 
 def _load_runs(runs_dir, limit):
@@ -115,6 +152,9 @@ def _render(out_dir):
         "",
         "Tool: tools/root_exclusion_eval.py, offline on the cached runs (holdout2 Ethereum, "
         "polygon2 Polygon); the runs are not re-run and not re-scored.",
+        "Root read: the root of the decoded withdraw call, accepted only when the pool still "
+        "accepted it at the withdrawal block (summaries without the 'of which' rows were made "
+        "with the earlier unvalidated read).",
         "Candidates are the ranked candidates of each cached run (all bands). Weak candidates "
         "only for the first N depositors in sorted file order (N below); moderate and strong "
         "candidates for all depositors.",
@@ -157,6 +197,13 @@ def _render(out_dir):
         )
         row("roots found in the index", t["roots_found"], d["roots_found"])
         row("roots not found", t["roots_not_found"], d["roots_not_found"])
+        for key, label in (
+            ("roots_undecoded", "  of which no withdraw call decoded"),
+            ("roots_unverified", "  of which call may have failed (batch frame)"),
+            ("roots_ambiguous", "  of which several decoded roots"),
+            ("roots_outside_history", "  of which outside the pool's root history"),
+        ):
+            row(label, t.get(key, "-"), d.get(key, "-"))
         row("withdrawals excluded", t["withdrawals_excluded"], d["withdrawals_excluded"])
         row(
             "withdrawals note-partial (context)",
@@ -258,23 +305,36 @@ def main(argv=None):
                 )
     print(f"{len(names)} depositors, {len(items)} candidate rows", file=sys.stderr, flush=True)
 
-    # 2. root indexes (cached only)
-    indexes = {}
+    # 2. root indexes (cached only, with insertion blocks) and ROOT_HISTORY_SIZE per pool
+    indexes, blocks_by_pool, histories = {}, {}, {}
     for pool_key in sorted({i[2] for i in items}):
         pool = network.by_key[pool_key]
         path = os.path.join(merkle_dir, f"{getattr(clients[0], 'chain_id', 1)}_{pool.address}.json")
-        if os.path.exists(path):
-            with open(path, encoding="utf-8") as fh:
-                indexes[pool_key] = json.load(fh)["roots"]
-        else:
+        if not os.path.exists(path):
             print(f"  [!] no root index for {pool_key}: skipped", file=sys.stderr, flush=True)
+            continue
+        with open(path, encoding="utf-8") as fh:
+            tree = json.load(fh)
+        if not tree.get("blocks"):
+            print(f"  [!] root index of {pool_key} has no blocks: skipped", file=sys.stderr)
+            continue
+        try:
+            histories[pool_key] = root_history_size(clients[0], pool, merkle_dir)
+        except ApiKeyError:
+            raise
+        except ApiError as exc:
+            print(f"  [!] {pool_key} ROOT_HISTORY_SIZE not read ({exc}): skipped", file=sys.stderr)
+            continue
+        indexes[pool_key] = tree["roots"]
+        blocks_by_pool[pool_key] = tree["blocks"]
 
-    # 3. roots of the withdrawals (disk cache keyed by tx:nullifier)
-    roots_path = os.path.join(out_dir, f"roots_{args.network}.json")
+    # 3. decoded roots of the withdrawals (disk cache keyed by tx:nullifier; v2 = decoded
+    # read, kept apart from the unvalidated adjacency cache of earlier versions)
+    roots_path = os.path.join(out_dir, f"roots_v2_{args.network}.json")
     roots = json.load(open(roots_path, encoding="utf-8")) if os.path.exists(roots_path) else {}
     todo = sorted(
         {
-            (tx, nu)
+            (tx, nu, i[2])
             for i in items
             if i[2] in indexes
             for tx, nu, _b in i[5]
@@ -283,15 +343,20 @@ def main(argv=None):
     )
     print(f"{len(todo)} transaction lookups", file=sys.stderr, flush=True)
 
-    def read_root(client, item):
-        tx, nu = item
-        info = client.tx_info(tx)
-        root = root_from_input((info or {}).get("input") or "", nu) if info else None
-        return "" if root is None else _hex(root)
+    def read_one(client, item):
+        tx, nu, pool_key = item
+        return _read_entry(
+            client.tx_info(tx),
+            nu,
+            network.by_key[pool_key].address,
+            network.routers,
+            known_multicalls(network.chain_id),
+        )
 
-    got = _parallel(todo, read_root, clients)
-    for (tx, nu), root in got.items():
-        roots[f"{tx}:{nu}"] = root
+    got = _parallel(todo, read_one, clients)
+    for (tx, nu, _pool_key), entry in got.items():
+        if entry is not None:  # a failed lookup is retried on the next run, not cached
+            roots[f"{tx}:{nu}"] = entry
     with open(roots_path, "w", encoding="utf-8") as fh:
         json.dump(roots, fh)
 
@@ -332,6 +397,10 @@ def main(argv=None):
             "old_eq_leaf": 0,
             "old_eq_leaf_in_gap": 0,
             "old_full": Counter(),
+            "roots_ambiguous": 0,
+            "roots_outside_history": 0,
+            "roots_undecoded": 0,
+            "roots_unverified": 0,
         }
 
     table = defaultdict(tally)
@@ -349,9 +418,16 @@ def main(argv=None):
         t["candidates"][band] += 1
         excl = real_excl = old_excl = 0
         for tx, nu, block in wds:
-            root = roots.get(f"{tx}:{nu}")
-            n_root = indexes[pool_key].get(root) if root else None
             in_gap = since is not None and block < since
+            # unknown-root causes are counted for checked withdrawals only, as in the tool
+            n_root = validated_n_root(
+                roots.get(f"{tx}:{nu}"),
+                indexes[pool_key],
+                blocks_by_pool[pool_key],
+                block,
+                histories[pool_key],
+                Counter() if in_gap else t,
+            )
             if n_root is not None and classify(n_root, used) == "excluded":
                 # what the rule without the gap exemption would have excluded
                 old_excl += 1
@@ -391,6 +467,8 @@ def main(argv=None):
         "dir": args.dir,
         "depositors": len(names),
         "weak_depositors": len(weak_names),
+        "history_sizes": histories,
+        "read": "decoded withdraw call, root accepted at the withdrawal block",
         "skipped_candidate_rows": {f"{k}/{b}": n for (k, b), n in sorted(skipped.items())},
         "kinds": {
             kind: {
@@ -398,6 +476,10 @@ def main(argv=None):
                 "withdrawals_checked": t["withdrawals"],
                 "roots_found": t["found"],
                 "roots_not_found": t["not_found"],
+                "roots_undecoded": t["roots_undecoded"],
+                "roots_unverified": t["roots_unverified"],
+                "roots_ambiguous": t["roots_ambiguous"],
+                "roots_outside_history": t["roots_outside_history"],
                 "decoy_gap_not_checked": t["gap"],
                 "withdrawals_excluded": t["excl_w"],
                 "withdrawals_note_partial": t["partial_w"],

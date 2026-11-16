@@ -183,3 +183,20 @@ def test_an_address_with_old_history_is_not_disposable():
     internal = [_internal(P01, ADDR, 10**17, 1_000_000, "0x1")]
     info = characterize_address(StubClient(normal, internal), ADDR, _network())
     assert info["disposable"] is False
+
+
+def test_failed_rows_count_neither_as_pool_inflows_nor_as_next_hops():
+    failed_inflow = dict(_internal(P1, ADDR, 10**18, 1000, "0xf1"), isError="1")
+    ok_inflow = _internal(P1, ADDR, 10**18, 1100, "0xf2")
+    failed_hop = dict(_normal(ADDR, HOP, 10**18, 1200, "0xf3"), isError="1")
+    status_hop = dict(_normal(ADDR, HOP, 10**18, 1300, "0xf4"), txreceipt_status="0")
+    ok_hop = _normal(ADDR, HOP, 10**18, 1400, "0xf5")
+    info = characterize_address(
+        StubClient([failed_hop, status_hop, ok_hop], [failed_inflow, ok_inflow]),
+        ADDR,
+        _network(),
+    )
+    assert [r["tx_hash"] for r in info["pool_inflows"]] == ["0xf2"]
+    assert info["inflow_totals"]["ETH"] == 1.0
+    assert info["top_next_hops"][0]["count"] == 1
+    assert info["top_next_hops"][0]["total_value"] == 1.0

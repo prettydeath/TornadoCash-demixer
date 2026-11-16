@@ -113,6 +113,9 @@ class Destination:
     def internal_txs(self, addr):
         return []
 
+    def tx_receipt(self, tx_hash):
+        return self.fx.get("fill_receipt")  # not stored: the fill's own logs are not read
+
 
 def _dests(chain_id, client):
     def dest(chain):
@@ -206,9 +209,13 @@ def test_native_deposit_through_the_spokepool_periphery_is_followed():
     assert info["state"] == "filled" and info["dest_chain_id"] == 42161
     assert info["deposit_id"] == 4600717 and info["via"] == PERIPHERY
     assert info["fill_tx"] == "0x0b9b58de7b1b66bbe67ecafcf45ff52d76bf1f6cd0e1b11266550e0d81cd9708"
-    # paid out as ETH on Arbitrum (the fill's WETH is the wrapped native coin)
+    # the fill pays the Across MulticallHandler (P_RECIPIENT, listed in Across's deployed
+    # addresses). Its payments in the fill transaction are not stored with the fixture, so
+    # the branch ends at the handler, in ETH (the fill's WETH is the wrapped native coin)
+    assert info["handler"] == P_RECIPIENT
     (end,) = result["terminals"]
     assert end["chain_id"] == 42161 and end["address"] == P_RECIPIENT
+    assert end["reason"] == "bridge across (multicall handler, onward transfer not tied)"
     assert end["asset"] == "ETH"
     assert end["amount"] == round(0.0014 * 1393830501964500 / 1400000000000000, 6)
 
@@ -331,14 +338,15 @@ ROUTER = "0x" + "77" * 20
 
 
 def test_an_unlisted_router_whose_receipt_holds_a_deposit_sent_by_the_address_is_followed():
-    """Depositor is the router; the transaction was sent by the traced address."""
+    """Depositor is the router; the traced address sent the transaction to the router
+    (the stronger tie for a deposit in the router's own name)."""
     logs = []
     for log in FX["receipt"]["logs"]:
         log = dict(log)
         if log["address"].lower() == SPOKE:
             log["topics"] = log["topics"][:3] + ["0x" + ROUTER[2:].rjust(64, "0")]
         logs.append(log)
-    receipt = dict(FX["receipt"], logs=logs, **{"from": USER})
+    receipt = dict(FX["receipt"], logs=logs, **{"from": USER, "to": ROUTER})
 
     class Fills(Destination):
         def get_logs(self, address, topic0, start, end, topics=None):

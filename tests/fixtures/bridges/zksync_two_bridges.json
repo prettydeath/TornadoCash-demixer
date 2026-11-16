@@ -157,5 +157,32 @@
   "transactionHash": "0x2ca55638af12212f6c3482d2a886c94a3eec305ceccf0ac9dc9491fea670a674",
   "transactionIndex": "0x25",
   "type": "0x2"
- }
+ },
+ "l1_rows": [
+  {
+   "blockNumber": "26006197",
+   "timeStamp": "1789756295",
+   "hash": "0x2ca55638af12212f6c3482d2a886c94a3eec305ceccf0ac9dc9491fea670a674",
+   "nonce": "1002",
+   "blockHash": "0x95407b83414713a095da4e458e2c86ea6942f7b2f83fa4758e2d6820b9ea22c3",
+   "from": "0x9452ed6da616783786c6d8aaf73047ecad126c57",
+   "contractAddress": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+   "to": "0xbed1eb542f9a5aa6419ff3deb921a372681111f6",
+   "value": "74977800000",
+   "tokenName": "USDC",
+   "tokenSymbol": "USDC",
+   "tokenDecimal": "6",
+   "transactionIndex": "37",
+   "gas": "1000000",
+   "gasPrice": "388909649",
+   "gasUsed": "398273",
+   "cumulativeGasUsed": "3923583",
+   "input": "deprecated",
+   "methodId": "0x24fd57fb",
+   "functionName": "requestL2TransactionTwoBridges(tuple _request)",
+   "confirmations": "406813",
+   "statusRep": "1",
+   "_repeat": 0
+  }
+ ]
 }

@@ -176,7 +176,7 @@ def test_job_box_has_a_progress_indicator(web):
     assert "/job/" in body
 
 
-# --- fix round 1 -------------------------------------------------------------------
+# --- layout checks -----------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -225,3 +225,39 @@ def test_hostile_attribution_label_is_escaped_on_the_page(web, monkeypatch):
     _response, body = _post(web, "demix")
     assert "<img src=x" not in body and "<script>alert" not in body
     assert "&lt;img src=x onerror=alert(1)&gt;" in body
+
+
+@pytest.mark.parametrize(
+    "analysis,json_key",
+    [
+        ("cluster", "cluster"),
+        ("characterize", fx.BOB),
+        ("classify", fx.BOB),
+        ("trace", START),
+        ("multi", "multi"),
+        ("demix", fx.WALLET),
+    ],
+)
+def test_every_json_download_carries_limitations_and_the_exploratory_flag(web, analysis, json_key):
+    from tornado_demix.honest import exploratory_banner, limitations
+
+    _post(web, analysis)
+    doc = web.get(f"/result/{json_key}.json").get_json()
+    assert doc["limitations"] == limitations()
+    assert doc["exploratory"] is bool(exploratory_banner())
+
+
+def test_cluster_json_is_a_dict_with_its_traces_under_traces(web):
+    _post(web, "cluster")
+    doc = web.get("/result/cluster.json").get_json()
+    assert isinstance(doc, dict) and isinstance(doc["traces"], list) and doc["traces"]
+    assert "clusters" in doc["traces"][0]
+
+
+def test_trace_characterize_and_classify_json_keep_their_own_keys(web):
+    _post(web, "trace")
+    assert web.get(f"/result/{START}.json").get_json()["nodes_expanded"] == 3
+    _post(web, "characterize")
+    assert web.get(f"/result/{fx.BOB}.json").get_json()["address"] == _char_info()["address"]
+    _post(web, "classify")
+    assert web.get(f"/result/{fx.BOB}.json").get_json()["kind"] == "deposit_like"

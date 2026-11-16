@@ -231,7 +231,9 @@ def main(argv=None) -> int:
             except Exception as exc:  # a crash or timeout is a finding, not a traceback
                 issues.append({"file": path.name, "kind": "tool-error", "error": str(exc)[:500]})
         browser.close()
-    print(json.dumps(issues, indent=1, ensure_ascii=False))
+    # ASCII escapes: the console's code page (cp1251, cp437...) may lack the report's
+    # characters, and a caller reading the output as UTF-8 must be able to decode it
+    print(json.dumps(issues, indent=1))
     return 1 if issues else 0
 
 

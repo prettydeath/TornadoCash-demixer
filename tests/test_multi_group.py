@@ -290,12 +290,24 @@ def test_exact_k_observed_counts_only_withdrawals_timed_inside_the_group_window(
 # ---- the direct link inside a group ----------------------------------------------
 
 
-def test_a_group_member_receiving_a_withdrawal_is_a_linked_candidate():
-    """A withdrawal back to one of the merged wallets, early: a direct link to the actor."""
+def test_a_group_member_receiving_a_withdrawal_is_a_linked_candidate(monkeypatch):
+    """A withdrawal back to one of the merged wallets (checked: not a contract), early:
+    a direct link to the actor."""
+    monkeypatch.setattr(multi, "make_contract_check", lambda url: lambda address: False)
     withdrawals = {POOL_1: _split_withdrawals()[POOL_1] + [(BOB, T0 + DAY)]}
     corr = _correlate(_split_deposits(), withdrawals, group=True)
     rows = [r for r in ranked_candidates(corr["group"]) if r["address"] == BOB]
     assert rows and "linked" in rows[0]["signals"] and rows[0]["band"] == "moderate"
+
+
+@pytest.mark.parametrize("status", [True, None])
+def test_a_group_member_that_is_or_may_be_a_contract_is_no_lead(monkeypatch, status):
+    """As in 2.22 a contract member is no direct link; an unchecked one is context."""
+    monkeypatch.setattr(multi, "make_contract_check", lambda url: lambda address: status)
+    withdrawals = {POOL_1: _split_withdrawals()[POOL_1] + [(BOB, T0 + DAY)]}
+    corr = _correlate(_split_deposits(), withdrawals, group=True)
+    rows = [r for r in ranked_candidates(corr["group"]) if r["address"] == BOB]
+    assert all("linked" not in r["signals"] for r in rows)
 
 
 def test_a_transfer_between_members_makes_no_third_party_a_lead():

@@ -15,11 +15,13 @@ import copy
 from collections.abc import Callable, Iterable
 
 from .demix import score_collected
-from .heuristics import BAND_ORDER, ranked_candidates
+from .heuristics import BAND_ORDER, first_withdrawals, lead_link, link_shift, ranked_candidates
 
 PLANT_DELAY_SECONDS = 3600
-PLANT_HASH = "0x" + "0" * 24 + "plant" + "0" * 35
-REASONS = ("detected", "missed", "no_counterparty", "no_voucher")
+# Synthetic hash of the planted withdrawal: 0x-prefixed 64 hex chars ("PLANT" in ASCII hex),
+# so code that validates transaction hashes accepts it; a real hash equal to it is negligible.
+PLANT_HASH = "0x" + "0" * 24 + "504c414e54" + "0" * 30
+REASONS = ("detected", "missed", "no_counterparty", "no_qualifying_link", "no_voucher")
 
 
 def plant_early_link(data: dict, wallet: str, pool_key: str, recipient: str, ts: int) -> dict:
@@ -67,25 +69,42 @@ def window_detectability(
     "self_detectable": bool | None}``.
     The recipient is the first (sorted) counterparty that is neither the wallet nor a
     contract, planted in the pool of the earliest voucher. ``no_counterparty`` is a
-    blind spot of the wallet (nowhere to plant a direct link); ``missed`` means a
-    link was planted and the pipeline did not rate it ``moderate`` or better.
-    ``self_detectable`` is set only for ``no_counterparty``: whether a withdrawal back
+    blind spot of the wallet (nowhere to plant a direct link); ``no_qualifying_link``
+    means the wallet has non-contract counterparties, but none whose link moved real
+    value before the planted withdrawal (the scoring rule, compared at the decoy's
+    shifted time, see ``heuristics.link_shift``), so a planted link could not count;
+    ``missed`` means a link was planted and the pipeline did not rate it ``moderate`` or
+    better. ``self_detectable`` is set only for those two blind reasons: whether a
+    withdrawal back
     to the (non-contract) wallet itself would reach ``moderate``; it does not change
     ``detectable``, which keeps the counterparty meaning.
     """
     wallet = wallet.lower()
     parties = data.get("counterparty_addresses", ()) if counterparties is None else counterparties
     parties = {p.lower() for p in parties}
-    # Lazy: the contract check may be a network call, so stop at the first hit.
-    recipient = next(
-        (
-            a
-            for a in sorted(parties)
-            if a != wallet and not (is_contract is not None and is_contract(a))
-        ),
-        None,
-    )
     vouchers = [v for v in data.get("vouchers", []) if v["pool_key"] in data.get("denoms", {})]
+    plant_ts = None
+    if vouchers:
+        first_v = min(vouchers, key=lambda x: x.get("first_ts", 0))
+        plant_ts = first_v.get("last_ts", first_v.get("first_ts")) + PLANT_DELAY_SECONDS
+    links_by = data.get("direct_links")
+    firsts = first_withdrawals(data)
+    shift = link_shift(data)
+
+    def can_lead(addr: str) -> bool:
+        """A planted withdrawal can be a lead only on a counterparty whose link moved real
+        value before it (and before any real withdrawal to it): the scoring rule."""
+        if links_by is None or plant_ts is None:
+            return True
+        first = firsts.get(addr)
+        cut = plant_ts if first is None else min(first, plant_ts)
+        return lead_link(links_by.get(addr) or [], cut, shift) is not None
+
+    def plain(addr: str) -> bool:
+        return addr != wallet and (is_contract is None or is_contract(addr) is False)
+
+    # Lazy: the contract check may be a network call, so stop at the first hit.
+    recipient = next((a for a in sorted(parties) if can_lead(a) and plain(a)), None)
     if not vouchers:
         return {
             "detectable": False,
@@ -110,9 +129,13 @@ def window_detectability(
         # depositor is the one place left to plant; it is reported apart, because a
         # wallet that never gets money back from Tornado is blind in practice.
         self_ok = not (is_contract is not None and is_contract(wallet)) and rated_moderate(wallet)
+        # counterparties exist, but none has a link that could count before the plant
+        blind = (
+            "no_qualifying_link" if any(plain(a) for a in sorted(parties)) else "no_counterparty"
+        )
         return {
             "detectable": False,
-            "reason": "no_counterparty",
+            "reason": blind,
             "recipient": None,
             "pool_key": None,
             "self_detectable": self_ok,

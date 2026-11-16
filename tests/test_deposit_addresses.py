@@ -59,8 +59,11 @@ class FakeClient:
 
 
 def deposit_lists(senders=(WALLET, EXIT), target=HOT, sweeps=3):
+    # the first sweep moves everything received (less 0.001 ETH), later ones top-ups
+    first = len(senders) * 10**18 - 10**15
     rows = [tx(s, DEPOSIT) for s in senders] + [
-        tx(DEPOSIT, target, value=10**18 - 10**15, block=101) for _ in range(sweeps)
+        tx(DEPOSIT, target, value=first if i == 0 else 10**18 - 10**15, block=101)
+        for i in range(sweeps)
     ]
     return {("txlist", DEPOSIT): rows}
 
@@ -719,3 +722,219 @@ def test_an_address_that_sends_most_of_its_outflow_transactions_is_not_a_forward
     own = [tx(DEPOSIT, HOT, value=0, h="0xself0")]
     client = OpClient({("tokentx", DEPOSIT): rows, ("txlist", DEPOSIT): own}, infos)
     assert classify_deposit_address(client, DEPOSIT) is None  # 2 of 3 transactions: below 80 %
+
+
+# --- an exchange label alone is not a sweep ---------------------------------------
+
+YEAR = 365 * 24 * 3600
+
+
+def paid_lists(late=3 * YEAR, value=1):
+    """1 ETH received, then ``value`` wei paid to HOT ``late`` seconds later."""
+    return {
+        ("txlist", DEPOSIT): [
+            tx(WALLET, DEPOSIT, 10**18, block=100, ts=1_600_000_000),
+            tx(DEPOSIT, HOT, value, block=8_000_000, ts=1_600_000_000 + late),
+        ]
+    }
+
+
+def test_paying_a_labelled_exchange_without_forwarding_is_not_an_exchange_deposit():
+    from tornado_demix.deposit_addresses import PAID_EXCHANGE, check_text, kind_label
+
+    client = FakeClient(paid_lists())
+    info = classify_deposit_address(client, DEPOSIT, lambda a: False, LABELS, lambda a: False)
+    assert info["kind"] == PAID_EXCHANGE == "paid_exchange"
+    assert info["evidence"] is False
+    assert info["exchange"] == "binance" and info["paid_targets"] == [HOT]
+    assert "sweep_target" not in info and info["senders"] == []
+    assert "gas_funder" not in info
+    assert "paid an exchange" in kind_label(info)
+    assert "not a deposit address" in check_text(info)
+    assert "swept" not in check_text(info)
+    # never shares a deposit address, not even as context
+    assert shared_deposit_hits([info], {EXIT}, WALLET, evidence_only=False) == {}
+
+
+def test_a_labelled_target_must_receive_a_swept_balance():
+    # in time but a tenth of the received amount: not a sweep
+    client = FakeClient(paid_lists(late=60, value=10**17))
+    assert classify_deposit_address(client, DEPOSIT, labels=LABELS)["kind"] == "paid_exchange"
+    # the full amount, but more than 30 days after receipt: not a sweep
+    client = FakeClient(paid_lists(late=31 * 24 * 3600, value=10**18))
+    assert classify_deposit_address(client, DEPOSIT, labels=LABELS)["kind"] == "paid_exchange"
+    # the full amount within the window: a sweep
+    client = FakeClient(paid_lists(late=60, value=10**18 - 10**15))
+    info = classify_deposit_address(client, DEPOSIT, labels=LABELS)
+    assert info["kind"] == "exchange_deposit" and info["evidence"] is True
+    assert info["senders"] == [WALLET]
+
+
+def test_classify_address_reports_paid_an_exchange_not_a_deposit():
+    from tornado_demix.deposit_addresses import classify_address
+
+    info, errors = classify_address(FakeClient(paid_lists()), DEPOSIT, labels=LABELS)
+    assert info["kind"] == "paid_exchange" and errors == []
+
+
+def test_a_depositor_counterparty_that_paid_an_exchange_is_context_in_every_report(
+    monkeypatch, capsys
+):
+    from tests.fixtures import demix_result as fx
+    from tests.test_shared_deposit import _demix_args, _stub_cli
+    from tornado_demix import cli
+    from tornado_demix.heuristics import apply_heuristics
+    from tornado_demix.report_html import build_html_report
+
+    client = FakeClient(paid_lists())
+    found = depositor_deposit_addresses(client, WALLET, [tx(WALLET, DEPOSIT)], labels=LABELS)
+    assert [f["kind"] for f in found] == ["paid_exchange"]
+
+    data = fx.two_pool_result()
+    data["deposit_addresses"] = found
+    apply_heuristics(data, counterparties=set())
+    assert data["heuristics"].get("shared_deposits", []) == []
+    html = build_html_report(data, fx.network())
+    assert "paid an exchange (binance)" in html
+    # not counted as a deposit address in the section navigation
+    assert 'Deposit addresses<span class="n">0</span>' in html
+    _stub_cli(monkeypatch, data, {})
+    cli.cmd_demix(_demix_args())
+    out = capsys.readouterr().out
+    assert "[paid an exchange (binance), not a deposit address]" in out
+    assert "swept to binance" not in out
+
+
+# --- the balance-sweep rule for labelled exchange targets ---------------------------
+
+DAY = 24 * 3600
+
+
+def _labelled_kind(rows):
+    client = FakeClient({("txlist", DEPOSIT): rows})
+    info = classify_deposit_address(client, DEPOSIT, lambda a: False, LABELS, lambda a: False)
+    return info and info["kind"]
+
+
+def test_a_labelled_exchange_sweep_may_come_hours_or_days_after_receipt():
+    t0 = 1_600_000_000
+    for late in (12 * 3600, 3 * DAY):
+        rows = [
+            tx(WALLET, DEPOSIT, 10**18, block=100, ts=t0),
+            tx(DEPOSIT, HOT, 10**18 - 10**15, block=200, ts=t0 + late),
+        ]
+        assert _labelled_kind(rows) == "exchange_deposit", late
+
+
+def test_a_partial_sweep_keeping_a_small_leftover_counts():
+    t0 = 1_600_000_000
+    rows = [
+        tx(WALLET, DEPOSIT, 10**18, block=100, ts=t0),
+        tx(DEPOSIT, HOT, 10**18 - 5 * 10**16, block=200, ts=t0 + DAY),  # keeps 0.05 ETH
+    ]
+    assert _labelled_kind(rows) == "exchange_deposit"
+
+
+def test_several_deposits_swept_together_days_later_count():
+    t0 = 1_600_000_000
+    rows = [
+        tx(WALLET, DEPOSIT, 10**18, block=100, ts=t0, h="0x1"),
+        tx(EXIT, DEPOSIT, 2 * 10**18, block=150, ts=t0 + DAY, h="0x2"),
+        tx(DEPOSIT, HOT, 3 * 10**18 - 10**15, block=300, ts=t0 + 2 * DAY, h="0x3"),
+    ]
+    assert _labelled_kind(rows) == "exchange_deposit"
+
+
+def test_a_small_share_or_a_late_payment_to_a_labelled_exchange_is_paid_exchange():
+    from tornado_demix.deposit_addresses import LABELLED_SWEEP_SECONDS, LABELLED_SWEEP_SHARE
+
+    assert LABELLED_SWEEP_SHARE == 0.9 and LABELLED_SWEEP_SECONDS == 30 * DAY
+    t0 = 1_600_000_000
+    small = [
+        tx(WALLET, DEPOSIT, 10**18, block=100, ts=t0),
+        tx(DEPOSIT, HOT, 3 * 10**17, block=200, ts=t0 + 3600),
+    ]
+    assert _labelled_kind(small) == "paid_exchange"
+    late = [
+        tx(WALLET, DEPOSIT, 10**18, block=100, ts=t0),
+        tx(DEPOSIT, HOT, 10**18 - 10**15, block=300_000, ts=t0 + 40 * DAY),
+    ]
+    assert _labelled_kind(late) == "paid_exchange"
+    # just under 90 % / just inside 30 days
+    edge = [
+        tx(WALLET, DEPOSIT, 10**18, block=100, ts=t0),
+        tx(DEPOSIT, HOT, 9 * 10**17, block=300_000, ts=t0 + 30 * DAY),
+    ]
+    assert _labelled_kind(edge) == "exchange_deposit"
+    edge[1] = tx(DEPOSIT, HOT, 9 * 10**17 - 1, block=300_000, ts=t0 + 30 * DAY)
+    assert _labelled_kind(edge) == "paid_exchange"
+
+
+def test_only_value_received_since_the_previous_outgoing_transfer_is_swept():
+    # 1 ETH in, 0.95 ETH paid elsewhere, then 0.05 ETH to the exchange: no new value
+    # arrived after the previous outgoing transfer, so nothing is swept to it
+    t0 = 1_600_000_000
+    rows = [
+        tx(WALLET, DEPOSIT, 10**18, block=100, ts=t0, h="0x1"),
+        tx(DEPOSIT, OTHER, 95 * 10**16, block=110, ts=t0 + 60, h="0x2"),
+        tx(DEPOSIT, HOT, 5 * 10**16, block=120, ts=t0 + 120, h="0x3"),
+    ]
+    from tornado_demix.deposit_addresses import sweeps_balance_to
+
+    assert sweeps_balance_to(rows, DEPOSIT, HOT) is False
+
+
+def test_an_unlabelled_target_keeps_the_forwarding_window():
+    t0 = 1_600_000_000
+    rows = [
+        tx(WALLET, DEPOSIT, 10**18, block=100, ts=t0),
+        tx(DEPOSIT, HOT, 10**18 - 10**15, block=200, ts=t0 + DAY),
+    ]
+    client = FakeClient({("txlist", DEPOSIT): rows}, busy={HOT})
+    assert (
+        classify_deposit_address(client, DEPOSIT, lambda a: False, {}, client.busy.__contains__)
+        is None
+    )
+
+
+def test_an_operator_executed_forwarder_outranks_paid_an_exchange():
+    lists = forwarder_lists()
+    t0 = 1_600_000_000
+    lists[("txlist", DEPOSIT)] = [
+        tx(WALLET, DEPOSIT, 10**18, block=100, ts=t0, h="0xeth"),
+        tx(DEPOSIT, OTHER, 1, block=8_000_000, ts=t0 + 3 * YEAR, h="0xpay"),
+    ]
+    labels = {OTHER: {"category": "exchange", "entity": "binance"}}
+    infos = {f"0xop{i}": {"from": EXECUTOR, "to": OPERATOR} for i in range(5)}
+    plain = FakeClient({("txlist", DEPOSIT): lists[("txlist", DEPOSIT)]})
+    assert classify_deposit_address(plain, DEPOSIT, labels=labels)["kind"] == "paid_exchange"
+    info = classify_deposit_address(OpClient(lists, infos), DEPOSIT, labels=labels)
+    assert info["kind"] == "forwarder" and info["operator"] == OPERATOR
+
+
+def test_run_demix_logs_deposit_addresses_without_paid_exchange_rows(monkeypatch, capsys):
+    from tornado_demix import demix
+
+    rows = [
+        {"address": DEPOSIT, "kind": "exchange_deposit", "senders": [WALLET]},
+        {"address": OTHER, "kind": "paid_exchange", "senders": [], "evidence": False},
+    ]
+    demix._log_deposit_addresses(rows)
+    err = capsys.readouterr().err
+    assert "exchange deposit addresses of the depositor: 1" in err
+    assert "paid a labelled exchange without a sweep (context): 1" in err
+
+
+def test_deposits_forwarded_one_by_one_to_a_labelled_exchange_still_count():
+    # three deposits, then three separate sweeps of one deposit each: no single transfer
+    # moves 90 % of what arrived, but each forwards a deposit (the forwarding test)
+    from tornado_demix.deposit_addresses import sweeps_balance_to
+
+    t0 = 1_600_000_000
+    rows = [tx(WALLET, DEPOSIT, 10**18, block=100 + i, ts=t0 + i, h=f"0xi{i}") for i in range(3)]
+    rows += [
+        tx(DEPOSIT, HOT, 10**18 - 10**15, block=200 + i, ts=t0 + 600 + i, h=f"0xo{i}")
+        for i in range(3)
+    ]
+    assert sweeps_balance_to(rows, DEPOSIT, HOT) is False
+    assert _labelled_kind(rows) == "exchange_deposit"
