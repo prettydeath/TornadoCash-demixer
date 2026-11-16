@@ -1294,10 +1294,18 @@ def _archive_unavailable(error):
 
 
 def _http_error_payload(exc):
-    """The JSON body of an HTTP error answer from a node, or None."""
+    """The JSON body of an HTTP error answer from a node, or None.
+
+    Reading the body must never raise: an ``HTTPError`` built without a body
+    (``fp=None``) raises ``KeyError`` from ``tempfile`` on Python 3.9 when read.
+    """
     try:
-        payload = json.loads(exc.read().decode())
-    except (OSError, ValueError, AttributeError):
+        raw = exc.read()
+    except Exception:  # noqa: BLE001 - no readable body is an empty body
+        return None
+    try:
+        payload = json.loads((raw or b"").decode())
+    except (ValueError, AttributeError):
         return None
     return payload if isinstance(payload, dict) else None
 

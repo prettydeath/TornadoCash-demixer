@@ -1069,3 +1069,19 @@ def test_base_logs_may_still_come_from_the_rpc_node_when_blockscout_is_blocked(m
     client, _ = _client([_HtmlResp()], retries=1, chain_id=8453, rpc_url="http://node/x")
     assert client.get_logs(ADDR, TOPIC0, 0, 100_000) == []
     assert client.rpc_fallbacks == 1
+
+
+def test_an_http_error_body_that_cannot_be_read_is_an_empty_body():
+    """Python 3.9 raises KeyError from tempfile when an HTTPError built with fp=None is
+    read: no body, not a crash."""
+
+    class _Unreadable:
+        def read(self):
+            raise KeyError("file")
+
+    class _Empty:
+        def read(self):
+            return None
+
+    assert es._http_error_payload(_Unreadable()) is None
+    assert es._http_error_payload(_Empty()) is None
