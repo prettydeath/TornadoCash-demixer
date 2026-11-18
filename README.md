@@ -665,7 +665,7 @@ the data providers you use.
 
 Two DOIs belong to this repository and both are correct: `10.5281/zenodo.23085804` is the
 concept DOI (all versions, the one in `CITATION.cff` and the badge), and
-`10.5281/zenodo.24279580` is the version DOI of release 2.23.0. Cite the version DOI with the
+`10.5281/zenodo.24336477` is the version DOI of release 2.23.1. Cite the version DOI with the
 version number when a result depends on one release.
 
 ## License
