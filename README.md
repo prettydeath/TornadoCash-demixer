@@ -57,16 +57,17 @@ traces users leave around it.
   only: it is shown in the evidence but has no weight and never raises the band
   (a post-hoc change, decided after the second hold-out and not tested on new data).
   On 1,000 random depositors it gave 27 real-window against 4 decoy hits when
-  the deposit address swept to labelled exchange wallets (rule 2.17 sample), but
+  the deposit address swept to labelled exchange wallets (rule 2.17 sample; 2.23 re-run: 55 against 16), but
   in the second hold-out it was not above chance at 30 days (Ethereum 18 target
   against 30 decoy leads, R 1.77, interval 0.16-3.91; Polygon 23 against 13,
-  R 0.58, 0.00-3.16); at 72 hours it was 14 against 2 and 23 against 0. The
+  R 0.58, 0.00-3.16); at 72 hours it was 14 against 2 and 23 against 0 (2.23 re-run:
+  56 / 35 and 58 / 8 at 30 days, 46 / 3 and 45 / 1 at 72 hours). The
   decoy leads came from deposit addresses with many senders, which are shared,
   not per customer.
 - Marks a linked exit that withdrew within 72 hours of the deposit (early exit).
   Since 2.17 a direct link is a lead only then: on 302 random Ethereum depositors
   a direct link first withdrawn within 72 hours was a lead 26 times in real
-  windows against once in decoy windows, a later one 8 against 13, chance level.
+  windows against once in decoy windows, a later one 8 against 13, chance level (2.23 re-run: early 11 / 1, late 6 / 11 on the 302 depositors; see [Re-run on 2.23.0](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/EVALUATION.md#re-run-on-2230-2026-111617)).
   A later direct link is listed as context and never raises the band or the
   score. Since 2.19 a withdrawal sent by
   the depositor's side (`linked_sender`) is context too: it did not separate from
@@ -200,8 +201,8 @@ registry.
 The shared exchange deposit address signal is context only since 2.21, labels or
 not. Exchange labels still decide which deposit addresses are listed as swept to a
 labelled exchange: with them, the placebo test gave 27 real-window against 4 decoy
-hits on 1,000 depositors (before the second hold-out); without them, deposit
-addresses found by activity alone sit at chance (16 against 12) and are shown as
+hits on 1,000 depositors (before the second hold-out; 2.23 re-run: 55 against 16); without them, deposit
+addresses found by activity alone were at chance (16 against 12; in the 2.23 re-run 67 against 35, R 0.56, 0.32-0.93, a post-hoc result) and are shown as
 context only. To load the public label set (the fetch of 2026-11-14 returned 105,267 Ethereum
 addresses, 32,943 of them exchange labels, and 131,117 rows on the eight networks; the
 counts move as the upstream sources do):
@@ -550,7 +551,7 @@ The method on both public cases, with the numbers behind each claim, is in
   within 72 hours, measured before 2.17; the shared deposit part did not hold up
   in the second hold-out, see below). The pooled 30-day number hid that a
   direct link withdrawn later than 72 hours is chance-level (8 against 13 on 302
-  depositors, against 26 to 1 within 72 hours), so since 2.17 it is context; and so did a multi-pool profile of 10+ notes within 72 hours
+  depositors, against 26 to 1 within 72 hours; 2.23 re-run: early 11 / 1, late 6 / 11), so since 2.17 it is context; and so did a multi-pool profile of 10+ notes within 72 hours
   (318 against 34 on 4,194 such depositors); only these two (an early direct link, an early multi-pool profile) make a
   `moderate` or `strong` band, and `strong` needs both. Details: [EVALUATION.md](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/EVALUATION.md#placebo-test-on-real-depositors)
 - The 2.17 rule was then frozen, pre-registered and run on new depositors (591 on
@@ -562,7 +563,7 @@ The method on both public cases, with the numbers behind each claim, is in
 - The second hold-out (2.19 rule, 599 Ethereum and 400 Polygon depositors) found
   a labelled shared deposit at 30 days not above chance: Ethereum 18 target
   against 30 decoy leads (R 1.77, 0.16-3.91), Polygon 23 against 13 (R 0.58,
-  0.00-3.16); the early direct link held (85 against 5 and 92 against 5). Since 2.21
+  0.00-3.16; rule 2.19 run, on 2.23.0 the same samples give 56 / 35 and 58 / 8, context); the early direct link held (85 against 5 and 92 against 5; 2.23 re-run: 21 / 3 and 38 / 4). Since 2.21
   the shared deposit address is context only (post-hoc, untested). Details:
   [HOLDOUT2_RESULTS.md](https://github.com/prettydeath/TornadoCash-demixer/blob/main/docs/HOLDOUT2_RESULTS.md)
 - On 31 depositor/exit pairs labelled through ENS (2019-2026), demix found 16 of
